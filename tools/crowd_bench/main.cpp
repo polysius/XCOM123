@@ -51,8 +51,6 @@ constexpr float kNearRadius = 35.0f;        // people this close to the camera a
 constexpr float kOverlapDistance = 0.3f;    // people closer than this count as overlapping
 constexpr float kWalkableTolerance = 0.1f;  // slack, in metres, for the walkable space test
 
-constexpr int kMaxSatellites = 8;  // the same limit as the engine's --satellites option
-
 struct BenchOptions {
     std::vector<uint32_t> agentCounts{50000, 100000, 200000};
     uint32_t steps = 300;

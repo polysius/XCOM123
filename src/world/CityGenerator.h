@@ -141,6 +141,10 @@ struct StreetGraph {
 // bounds the cost of a city; satellite districts stop being added when it would be exceeded.
 inline constexpr size_t kMaxCityBoxes = 150000;
 
+// The most satellite districts that can be asked for. The box budget is reached before more would
+// be useful.
+inline constexpr int kMaxSatellites = 8;
+
 struct CitySettings {
     uint32_t seed = 1789;
     float citySize = 1800.0f;      // metres between the centre lines of the ring road on opposite sides

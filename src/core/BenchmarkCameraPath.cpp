@@ -69,6 +69,9 @@ const OrientedRect* FindBusiestPlaza(const CityLayout& city, const Crowd& crowd)
     float bestDensity = -1.0f;
     std::vector<NpcInstance> inside;
     for (const OrientedRect& plaza : city.plazas) {
+        if (!city.coreBounds.Contains(plaza.Center())) {
+            continue;  // the path stays in the core, so that it is the same however many satellites there are
+        }
         const glm::vec2 centre = plaza.Center();
         const glm::vec2 halfSize = plaza.Size() * 0.5f;
         // Looking straight down with the square's own +Z as "up" on screen, so the box's sides line up

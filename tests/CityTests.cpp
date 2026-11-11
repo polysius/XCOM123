@@ -698,7 +698,7 @@ Options ParseOptions(int argc, char** argv) {
             options.mapSeed = static_cast<uint32_t>(std::strtoul(argv[++i], nullptr, 10));
         } else if (argument == "--satellites" && hasValue) {
             options.mapSatellites = std::atoi(argv[++i]);
-            if (options.mapSatellites < 0 || options.mapSatellites > 8) {
+            if (options.mapSatellites < 0 || options.mapSatellites > kMaxSatellites) {
                 std::printf("--satellites must be between 0 and 8\n");
                 std::exit(1);
             }

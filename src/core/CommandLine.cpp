@@ -8,10 +8,9 @@
 #include <stdexcept>
 #include <vector>
 
-namespace {
-// Beyond this the city's box budget (kMaxCityBoxes) is reached before more districts are useful.
-constexpr uint32_t kMaxSatellites = 8;
+#include "world/CityGenerator.h"
 
+namespace {
 // Reads the value that follows an option, or throws when the command line ends too early.
 class ArgumentReader {
 public:
@@ -106,7 +105,7 @@ Options ParseCommandLine(int argc, char** argv) {
             options.npcCount = ParseUnsigned(option, arguments.ValueFor(option));
         } else if (option == "--satellites") {
             const uint32_t count = ParseUnsigned(option, arguments.ValueFor(option));
-            if (count > kMaxSatellites) {
+            if (count > static_cast<uint32_t>(kMaxSatellites)) {
                 throw std::invalid_argument(option + " must be at most " + std::to_string(kMaxSatellites));
             }
             options.satelliteCount = static_cast<int>(count);
