@@ -15,7 +15,7 @@ These rules apply to this folder and every folder inside it.
 
 ### Pushing code: `no-mistakes`
 - Push to GitHub only through no-mistakes, a local git gate that validates code before it reaches the real remote.
-- This repo does not have the gate yet. Run `no-mistakes init` once before the first push.
+- The gate is initialized for this repo (remote `no-mistakes`). Its settings live in `.no-mistakes.yaml`, and its test command is `scripts\gate-check.cmd`.
 - Push with `git push no-mistakes <branch>`, or drive it headlessly with `no-mistakes axi run` (see `no-mistakes axi --help`).
 - Never bypass the gate (no direct `git push origin`, no `--skip`) unless the user explicitly says so.
 

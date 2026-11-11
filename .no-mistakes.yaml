@@ -1,0 +1,15 @@
+# Settings for the no-mistakes gate that every push to GitHub goes through.
+# Reference: https://kunchenguid.github.io/no-mistakes/reference/repo-config/
+#
+# The gate reads commands and policy keys from the default branch (master), so
+# a change to this file takes effect only after it is merged into master.
+
+commands:
+  # Configures, builds the Release engine and runs the unit tests in the gate's
+  # fresh checkout. The first run downloads and compiles the pinned
+  # dependencies, so expect it to take several minutes.
+  test: scripts\gate-check.cmd
+
+# The repository has no GitHub Actions workflow yet, so a pull request with no
+# checks is not treated as a failure. Remove this once CI exists.
+no_ci: true
