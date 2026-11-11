@@ -79,7 +79,8 @@ float DistanceToSegment(glm::vec2 point, glm::vec2 a, glm::vec2 b) {
 // The outer pavement of a ring road runs unbroken past every T junction, because nothing used to
 // leave a ring road outwards. Where a joining street leaves, the pavement is opened across its
 // road, or it would cross the street as a kerb. The pavement box that holds the point just
-// outside `junction` is cut in two, leaving a gap as wide as the road.
+// outside `junction` is cut in two, leaving a gap as wide as the road. If no pavement lies there
+// nothing is cut; CityTests' road-clear check reports a street that still has a kerb across it.
 void OpenPavementAt(CityLayout& city, glm::vec2 junction, glm::vec2 outward, float roadHalfWidth, float streetHalfWidth) {
     const glm::vec2 probe = junction + outward * ((roadHalfWidth + streetHalfWidth) * 0.5f);
     for (size_t i = 0; i < city.boxes.size(); ++i) {
@@ -97,9 +98,11 @@ void OpenPavementAt(CityLayout& city, glm::vec2 junction, glm::vec2 outward, flo
             continue;
         }
 
-        // Work in the box's own frame, along its long side, which is the way the ring road runs.
-        const bool alongX = original.halfSize.x >= original.halfSize.z;
+        // Work in the box's own frame. The ring road runs across `outward`, so the cut is made along
+        // whichever of the box's axes is further from it.
         const glm::vec2 here = footprint.ToFrame(probe);
+        const glm::vec2 outwardInFrame = footprint.ToFrame(probe + outward) - here;
+        const bool alongX = std::abs(outwardInFrame.y) > std::abs(outwardInFrame.x);
         const float at = alongX ? here.x : here.y;
         const float low = alongX ? footprint.area.min.x : footprint.area.min.y;
         const float high = alongX ? footprint.area.max.x : footprint.area.max.y;

@@ -212,7 +212,11 @@ void Walkways::RasteriseObstacle(const BoxInstance& box, float grow, uint8_t fla
     // the cell reaches (|cos| + |sin|) * half a cell across a turned edge, against half a cell
     // across an axis-aligned one. The footprint grows by the difference, which is nothing for a
     // box that is not turned.
-    const float turnedCellReach = 0.5f * gridCellSize * (std::abs(cosine) + std::abs(sine) - 1.0f);
+    // That is exact, which leaves no margin for a small box (a lamp base is about a third of a cell
+    // wide) in the worst position, so a turned box gets a couple of centimetres more.
+    constexpr float kTurnedMargin = 0.02f;
+    const float turnedCellReach = 0.5f * gridCellSize * (std::abs(cosine) + std::abs(sine) - 1.0f) +
+                                  (std::abs(sine) > 1e-6f ? kTurnedMargin : 0.0f);
     const glm::vec2 reach = glm::vec2(box.halfSize.x, box.halfSize.z) + grow + turnedCellReach;  // half size along the box's axes
     if (reach.x <= 0.0f || reach.y <= 0.0f) {
         return;
