@@ -206,13 +206,21 @@ void Walkways::BuildObstacleGrid(const CityLayout& city) {
     }
 }
 
-// Sets `flag` on every cell whose centre lies inside the box's footprint grown by `grow`.
+// Sets `flag` on every cell whose centre lies inside the box's footprint grown by `grow`. The
+// footprint is a rectangle turned by the box's yaw.
 void Walkways::RasteriseObstacle(const BoxInstance& box, float grow, uint8_t flag) {
-    const glm::vec2 low = glm::vec2(box.center.x - box.halfSize.x, box.center.z - box.halfSize.z) - grow;
-    const glm::vec2 high = glm::vec2(box.center.x + box.halfSize.x, box.center.z + box.halfSize.z) + grow;
-    if (low.x >= high.x || low.y >= high.y) {
+    const glm::vec2 reach = glm::vec2(box.halfSize.x, box.halfSize.z) + grow;  // half size along the box's axes
+    if (reach.x <= 0.0f || reach.y <= 0.0f) {
         return;
     }
+    const float cosine = std::cos(box.yaw);
+    const float sine = std::sin(box.yaw);
+    // The cells to test are those in the axis-aligned rectangle that encloses the turned one.
+    const glm::vec2 enclosingReach(std::abs(cosine) * reach.x + std::abs(sine) * reach.y,
+                                   std::abs(sine) * reach.x + std::abs(cosine) * reach.y);
+    const glm::vec2 boxCenter(box.center.x, box.center.z);
+    const glm::vec2 low = boxCenter - enclosingReach;
+    const glm::vec2 high = boxCenter + enclosingReach;
     const glm::vec2 first = glm::ceil((low - gridOrigin) / gridCellSize - 0.5f);
     const glm::vec2 last = glm::floor((high - gridOrigin) / gridCellSize - 0.5f);
     const int x0 = std::max(0, static_cast<int>(first.x));
@@ -222,7 +230,13 @@ void Walkways::RasteriseObstacle(const BoxInstance& box, float grow, uint8_t fla
     for (int y = y0; y <= y1; ++y) {
         uint8_t* row = gridFlags.data() + static_cast<size_t>(y) * static_cast<size_t>(gridColumns);
         for (int x = x0; x <= x1; ++x) {
-            row[x] |= flag;
+            // Express the cell's centre in the box's own axes, where the footprint is axis-aligned.
+            const glm::vec2 offset = gridOrigin + (glm::vec2(x, y) + 0.5f) * gridCellSize - boxCenter;
+            const float alongX = offset.x * cosine - offset.y * sine;
+            const float alongZ = offset.x * sine + offset.y * cosine;
+            if (std::abs(alongX) <= reach.x && std::abs(alongZ) <= reach.y) {
+                row[x] |= flag;
+            }
         }
     }
 }

@@ -29,6 +29,7 @@ layout(location = 2) out vec3 outAlbedo;
 layout(location = 3) out vec3 outSurface;        // x: roughness, y: material id, z: seed
 layout(location = 4) out vec3 outLocalPosition;  // position on the body, metres above the feet
 layout(location = 5) out vec3 outBoxSize;        // unused for people
+layout(location = 6) out vec3 outLocalNormal;    // the same as outNormal for people
 
 const int PART_HEAD = 1;
 const int PART_LEFT_LEG = 2;
@@ -245,6 +246,7 @@ void main() {
 
     outWorldPosition = worldPosition;
     outNormal = RotateAroundY(normal, heading);
+    outLocalNormal = outNormal;
     outAlbedo = albedo;
     outSurface = vec3(0.75, MATERIAL_CHARACTER, skinTone);
     outLocalPosition = position;

@@ -20,8 +20,10 @@ void ScenePass::Create(const VulkanContext& context, VkPipelineLayout sceneLayou
     lit.depthWrite = true;
     lit.depthCompare = VK_COMPARE_OP_GREATER;
     lit.vertexShader = "box.vert";
+    lit.meshInput = MeshInput::Boxes;
     boxPipeline = CreateGraphicsPipeline(context.device, lit);
     lit.vertexShader = "npc.vert";
+    lit.meshInput = MeshInput::People;
     npcPipeline = CreateGraphicsPipeline(context.device, lit);
 
     // The sky is a full-screen triangle at the far plane, drawn only where nothing else was.
@@ -29,7 +31,7 @@ void ScenePass::Create(const VulkanContext& context, VkPipelineLayout sceneLayou
     sky.layout = sceneLayout;
     sky.vertexShader = "fullscreen.vert";
     sky.fragmentShader = "sky.frag";
-    sky.usesMeshInput = false;
+    sky.meshInput = MeshInput::None;
     sky.colorFormat = kHdrFormat;
     sky.depthFormat = kDepthFormat;
     sky.samples = samples;
