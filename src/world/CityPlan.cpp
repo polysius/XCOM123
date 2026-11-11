@@ -145,8 +145,9 @@ private:
         const float northQuay = riverZ + riverGap * 0.5f;
         lines.push_back({LineKind::River, true, riverZ, riverGap});
         plan.historicCore = {random.Range(-0.12f, 0.12f) * size, riverZ};
-        plan.waterways.push_back({{{-plan.farDistance, riverZ - settings.riverWidth * 0.5f},
-                                   {plan.farDistance, riverZ + settings.riverWidth * 0.5f}},
+        plan.riverStraightEnd = plan.halfSize + plan.streetHalfWidth + kRiverStraightMargin;
+        plan.waterways.push_back({{{-plan.riverStraightEnd, riverZ - settings.riverWidth * 0.5f},
+                                   {plan.riverStraightEnd, riverZ + settings.riverWidth * 0.5f}},
                                   kQuayWallTop});
 
         // The canal leaves the river northwards on one side of the city.
@@ -617,9 +618,63 @@ District DistrictMap::At(glm::vec2 point) const {
     return nearest;
 }
 
+namespace {
+
+constexpr float kDegree = 0.017453292f;
+
+// Plans the two reaches of the river beyond its straight part. They use a random stream of their
+// own, so that they cannot change anything the planner decides.
+void PlanRiverReaches(const CitySettings& settings, CityPlan& plan) {
+    constexpr float kStep = 60.0f;                 // distance between the vertices of a reach
+    constexpr float kMaxStepTurn = 8.0f * kDegree;   // how much the heading changes at a vertex
+    constexpr float kMaxDeviation = 40.0f * kDegree;  // how far the heading may leave straight outwards
+    constexpr float kSteer = 3.0f * kDegree;         // the push back towards the river's line
+    constexpr float kWanderLimit = 300.0f;           // beyond this the reach is steered back
+    constexpr float kStraightenDistance = 500.0f;    // the reach straightens out over this stretch before the edge
+    constexpr float kStraightenRate = 0.3f;          // the share of the heading's deviation undone at each vertex
+    const float riverZ = plan.waterways[0].water.Center().y;
+    for (int side = 0; side < 2; ++side) {
+        const float outward = side == 0 ? 1.0f : -1.0f;  // east, then west
+        Random random(MixSeed(settings.seed, 0x52495652u + static_cast<uint32_t>(side)));
+        RiverReach reach{{}, settings.riverWidth * 0.5f, kQuayWallTop};
+        glm::vec2 point{outward * plan.riverStraightEnd, riverZ};
+        reach.points.push_back(point);
+        // The first stretch continues the straight river, so the join is seamless.
+        point.x += outward * kStep;
+        reach.points.push_back(point);
+        float deviation = 0.0f;
+        while (std::abs(point.x) < plan.farDistance) {
+            float turn = random.Range(-kMaxStepTurn, kMaxStepTurn);
+            if (std::abs(point.y - riverZ) > kWanderLimit) {
+                turn += point.y > riverZ ? -kSteer : kSteer;
+            }
+            if (std::abs(point.x) > plan.farDistance - kStraightenDistance) {
+                turn = -deviation * kStraightenRate;  // over the last stretch the reach straightens out
+            }
+            deviation = std::clamp(deviation + turn, -kMaxDeviation, kMaxDeviation);
+            glm::vec2 step = glm::vec2(outward * std::cos(deviation), std::sin(deviation)) * kStep;
+            if (std::abs(point.x + step.x) >= plan.farDistance) {
+                // The last step ends exactly at the edge of the land, so that no water runs past it.
+                step *= (plan.farDistance - std::abs(point.x)) / std::abs(step.x);
+                point += step;
+                point.x = outward * plan.farDistance;
+            } else {
+                point += step;
+            }
+            reach.points.push_back(point);
+        }
+        plan.reaches.push_back(std::move(reach));
+    }
+}
+
+}  // namespace
+
 CityPlan PlanCity(const CitySettings& settings) {
     CityPlan plan;
     Planner(settings, plan).Run();
+    if (!settings.districtOnly) {
+        PlanRiverReaches(settings, plan);
+    }
     return plan;
 }
 

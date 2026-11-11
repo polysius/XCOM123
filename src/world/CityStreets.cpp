@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 #include "world/CityNature.h"
 
@@ -17,6 +18,10 @@ constexpr float kArchSpan = 22.0f;      // preferred distance between bridge pie
 constexpr float kLampSpacing = 30.0f;
 constexpr float kLampFromJunction = 9.0f;  // keeps lamps out of the pavements of crossing streets
 constexpr float kLampHeight = 4.3f;        // light centre above the pavement
+constexpr float kBankGrassCell = 2.0f;     // grass beside a bend of the river is laid in cells this wide
+constexpr float kBankRegionMargin = 12.0f; // the cells reach this far beyond the levees
+constexpr float kLeveeOverlap = 6.0f;      // a levee starts this far back over the wall of the straight river
+constexpr float kLeveeCapRise = 0.10f;     // a levee capstone stands this far above the quay wall caps, so they never fight
 
 const glm::vec3 kQuayStone{0.55f, 0.51f, 0.45f};
 const glm::vec3 kBridgeStone{0.62f, 0.58f, 0.51f};
@@ -27,6 +32,20 @@ bool IsAlongX(glm::vec2 a, glm::vec2 b) {
     return std::abs(b.x - a.x) >= std::abs(b.y - a.y);
 }
 
+float DistanceToSegment(glm::vec2 point, glm::vec2 a, glm::vec2 b) {
+    const glm::vec2 span = b - a;
+    const float t = std::clamp(glm::dot(point - a, span) / glm::dot(span, span), 0.0f, 1.0f);
+    return glm::distance(point, a + span * t);
+}
+
+float DistanceToPolyline(glm::vec2 point, const std::vector<glm::vec2>& points) {
+    float nearest = std::numeric_limits<float>::max();
+    for (size_t i = 0; i + 1 < points.size(); ++i) {
+        nearest = std::min(nearest, DistanceToSegment(point, points[i], points[i + 1]));
+    }
+    return nearest;
+}
+
 bool ContainsPoint(const std::vector<Rect>& rects, glm::vec2 point) {
     for (const Rect& rect : rects) {
         if (rect.Contains(point)) {
@@ -34,6 +53,32 @@ bool ContainsPoint(const std::vector<Rect>& rects, glm::vec2 point) {
         }
     }
     return false;
+}
+
+glm::vec2 LeftOf(glm::vec2 direction) {
+    return {-direction.y, direction.x};
+}
+
+// The yaw of a box whose own X axis runs along `direction` on the ground.
+float YawAlong(glm::vec2 direction) {
+    return std::atan2(-direction.y, direction.x);
+}
+
+// The turn from one direction to the next, positive when the street bends to the left.
+float SignedTurn(glm::vec2 before, glm::vec2 after) {
+    return std::atan2(before.x * after.y - before.y * after.x, glm::dot(before, after));
+}
+
+// A box whose floor and roof are at heights `bottom` and `top`, lying along a street leg: it
+// spans `alongFrom` to `alongTo` metres from the leg's start and `lateralLow` to `lateralHigh`
+// to the left of its centre line.
+void LegBox(BoxWriter& boxes, glm::vec2 start, glm::vec2 direction, float alongFrom, float alongTo, float lateralLow,
+            float lateralHigh, float bottom, float top, const Look& look) {
+    const glm::vec2 center = start + direction * ((alongFrom + alongTo) * 0.5f) +
+                             LeftOf(direction) * ((lateralLow + lateralHigh) * 0.5f);
+    boxes.TurnedBox({center.x, (bottom + top) * 0.5f, center.y},
+                    {(alongTo - alongFrom) * 0.5f, (top - bottom) * 0.5f, (lateralHigh - lateralLow) * 0.5f},
+                    YawAlong(direction), look);
 }
 
 // A lamp post standing on the pavement at `position`, and its light in the layout. The square
@@ -74,6 +119,7 @@ public:
         LayGround();
         BuildBridges();
         BuildWaterways();
+        BuildRiverReaches();
         LayPromenades();
         LayBlockPavements();
         LayRingPavements();
@@ -98,11 +144,68 @@ private:
         std::vector<Rect> cuts = waterZones;
         cuts.push_back(streets);
         const Rect land{glm::vec2(-plan.farDistance), glm::vec2(plan.farDistance)};
+        std::vector<Rect> bankRegions;  // where the river bends; the grass there is laid in cells
+        for (const RiverReach& reach : plan.reaches) {
+            bankRegions.push_back(BankRegion(reach, land));
+        }
+        cuts.insert(cuts.end(), bankRegions.begin(), bankRegions.end());
         for (const Rect& piece : Subtract(land, cuts)) {
             boxes.Footprint(piece, -1.0f, 0.0f, GrassLook(0.3f));
         }
+        for (size_t i = 0; i < bankRegions.size(); ++i) {
+            LayRiverBankGrass(plan.reaches[i], bankRegions[i]);
+        }
         for (const Waterway& waterway : plan.waterways) {
             city.water.push_back(waterway.water);
+        }
+    }
+
+    // The land around a reach of the river, from the end of the straight river to the edge of the land.
+    Rect BankRegion(const RiverReach& reach, const Rect& land) const {
+        glm::vec2 low = reach.points.front();
+        glm::vec2 high = reach.points.front();
+        for (glm::vec2 point : reach.points) {
+            low = glm::min(low, point);
+            high = glm::max(high, point);
+        }
+        const float margin = reach.halfWidth + kReachWallThickness + kBankRegionMargin;
+        Rect region{low - margin, high + margin};
+        const Rect& straightRiver = waterZones.front();  // the river is the first waterway
+        if (reach.points.front().x > 0.0f) {
+            region.min.x = std::max(region.min.x, straightRiver.max.x);
+        } else {
+            region.max.x = std::min(region.max.x, straightRiver.min.x);
+        }
+        return Intersection(region, land);
+    }
+
+    // Grass beside a reach, in cells of kBankGrassCell merged into runs along each row. A cell is left
+    // out when its centre is closer to the centre line of the river than the middle of the levee, so
+    // the jagged edge of the cells stays under the levee: the most a centre can be off is half a cell
+    // diagonal, which is less than half the width of the levee.
+    void LayRiverBankGrass(const RiverReach& reach, const Rect& region) {
+        static_assert(kBankGrassCell * 0.70710678f < kReachWallThickness * 0.5f,
+                      "the levee must be wider than the diagonal of the grass cells");
+        const float holeRadius = reach.halfWidth + kReachWallThickness * 0.5f;
+        for (float z0 = region.min.y; z0 < region.max.y; z0 += kBankGrassCell) {
+            const float z1 = std::min(z0 + kBankGrassCell, region.max.y);
+            bool inRun = false;
+            float runStart = region.min.x;
+            for (float x0 = region.min.x; x0 < region.max.x; x0 += kBankGrassCell) {
+                const float x1 = std::min(x0 + kBankGrassCell, region.max.x);
+                const glm::vec2 center((x0 + x1) * 0.5f, (z0 + z1) * 0.5f);
+                const bool isGrass = DistanceToPolyline(center, reach.points) >= holeRadius;
+                if (isGrass && !inRun) {
+                    runStart = x0;
+                    inRun = true;
+                } else if (!isGrass && inRun) {
+                    boxes.Footprint({{runStart, z0}, {x0, z1}}, -1.0f, 0.0f, GrassLook(0.3f));
+                    inRun = false;
+                }
+            }
+            if (inRun) {
+                boxes.Footprint({{runStart, z0}, {region.max.x, z1}}, -1.0f, 0.0f, GrassLook(0.3f));
+            }
         }
     }
 
@@ -184,7 +287,78 @@ private:
                     cuts.push_back(waterZones[j]);
                 }
             }
+            if (i == 0 && !plan.reaches.empty()) {
+                // The river goes on beyond the straight part, so nothing closes its two ends.
+                const Rect& water = waterway.water;
+                const float t = kQuayWallThickness;
+                cuts.push_back({{water.min.x - t, water.min.y - t}, {water.min.x, water.max.y + t}});
+                cuts.push_back({{water.max.x, water.min.y - t}, {water.max.x + t, water.max.y + t}});
+            }
             BuildQuayWalls(waterway, cuts);
+        }
+    }
+
+    // The river beyond its straight part, leg by leg along each reach: the water, and a levee on each
+    // bank. At a bend the water and the levee on the outside reach past the vertex so that the outside
+    // has no gap, and the levee on the inside stops at the edge of the water, as the pavements of a
+    // joining street do.
+    void BuildRiverReaches() {
+        for (const RiverReach& reach : plan.reaches) {
+            BuildRiverReach(reach);
+            city.riverReaches.push_back(reach.points);
+        }
+        if (!plan.reaches.empty()) {
+            city.riverReachHalfWidth = plan.reaches.front().halfWidth;
+        }
+    }
+
+    void BuildRiverReach(const RiverReach& reach) {
+        const size_t legCount = reach.points.size() - 1;
+        std::vector<glm::vec2> directions(legCount);
+        std::vector<float> lengths(legCount);
+        for (size_t leg = 0; leg < legCount; ++leg) {
+            lengths[leg] = glm::distance(reach.points[leg], reach.points[leg + 1]);
+            directions[leg] = (reach.points[leg + 1] - reach.points[leg]) / lengths[leg];
+        }
+        std::vector<float> turns(legCount + 1, 0.0f);  // turns[leg] is the turn at the start of the leg
+        for (size_t leg = 1; leg < legCount; ++leg) {
+            turns[leg] = SignedTurn(directions[leg - 1], directions[leg]);
+        }
+        auto mitre = [](float turn, float halfWidth) { return halfWidth * std::tan(std::abs(turn) * 0.5f); };
+
+        const float water = reach.halfWidth;
+        const float levee = kReachWallThickness;
+        const Look stone = StoneLook(kQuayStone, 0.3f);
+        const Look coping = StoneLook(kBridgeStone, 0.8f);
+        for (size_t leg = 0; leg < legCount; ++leg) {
+            const glm::vec2 start = reach.points[leg];
+            const glm::vec2 direction = directions[leg];
+            const float length = lengths[leg];
+            const float startTurn = turns[leg];
+            const float endTurn = turns[leg + 1];
+            {
+                PartScope scope(boxes, CityPart::Water);
+                LegBox(boxes, start, direction, -mitre(startTurn, water), length + mitre(endTurn, water), -water, water,
+                       kRiverBed, kWaterLevel, WaterLook());
+                const glm::vec2 center = start + direction * (length * 0.5f);
+                const glm::vec2 half(length * 0.5f, water);
+                city.water.push_back(OrientedRect(Rect{center - half, center + half}, YawAlong(direction)));
+            }
+
+            PartScope scope(boxes, CityPart::Embankment);
+            for (float side : {-1.0f, 1.0f}) {
+                const bool insideAtStart = side * startTurn > 0.0f;
+                const bool insideAtEnd = side * endTurn > 0.0f;
+                const float from = leg == 0 ? -kLeveeOverlap
+                                            : (insideAtStart ? mitre(startTurn, water) : -mitre(startTurn, water + levee));
+                const float to = insideAtEnd ? length - mitre(endTurn, water) : length + mitre(endTurn, water + levee);
+                const float low = side > 0.0f ? water : -(water + levee);
+                const float high = side > 0.0f ? water + levee : -water;
+                LegBox(boxes, start, direction, from, to, low, high, kWallFoot, reach.wallTop - 0.2f, stone);
+                // A capstone slightly wider than the levee, overhanging both faces.
+                LegBox(boxes, start, direction, from, to, low - 0.12f, high + 0.12f, reach.wallTop - 0.2f,
+                       reach.wallTop + kLeveeCapRise, coping);
+            }
         }
     }
 
@@ -337,36 +511,6 @@ private:
 void BuildStreetsAndWater(const CityPlan& plan, uint32_t seed, BoxWriter& boxes, CityLayout& city) {
     StreetBuilder(plan, seed, boxes, city).Run();
 }
-
-namespace {
-
-glm::vec2 LeftOf(glm::vec2 direction) {
-    return {-direction.y, direction.x};
-}
-
-// The yaw of a box whose own X axis runs along `direction` on the ground.
-float YawAlong(glm::vec2 direction) {
-    return std::atan2(-direction.y, direction.x);
-}
-
-// The turn from one direction to the next, positive when the street bends to the left.
-float SignedTurn(glm::vec2 before, glm::vec2 after) {
-    return std::atan2(before.x * after.y - before.y * after.x, glm::dot(before, after));
-}
-
-// A box whose floor and roof are at heights `bottom` and `top`, lying along a street leg: it
-// spans `alongFrom` to `alongTo` metres from the leg's start and `lateralLow` to `lateralHigh`
-// to the left of its centre line.
-void LegBox(BoxWriter& boxes, glm::vec2 start, glm::vec2 direction, float alongFrom, float alongTo, float lateralLow,
-            float lateralHigh, float bottom, float top, const Look& look) {
-    const glm::vec2 center = start + direction * ((alongFrom + alongTo) * 0.5f) +
-                             LeftOf(direction) * ((lateralLow + lateralHigh) * 0.5f);
-    boxes.TurnedBox({center.x, (bottom + top) * 0.5f, center.y},
-                    {(alongTo - alongFrom) * 0.5f, (top - bottom) * 0.5f, (lateralHigh - lateralLow) * 0.5f},
-                    YawAlong(direction), look);
-}
-
-}  // namespace
 
 void BuildConnectorStreet(const std::vector<glm::vec2>& path, float roadHalfWidth, float streetHalfWidth,
                           Random& random, BoxWriter& boxes, CityLayout& city) {
