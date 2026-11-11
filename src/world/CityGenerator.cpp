@@ -7,6 +7,7 @@
 #include "world/CityLandmarks.h"
 #include "world/CityNature.h"
 #include "world/CityPlan.h"
+#include "world/CitySatellites.h"
 #include "world/CityStreets.h"
 
 // The generator runs in stages, each in its own file:
@@ -80,12 +81,16 @@ CityLayout GenerateCity(const CitySettings& settings) {
     layout.waterLevel = city::kWaterLevel;
     const float outerEdge = plan.halfSize + plan.streetHalfWidth;
     layout.bounds = {glm::vec2(-outerEdge), glm::vec2(outerEdge)};
+    layout.coreBounds = layout.bounds;
     layout.streets = city::BuildStreetGraph(plan.segments);
 
     city::BoxWriter boxes(layout);
     city::BuildStreetsAndWater(plan, settings.seed, boxes, layout);
     for (size_t i = 0; i < plan.blocks.size(); ++i) {
         BuildBlock(boxes, layout, plan, plan.blocks[i], city::MixSeed(settings.seed, 0x10000u + static_cast<uint32_t>(i)));
+    }
+    if (settings.satelliteCount > 0 && !settings.districtOnly) {
+        city::AddSatellites(layout, settings, plan);
     }
     return layout;
 }

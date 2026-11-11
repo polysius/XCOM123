@@ -81,7 +81,8 @@ public:
         plan.halfSize = settings.citySize * 0.5f;
         plan.roadHalfWidth = settings.roadWidth * 0.5f;
         plan.streetHalfWidth = plan.roadHalfWidth + settings.sidewalkWidth;
-        plan.farDistance = plan.halfSize + 1500.0f;
+        plan.farDistance = settings.districtOnly ? plan.halfSize : plan.halfSize + 1500.0f;
+        plan.districtOnly = settings.districtOnly;
 
         AddRingRoad();
         landRegions.push_back({glm::vec2(-plan.halfSize), glm::vec2(plan.halfSize)});
@@ -91,7 +92,9 @@ public:
             ApplyLine(line);
         }
         AddMedianConnectors();
-        PlaceLandmarkSites();
+        if (!settings.districtOnly) {
+            PlaceLandmarkSites();
+        }
         const std::vector<Rect> regions = landRegions;
         for (const Rect& region : regions) {
             Subdivide(region);
@@ -114,7 +117,22 @@ private:
 
     // The river, the canal, boulevards, avenues with their bridges and the streets along the
     // river, in the order they are laid out. Later lines cross the gaps of earlier ones.
+    // A district has no water to plan around: two streets across it, one each way, give it a few
+    // larger blocks, and its old quarter lies near the middle.
+    std::vector<MajorLine> ChooseDistrictLines() {
+        const float size = settings.citySize;
+        plan.historicCore = {random.Range(-0.12f, 0.12f) * size, random.Range(-0.12f, 0.12f) * size};
+        std::vector<MajorLine> lines;
+        for (bool alongX : {true, false}) {
+            lines.push_back({LineKind::Street, alongX, random.Range(-0.3f, 0.3f) * size});
+        }
+        return lines;
+    }
+
     std::vector<MajorLine> ChooseMajorLines() {
+        if (settings.districtOnly) {
+            return ChooseDistrictLines();
+        }
         const float h = plan.halfSize;
         const float size = settings.citySize;
         const float streetWidth = plan.streetHalfWidth * 2.0f;

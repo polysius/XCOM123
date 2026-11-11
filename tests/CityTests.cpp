@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "PngImage.h"
+#include "world/CityComposition.h"
 #include "world/CityGenerator.h"
 
 namespace {
@@ -29,12 +30,16 @@ namespace {
 
 int totalFailures = 0;
 std::map<std::string, int> failuresPerCheck;
+bool quiet = false;  // set while checks run on geometry that is broken on purpose
 
 // Records a failed check. Only the first few failures of each kind are printed, so one broken
 // rule does not flood the output.
 void Fail(const std::string& check, const std::string& detail) {
     ++totalFailures;
     const int count = ++failuresPerCheck[check];
+    if (quiet) {
+        return;
+    }
     if (count <= 5) {
         std::printf("  FAIL %s: %s\n", check.c_str(), detail.c_str());
     } else if (count == 6) {
@@ -46,6 +51,21 @@ void Expect(bool condition, const std::string& check, const std::string& detail)
     if (!condition) {
         Fail(check, detail);
     }
+}
+
+// Runs `checks` without printing or keeping their failures, and returns how many they found.
+// Used to make sure the checks do notice geometry that is broken on purpose.
+template <typename Checks>
+int CountFailuresOf(Checks&& checks) {
+    const int before = totalFailures;
+    const std::map<std::string, int> savedPerCheck = failuresPerCheck;
+    quiet = true;
+    checks();
+    quiet = false;
+    const int found = totalFailures - before;
+    totalFailures = before;
+    failuresPerCheck = savedPerCheck;
+    return found;
 }
 
 std::string Format(const char* format, double a = 0, double b = 0, double c = 0, double d = 0) {
@@ -224,7 +244,8 @@ bool IsOnPavement(const CityLayout& city, const CityIndex& index, glm::vec2 poin
 
 void CheckBoxes(const CityLayout& city) {
     Expect(city.boxes.size() == city.boxParts.size(), "boxes", "every box needs a part tag");
-    Expect(city.boxes.size() < 150000, "boxes", Format("%.0f boxes is over the 150k budget", double(city.boxes.size())));
+    Expect(city.boxes.size() <= kMaxCityBoxes, "boxes",
+           Format("%.0f boxes is over the budget of %.0f", double(city.boxes.size()), double(kMaxCityBoxes)));
     for (size_t i = 0; i < city.boxes.size(); ++i) {
         const BoxInstance& box = city.boxes[i];
         const bool finite = std::isfinite(box.center.x) && std::isfinite(box.center.y) && std::isfinite(box.center.z);
@@ -436,9 +457,13 @@ void CheckStreetLights(const CityLayout& city, const CityIndex& index) {
 }
 
 // Streets may only cross water on bridges, and every bridge must reach land on both banks.
-void CheckWaterAndBridges(const CityLayout& city) {
-    Expect(!city.water.empty(), "water", "the city has no river");
-    Expect(city.bridges.size() >= 2, "bridges", "the river needs at least two bridges");
+void CheckWaterAndBridges(const CityLayout& city, bool expectRiver) {
+    if (!expectRiver) {
+        Expect(city.water.empty() && city.bridges.empty(), "water", "a district must have no water and no bridges");
+    } else {
+        Expect(!city.water.empty(), "water", "the city has no river");
+        Expect(city.bridges.size() >= 2, "bridges", "the river needs at least two bridges");
+    }
     std::vector<bool> isBridge(city.streets.edges.size(), false);
     for (const Bridge& bridge : city.bridges) {
         if (bridge.edge >= city.streets.edges.size()) {
@@ -656,6 +681,7 @@ bool WriteMaps(const CityLayout& city, const std::string& path, const Rect& wind
 struct Options {
     std::string mapPath;
     uint32_t mapSeed = CitySettings{}.seed;
+    int mapSatellites = -1;  // negative keeps the generator's default
     bool hasWindow = false;
     Rect window;
     float pixelsPerMetre = 1.0f;
@@ -670,6 +696,12 @@ Options ParseOptions(int argc, char** argv) {
             options.mapPath = argv[++i];
         } else if (argument == "--seed" && hasValue) {
             options.mapSeed = static_cast<uint32_t>(std::strtoul(argv[++i], nullptr, 10));
+        } else if (argument == "--satellites" && hasValue) {
+            options.mapSatellites = std::atoi(argv[++i]);
+            if (options.mapSatellites < 0 || options.mapSatellites > kMaxSatellites) {
+                std::printf("--satellites must be between 0 and 8\n");
+                std::exit(1);
+            }
         } else if (argument == "--scale" && hasValue) {
             options.pixelsPerMetre = std::strtof(argv[++i], nullptr);
         } else if (argument == "--window" && i + 4 < argc) {
@@ -691,27 +723,131 @@ CityLayout GenerateTimed(const CitySettings& settings, double& milliseconds) {
     return city;
 }
 
-void TestSeed(uint32_t seed, bool checkDeterminism) {
-    std::printf("seed %u\n", seed);
+// A street's carriageway must be level with the road along its whole length: no pavement may lie
+// across it, or the street would end at a kerb. This looks along every centre line.
+void CheckRoadsStayClear(const CityLayout& city, const CityIndex& index) {
+    const float roadHalf = city.roadWidth * 0.5f;
+    for (uint32_t e = 0; e < city.streets.edges.size(); ++e) {
+        const StreetGraph::Edge& edge = city.streets.edges[e];
+        const glm::vec2 a = city.streets.nodes[edge.from];
+        const glm::vec2 direction = (city.streets.nodes[edge.to] - a) / edge.length;
+        const glm::vec2 side{-direction.y, direction.x};
+        for (float along = 0.5f; along <= edge.length - 0.5f; along += 1.0f) {
+            // The middle of the road and a point near each kerb.
+            for (float across : {0.0f, -roadHalf * 0.8f, roadHalf * 0.8f}) {
+                const glm::vec2 point = a + direction * along + side * across;
+                if (IsOnPavement(city, index, point)) {
+                    Fail("road clear", Format("pavement lies across the road at (%.1f, %.1f) on edge %.0f", point.x, point.y, e));
+                }
+            }
+        }
+    }
+}
+
+// The crowd places pavement corners where two streets meet, and it stops being able to when two
+// streets leave a node at nearly the same angle, so no two arms may be closer than this.
+constexpr float kMinJunctionAngle = 0.5235988f;  // 30 degrees
+
+void CheckJunctionAngles(const CityLayout& city) {
+    const StreetGraph& streets = city.streets;
+    for (size_t node = 0; node < streets.nodes.size(); ++node) {
+        std::vector<float> angles;
+        for (uint32_t e : streets.edgesAtNode[node]) {
+            const StreetGraph::Edge& edge = streets.edges[e];
+            const glm::vec2 other = streets.nodes[edge.from == node ? edge.to : edge.from];
+            const glm::vec2 direction = other - streets.nodes[node];
+            angles.push_back(std::atan2(direction.y, direction.x));
+        }
+        std::sort(angles.begin(), angles.end());
+        for (size_t i = 0; i + 1 < angles.size() + (angles.size() > 2 ? 1 : 0); ++i) {
+            // Consecutive arms counter-clockwise, wrapping around from the last to the first.
+            const float next = i + 1 < angles.size() ? angles[i + 1] : angles[0] + 6.2831855f;
+            Expect(next - angles[i] >= kMinJunctionAngle - 1e-4f, "junctions",
+                   Format("two streets leave node %.0f at only %.1f degrees", double(node), double(next - angles[i]) * 57.29578));
+        }
+    }
+}
+
+void RunContractChecks(const CityLayout& city, bool expectRiver) {
+    const CityIndex index = BuildIndex(city);
+    CheckBoxes(city);
+    CheckStreetGraph(city);
+    CheckJunctionAngles(city);
+    CheckRoadsStayClear(city, index);
+    CheckPavements(city, index);
+    CheckBuildingsKeepClear(city);
+    CheckSquares(city, index);
+    CheckStreetLights(city, index);
+    CheckWaterAndBridges(city, expectRiver);
+}
+
+void TestSeed(uint32_t seed, bool checkDeterminism, bool districtOnly = false, int satellites = 0) {
+    std::printf("seed %u%s", seed, districtOnly ? " (district only)" : "");
+    if (satellites > 0) {
+        std::printf(" with %d satellites", satellites);
+    }
+    std::printf("\n");
     CitySettings settings;
     settings.seed = seed;
+    settings.districtOnly = districtOnly;
+    settings.satelliteCount = satellites;
+    if (districtOnly) {
+        settings.citySize = 600.0f;
+    }
     double milliseconds = 0.0;
     const CityLayout city = GenerateTimed(settings, milliseconds);
     // The summary shows how long generation took. It is not checked against a limit: wall-clock
     // time depends on the build type and on how busy the machine is, not on the generator's logic.
     PrintSummary(city, milliseconds);
 
-    const CityIndex index = BuildIndex(city);
-    CheckBoxes(city);
-    CheckStreetGraph(city);
-    CheckPavements(city, index);
-    CheckBuildingsKeepClear(city);
-    CheckSquares(city, index);
-    CheckStreetLights(city, index);
-    CheckWaterAndBridges(city);
+    RunContractChecks(city, !districtOnly);
     if (checkDeterminism) {
         CheckDeterminism(settings, city);
     }
+}
+
+// A district built on its own, then turned and moved into a city through AppendPart. The whole
+// contract must still hold, which proves the checks and the transform on turned geometry.
+void TestPlacedDistrict(uint32_t seed, const city::Placement& placement) {
+    std::printf("district %u placed at (%.0f, %.0f) turned %.2f rad\n", seed, double(placement.offset.x),
+                double(placement.offset.y), double(placement.yaw));
+    CitySettings settings;
+    settings.seed = seed;
+    settings.districtOnly = true;
+    settings.citySize = 600.0f;
+    const CityLayout district = GenerateCity(settings);
+
+    CityLayout city;
+    city.roadWidth = district.roadWidth;
+    city.sidewalkWidth = district.sidewalkWidth;
+    city.sidewalkCenterOffset = district.sidewalkCenterOffset;
+    city.walkHeight = district.walkHeight;
+    city.waterLevel = district.waterLevel;
+    city::AppendPart(city, district, placement);
+    PrintSummary(city, 0.0);
+
+    Expect(city.boxes.size() == district.boxes.size(), "compose", "every box must be carried over");
+    Expect(city.streets.nodes.size() == district.streets.nodes.size(), "compose", "every node must be carried over");
+    for (size_t i = 0; i < district.streets.edges.size(); ++i) {
+        Expect(std::abs(city.streets.edges[i].length - district.streets.edges[i].length) < kTolerance, "compose",
+               "turning a street must not change its length");
+    }
+    Expect(city.bounds.Contains(placement.Apply(glm::vec2(0.0f))), "compose", "the bounds must hold the part");
+    RunContractChecks(city, false);
+
+    // The checks must notice when the geometry stops matching the street graph.
+    CityLayout sideways = city;
+    for (BoxInstance& box : sideways.boxes) {
+        box.center.x += 3.0f;
+    }
+    Expect(CountFailuresOf([&] { RunContractChecks(sideways, false); }) > 0, "compose",
+           "the checks did not notice boxes moved 3 m away from the streets");
+    CityLayout twisted = city;
+    for (BoxInstance& box : twisted.boxes) {
+        box.yaw += 0.5f;
+    }
+    Expect(CountFailuresOf([&] { RunContractChecks(twisted, false); }) > 0, "compose",
+           "the checks did not notice boxes turned away from the streets");
 }
 
 }  // namespace
@@ -751,6 +887,9 @@ int main(int argc, char** argv) {
     if (!options.mapPath.empty()) {
         CitySettings settings;
         settings.seed = options.mapSeed;
+        if (options.mapSatellites >= 0) {
+            settings.satelliteCount = options.mapSatellites;
+        }
         const CityLayout city = GenerateCity(settings);
         const Rect window = options.hasWindow ? options.window : city.bounds.Expanded(20.0f);
         return WriteMaps(city, options.mapPath, window, options.pixelsPerMetre) ? 0 : 1;
@@ -761,6 +900,17 @@ int main(int argc, char** argv) {
     for (size_t i = 0; i < std::size(seeds); ++i) {
         TestSeed(seeds[i], i == 0);
     }
+    // A district on its own, as a satellite of a larger city is built.
+    TestSeed(5u, true, true);
+    TestSeed(99u, false, true);
+    // The city with satellite districts turned to their own angles and joined by streets.
+    TestSeed(CitySettings{}.seed, true, false, 4);
+    TestSeed(1u, false, false, 3);
+    TestSeed(42u, false, false, 4);
+    TestPlacedDistrict(5u, {{0.0f, 0.0f}, 0.0f});
+    TestPlacedDistrict(5u, {{1234.0f, -567.0f}, 0.6f});
+    TestPlacedDistrict(99u, {{-900.0f, 700.0f}, -1.1f});
+    TestPlacedDistrict(7u, {{300.0f, 2000.0f}, 2.4f});
     if (totalFailures == 0) {
         std::printf("all city checks passed\n");
         return 0;

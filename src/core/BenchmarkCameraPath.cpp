@@ -31,9 +31,9 @@ struct StreetLine {
 // The longest run of street grid points that share one coordinate with the point nearest the
 // city centre. alongX picks a street running in X (constant Z), otherwise one running in Z.
 StreetLine FindCentralStreet(const CityLayout& city, bool alongX) {
-    const glm::vec2 centre = city.bounds.Center();
-    const StreetLine fallback = alongX ? StreetLine{{city.bounds.min.x, centre.y}, {city.bounds.max.x, centre.y}}
-                                       : StreetLine{{centre.x, city.bounds.min.y}, {centre.x, city.bounds.max.y}};
+    const glm::vec2 centre = city.coreBounds.Center();
+    const StreetLine fallback = alongX ? StreetLine{{city.coreBounds.min.x, centre.y}, {city.coreBounds.max.x, centre.y}}
+                                       : StreetLine{{centre.x, city.coreBounds.min.y}, {centre.x, city.coreBounds.max.y}};
     const std::vector<glm::vec2>& nodes = city.streets.nodes;
     if (nodes.empty()) {
         return fallback;
@@ -69,6 +69,9 @@ const OrientedRect* FindBusiestPlaza(const CityLayout& city, const Crowd& crowd)
     float bestDensity = -1.0f;
     std::vector<NpcInstance> inside;
     for (const OrientedRect& plaza : city.plazas) {
+        if (!city.coreBounds.Contains(plaza.Center())) {
+            continue;  // the path stays in the core, so that it is the same however many satellites there are
+        }
         const glm::vec2 centre = plaza.Center();
         const glm::vec2 halfSize = plaza.Size() * 0.5f;
         // Looking straight down with the square's own +Z as "up" on screen, so the box's sides line up
@@ -105,9 +108,9 @@ BenchmarkCameraPath::Shot AerialOrbit(glm::vec2 centre, float extent) {
 BenchmarkCameraPath::Shot LowCrossing(const CityLayout& city, float extent) {
     // Low over one corner, drifting towards the centre while looking at the far corner: the
     // view that shows the most buildings and people at once.
-    const glm::vec2 nearCorner = city.bounds.min;
-    const glm::vec2 farCorner = city.bounds.max;
-    const glm::vec2 centre = city.bounds.Center();
+    const glm::vec2 nearCorner = city.coreBounds.min;
+    const glm::vec2 farCorner = city.coreBounds.max;
+    const glm::vec2 centre = city.coreBounds.Center();
     return {.name = "low crossing",
             .share = 0.10f,
             .poses = {{OnGround(nearCorner, extent * 0.10f), OnGround(farCorner, 0.0f)},
@@ -149,8 +152,8 @@ BenchmarkCameraPath::Shot RiseOut(glm::vec2 start, glm::vec2 cityCentre, float e
 }  // namespace
 
 BenchmarkCameraPath::BenchmarkCameraPath(const CityLayout& city, const Crowd& crowd) {
-    const glm::vec2 centre = city.bounds.Center();
-    const float extent = std::max(city.bounds.Size().x, city.bounds.Size().y);
+    const glm::vec2 centre = city.coreBounds.Center();
+    const float extent = std::max(city.coreBounds.Size().x, city.coreBounds.Size().y);
     const float eyeHeight = city.walkHeight + kEyeHeight;
 
     // Without any square, the "square" shots use the city centre instead.

@@ -165,7 +165,7 @@ FlyCamera MakeStartCamera(const Options& options, const CityLayout& city) {
                          glm::radians(options.camera->pitchDegrees));
     }
     // Above the south-west of the city, looking towards its centre.
-    const glm::vec3 start(city.bounds.min.x * 0.55f, 70.0f, city.bounds.min.y * 0.55f);
+    const glm::vec3 start(city.coreBounds.min.x * 0.55f, 70.0f, city.coreBounds.min.y * 0.55f);
     return FlyCamera(start, std::atan2(-start.x, -start.z), -0.32f);
 }
 
@@ -362,6 +362,9 @@ int RunEngine(const Options& options, GLFWwindow* window) {
     // Generate the world.
     CitySettings citySettings;
     citySettings.seed = options.seed;
+    if (options.satelliteCount) {
+        citySettings.satelliteCount = *options.satelliteCount;
+    }
     engine.city = GenerateCity(citySettings);
     engine.renderer->UploadStaticScene(engine.city.boxes);
     engine.crowd.Spawn(engine.city, {.agentCount = options.npcCount, .seed = options.seed * 7919u + 1u});

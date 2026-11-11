@@ -205,12 +205,22 @@ void Walkways::BuildObstacleGrid(const CityLayout& city) {
 // Sets `flag` on every cell whose centre lies inside the box's footprint grown by `grow`. The
 // footprint is a rectangle turned by the box's yaw.
 void Walkways::RasteriseObstacle(const BoxInstance& box, float grow, uint8_t flag) {
-    const glm::vec2 reach = glm::vec2(box.halfSize.x, box.halfSize.z) + grow;  // half size along the box's axes
+    const float cosine = std::cos(box.yaw);
+    const float sine = std::sin(box.yaw);
+    // A cell is judged by its centre alone. Along an edge that runs across the grid at an angle the
+    // centre can be further from a person standing in the cell than along an axis-aligned edge:
+    // the cell reaches (|cos| + |sin|) * half a cell across a turned edge, against half a cell
+    // across an axis-aligned one. The footprint grows by the difference, which is nothing for a
+    // box that is not turned.
+    // That is exact, which leaves no margin for a small box (a lamp base is about a third of a cell
+    // wide) in the worst position, so a turned box gets a couple of centimetres more.
+    constexpr float kTurnedMargin = 0.02f;
+    const float turnedCellReach = 0.5f * gridCellSize * (std::abs(cosine) + std::abs(sine) - 1.0f) +
+                                  (std::abs(sine) > 1e-6f ? kTurnedMargin : 0.0f);
+    const glm::vec2 reach = glm::vec2(box.halfSize.x, box.halfSize.z) + grow + turnedCellReach;  // half size along the box's axes
     if (reach.x <= 0.0f || reach.y <= 0.0f) {
         return;
     }
-    const float cosine = std::cos(box.yaw);
-    const float sine = std::sin(box.yaw);
     // The cells to test are those in the axis-aligned rectangle that encloses the turned one.
     const glm::vec2 enclosingReach(std::abs(cosine) * reach.x + std::abs(sine) * reach.y,
                                    std::abs(sine) * reach.x + std::abs(cosine) * reach.y);
