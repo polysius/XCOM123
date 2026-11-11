@@ -18,6 +18,7 @@ layout(location = 2) in vec3 inAlbedo;
 layout(location = 3) in vec3 inSurface;        // x: roughness, y: material id, z: per-object seed
 layout(location = 4) in vec3 inLocalPosition;  // boxes: metres from the minimum corner; people: body position
 layout(location = 5) in vec3 inBoxSize;        // boxes: full size in metres
+layout(location = 6) in vec3 inLocalNormal;    // boxes: the face normal in the box's own axes
 
 layout(location = 0) out vec4 outColor;
 
@@ -152,7 +153,8 @@ float BayWidth(uint flags) {
 
 Pattern ComputePattern(vec3 normal, uint flags) {
     Pattern pattern;
-    bool facesX = abs(normal.x) > 0.5;
+    // Which wall of the box this is depends on its own axes, not on how the box is turned.
+    bool facesX = abs(inLocalNormal.x) > 0.5;
     bool facesUp = abs(normal.y) > 0.5;
     pattern.along = facesX ? inLocalPosition.z : inLocalPosition.x;
     float wallWidth = max(facesX ? inBoxSize.z : inBoxSize.x, 0.01);

@@ -138,7 +138,8 @@ enable_testing()
 add_executable(unit_tests
     tests/unit_tests.cpp
     src/core/CommandLine.cpp
-    src/core/FrameStatistics.cpp)
+    src/core/FrameStatistics.cpp
+    src/world/crowd/Walkways.cpp)
 target_include_directories(unit_tests PRIVATE src)
 target_link_libraries(unit_tests PRIVATE glm::glm)
 target_compile_definitions(unit_tests PRIVATE GLM_FORCE_RADIANS GLM_FORCE_DEPTH_ZERO_TO_ONE)

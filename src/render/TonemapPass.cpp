@@ -58,7 +58,7 @@ void TonemapPass::Create(const VulkanContext& context, const RenderTargets& targ
     tonemap.layout = pipelineLayout;
     tonemap.vertexShader = "fullscreen.vert";
     tonemap.fragmentShader = "tonemap.frag";
-    tonemap.usesMeshInput = false;
+    tonemap.meshInput = MeshInput::None;
     tonemap.colorFormat = context.swapchainFormat;
     pipeline = CreateGraphicsPipeline(context.device, tonemap);
 }

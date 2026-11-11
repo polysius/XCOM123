@@ -10,6 +10,7 @@
 
 #include "core/CommandLine.h"
 #include "core/FrameStatistics.h"
+#include "world/crowd/Walkways.h"
 
 namespace {
 int failureCount = 0;
@@ -123,6 +124,42 @@ void FrameSummaryIgnoresInputOrder() {
     Check(summary.medianMs == 20.0 && summary.worstMs == 30.0, "unsorted input");
 }
 
+// A city with no streets and one building, 12 m long and 2 m wide, standing at the origin and
+// turned by `yaw`. Its long side runs along world X at yaw 0.
+crowd::Walkways WalkwaysWithOneBuilding(float yaw) {
+    CityLayout city;
+    city.bounds = {{-30.0f, -30.0f}, {30.0f, 30.0f}};
+    city.boxes.push_back({.center = {0.0f, 1.0f, 0.0f}, .halfSize = {6.0f, 1.0f, 1.0f}, .yaw = yaw});
+    crowd::Walkways walkways;
+    walkways.Build(city);
+    return walkways;
+}
+
+void ObstacleStaysAxisAlignedAtYawZero() {
+    const crowd::Walkways walkways = WalkwaysWithOneBuilding(0.0f);
+    Check(walkways.IsInsideObstacle({5.0f, 0.0f}), "inside near the end of the long side");
+    Check(!walkways.IsInsideObstacle({0.0f, 3.0f}), "outside beside the building");
+    Check(!walkways.IsInsideObstacle({7.0f, 0.0f}), "outside past the end");
+}
+
+void ObstacleFollowsAQuarterTurn() {
+    const float quarterTurn = 1.5707964f;
+    const crowd::Walkways walkways = WalkwaysWithOneBuilding(quarterTurn);
+    Check(walkways.IsInsideObstacle({0.0f, 5.0f}), "the long side now runs along Z");
+    Check(walkways.IsInsideObstacle({0.0f, -5.0f}), "and in both directions");
+    Check(!walkways.IsInsideObstacle({5.0f, 0.0f}), "world X is now beside the building");
+}
+
+void ObstacleFollowsADiagonalTurn() {
+    const float eighthTurn = 0.7853982f;
+    const crowd::Walkways walkways = WalkwaysWithOneBuilding(eighthTurn);
+    // Positive yaw turns +X towards -Z, so the long side runs from (+X, -Z) to (-X, +Z).
+    Check(walkways.IsInsideObstacle({3.5f, -3.5f}), "inside along the diagonal");
+    Check(walkways.IsInsideObstacle({-3.5f, 3.5f}), "inside along the diagonal, other end");
+    Check(!walkways.IsInsideObstacle({3.5f, 3.5f}), "outside across the diagonal");
+    Check(!walkways.IsInsideObstacle({5.0f, 0.0f}), "the corner of the enclosing rectangle is empty");
+}
+
 struct Test {
     const char* name;
     std::function<void()> run;
@@ -142,6 +179,9 @@ int main() {
         {"FrameSummaryOfNothingIsEmpty", FrameSummaryOfNothingIsEmpty},
         {"FrameSummaryUsesNearestRank", FrameSummaryUsesNearestRank},
         {"FrameSummaryIgnoresInputOrder", FrameSummaryIgnoresInputOrder},
+        {"ObstacleStaysAxisAlignedAtYawZero", ObstacleStaysAxisAlignedAtYawZero},
+        {"ObstacleFollowsAQuarterTurn", ObstacleFollowsAQuarterTurn},
+        {"ObstacleFollowsADiagonalTurn", ObstacleFollowsADiagonalTurn},
     };
     for (const Test& test : tests) {
         const int failuresBefore = failureCount;

@@ -4,12 +4,19 @@
 
 #include <volk.h>
 
+// What a pipeline reads from the vertex buffers.
+enum class MeshInput {
+    None,    // full-screen passes: no vertex buffers at all
+    Boxes,   // the unit cube, drawn once per BoxInstance
+    People,  // a person's body parts, drawn once per NpcInstance
+};
+
 // Everything that differs between the engine's graphics pipelines. The rest (triangle lists,
 // dynamic viewport and scissor, dynamic rendering) is the same for all of them.
 struct PipelineDesc {
     const char* vertexShader = nullptr;
     const char* fragmentShader = nullptr;        // nullptr for depth-only pipelines
-    bool usesMeshInput = true;                   // false for full-screen passes
+    MeshInput meshInput = MeshInput::Boxes;
     VkPipelineLayout layout = VK_NULL_HANDLE;
     VkFormat colorFormat = VK_FORMAT_UNDEFINED;  // VK_FORMAT_UNDEFINED when nothing is drawn in colour
     VkFormat depthFormat = VK_FORMAT_UNDEFINED;

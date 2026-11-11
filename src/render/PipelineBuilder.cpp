@@ -28,11 +28,12 @@ VkPipeline CreateGraphicsPipeline(VkDevice device, const PipelineDesc& desc) {
     }
 
     // Binding 0 is the mesh (one entry per vertex); binding 1 the instances (one entry per box or
-    // person). Both instance types are 48 bytes, read by the shaders as three vec4s.
-    static_assert(sizeof(BoxInstance) == sizeof(NpcInstance), "Box and NPC pipelines share one instance layout");
+    // person). The shaders read an instance as consecutive vec4s: three for a person, four for a
+    // box, whose fourth vec4 holds its yaw.
+    const bool drawsBoxes = desc.meshInput == MeshInput::Boxes;
     const VkVertexInputBindingDescription bindings[] = {
         {0, sizeof(MeshVertex), VK_VERTEX_INPUT_RATE_VERTEX},
-        {1, sizeof(BoxInstance), VK_VERTEX_INPUT_RATE_INSTANCE},
+        {1, drawsBoxes ? sizeof(BoxInstance) : sizeof(NpcInstance), VK_VERTEX_INPUT_RATE_INSTANCE},
     };
     const VkVertexInputAttributeDescription attributes[] = {
         {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(MeshVertex, position)},
@@ -41,12 +42,13 @@ VkPipeline CreateGraphicsPipeline(VkDevice device, const PipelineDesc& desc) {
         {3, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 0},
         {4, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 16},
         {5, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 32},
+        {6, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(BoxInstance, yaw)},  // boxes only
     };
     VkPipelineVertexInputStateCreateInfo vertexInput{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
-    if (desc.usesMeshInput) {
+    if (desc.meshInput != MeshInput::None) {
         vertexInput.vertexBindingDescriptionCount = 2;
         vertexInput.pVertexBindingDescriptions = bindings;
-        vertexInput.vertexAttributeDescriptionCount = 6;
+        vertexInput.vertexAttributeDescriptionCount = drawsBoxes ? 7 : 6;
         vertexInput.pVertexAttributeDescriptions = attributes;
     }
 

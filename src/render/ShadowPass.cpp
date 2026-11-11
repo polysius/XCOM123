@@ -42,8 +42,10 @@ void ShadowPass::Create(const VulkanContext& context, VkPipelineLayout sceneLayo
     shadow.depthBias = true;
     shadow.depthClamp = context.supportsDepthClamp;
     shadow.vertexShader = "box.vert";
+    shadow.meshInput = MeshInput::Boxes;
     boxPipeline = CreateGraphicsPipeline(context.device, shadow);
     shadow.vertexShader = "npc.vert";
+    shadow.meshInput = MeshInput::People;
     npcPipeline = CreateGraphicsPipeline(context.device, shadow);
 }
 

@@ -25,7 +25,8 @@ enum class SurfaceMaterial : uint32_t {
     Lamp = 11,      // street lamp lanterns that glow after sunset
 };
 
-// An axis-aligned box. Almost all static city geometry is made of these.
+// A box turned about the vertical axis. Almost all static city geometry is made of these.
+// `halfSize` is measured along the box's own axes, so it stays the same however the box turns.
 struct BoxInstance {
     glm::vec3 center;
     float material;    // a SurfaceMaterial, stored as float for the shader
@@ -33,8 +34,12 @@ struct BoxInstance {
     float roughness;   // 0 = mirror-like, 1 = fully matte
     glm::vec3 color;   // base colour (albedo), linear RGB
     float seed;        // per-object value that varies procedural detail
+    float yaw = 0.0f;  // radians about +Y, the same convention as NpcInstance::heading
+    float unused0 = 0.0f;  // pads the instance to four vec4s, as the shader reads it
+    float unused1 = 0.0f;
+    float unused2 = 0.0f;
 };
-static_assert(sizeof(BoxInstance) == 48, "BoxInstance must match the shader instance layout");
+static_assert(sizeof(BoxInstance) == 64, "BoxInstance must match the shader instance layout");
 
 // One visible person.
 struct NpcInstance {
