@@ -683,6 +683,8 @@ struct Options {
     std::string mapPath;
     uint32_t mapSeed = CitySettings{}.seed;
     int mapSatellites = -1;  // negative keeps the generator's default
+    int sweepFirst = -1;     // with --sweep, the seeds sweepFirst to sweepLast are checked instead of the fixed list
+    int sweepLast = -1;
     bool hasWindow = false;
     Rect window;
     float pixelsPerMetre = 1.0f;
@@ -697,6 +699,10 @@ Options ParseOptions(int argc, char** argv) {
             options.mapPath = argv[++i];
         } else if (argument == "--seed" && hasValue) {
             options.mapSeed = static_cast<uint32_t>(std::strtoul(argv[++i], nullptr, 10));
+        } else if (argument == "--sweep" && i + 2 < argc) {
+            options.sweepFirst = std::atoi(argv[i + 1]);
+            options.sweepLast = std::atoi(argv[i + 2]);
+            i += 2;
         } else if (argument == "--satellites" && hasValue) {
             options.mapSatellites = std::atoi(argv[++i]);
             if (options.mapSatellites < 0 || options.mapSatellites > kMaxSatellites) {
@@ -755,6 +761,19 @@ void CheckRiverBanks(const CityLayout& city) {
     }
     // True when a box of `part` covers `point`, rises at least to `lowestTop` and reaches down at least
     // to `highestBottom`.
+    // The river ends at the edge of the land, not beyond it: nothing hangs out over the void.
+    constexpr float kOvershoot = 3.0f;
+    for (uint32_t i = 0; i < city.boxes.size(); ++i) {
+        if (city.boxParts[i] != CityPart::Water && city.boxParts[i] != CityPart::Embankment) {
+            continue;
+        }
+        const Rect extent = FootprintOf(city.boxes[i]).Bounds();
+        if (extent.max.x > landEdge + kOvershoot || extent.min.x < -landEdge - kOvershoot) {
+            Fail("river banks", Format("water or levee reaches %.1f m past the edge of the land at (%.1f, %.1f)",
+                                       std::max(extent.max.x - landEdge, -landEdge - extent.min.x), city.boxes[i].center.x,
+                                       city.boxes[i].center.z));
+        }
+    }
     auto boxAt = [&](glm::vec2 point, CityPart part, float lowestTop, float highestBottom = 1000.0f) {
         bool found = false;
         grid.Visit({point, point}, [&](uint32_t i) {
@@ -766,7 +785,42 @@ void CheckRiverBanks(const CityLayout& city) {
 
     const float water = city.riverReachHalfWidth;
     const float levee = city::kReachWallThickness;
-    constexpr float kBendMargin = 10.0f;  // the levee on the inside of a bend has a small notch at the vertex
+
+    // The bends. At each vertex the water, the levee and the grass are checked along the bisector of
+    // the bend, on both banks. A point on the bisector is closest to the vertex itself on the outside
+    // of the bend, so there the distances are measured to the water's mitred corner; on the inside it
+    // is the distance across from the centre line that counts. Either way it is `across / cos(half the
+    // turn)` along the bisector.
+    for (const std::vector<glm::vec2>& reach : city.riverReaches) {
+        for (size_t vertex = 1; vertex + 1 < reach.size(); ++vertex) {
+            const glm::vec2 before = glm::normalize(reach[vertex] - reach[vertex - 1]);
+            const glm::vec2 after = glm::normalize(reach[vertex + 1] - reach[vertex]);
+            const float turn = std::atan2(before.x * after.y - before.y * after.x, glm::dot(before, after));
+            const float halfTurnCosine = std::cos(std::abs(turn) * 0.5f);
+            for (float sign : {-1.0f, 1.0f}) {
+                const glm::vec2 leftOfBefore{-before.y, before.x};
+                const glm::vec2 leftOfAfter{-after.y, after.x};
+                const glm::vec2 bisector = glm::normalize(leftOfBefore + leftOfAfter) * sign;
+                const bool outside = sign * turn < 0.0f;
+                auto at = [&](float across) { return reach[vertex] + bisector * (across / halfTurnCosine); };
+                const char* where = outside ? "outside" : "inside";
+                for (float across : {water + 0.15f, water + levee * 0.5f, water + levee - 0.15f}) {
+                    const glm::vec2 point = at(across);
+                    if (!boxAt(point, CityPart::Embankment, 0.5f, -4.0f)) {
+                        Fail("river banks", std::string("no levee on the ") + where + " of a bend at " +
+                                                Format("(%.1f, %.1f)", point.x, point.y));
+                    }
+                }
+                const glm::vec2 grass = at(water + levee + 0.3f);
+                if (std::abs(grass.x) < landEdge - 5.0f && !boxAt(grass, CityPart::Ground, -100.0f)) {
+                    Fail("river banks", std::string("no grass beside the levee on the ") + where + " of a bend at " +
+                                            Format("(%.1f, %.1f)", grass.x, grass.y));
+                }
+            }
+        }
+    }
+
+    constexpr float kBendMargin = 10.0f;  // the straight stretches are checked away from the bends, which are checked above
     for (const std::vector<glm::vec2>& reach : city.riverReaches) {
         for (size_t leg = 0; leg + 1 < reach.size(); ++leg) {
             const glm::vec2 start = reach[leg];
@@ -980,6 +1034,22 @@ int main(int argc, char** argv) {
     }
 
     CheckHelpers();
+    if (options.sweepFirst >= 0) {
+        // Every seed in the range, with the same contract checks: CityTests --sweep 1 60 [--satellites N]
+        const int satellites = options.mapSatellites >= 0 ? options.mapSatellites : CitySettings{}.satelliteCount;
+        for (int seed = options.sweepFirst; seed <= options.sweepLast; ++seed) {
+            TestSeed(static_cast<uint32_t>(seed), false, false, satellites);
+        }
+        if (totalFailures == 0) {
+            std::printf("all city checks passed\n");
+            return 0;
+        }
+        std::printf("%d city checks failed\n", totalFailures);
+        for (const auto& [check, count] : failuresPerCheck) {
+            std::printf("  %s: %d\n", check.c_str(), count);
+        }
+        return 1;
+    }
     const uint32_t seeds[] = {CitySettings{}.seed, 1u, 2u, 7u, 42u, 2024u};
     for (size_t i = 0; i < std::size(seeds); ++i) {
         TestSeed(seeds[i], i == 0);

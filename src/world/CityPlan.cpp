@@ -630,6 +630,8 @@ void PlanRiverReaches(const CitySettings& settings, CityPlan& plan) {
     constexpr float kMaxDeviation = 40.0f * kDegree;  // how far the heading may leave straight outwards
     constexpr float kSteer = 3.0f * kDegree;         // the push back towards the river's line
     constexpr float kWanderLimit = 300.0f;           // beyond this the reach is steered back
+    constexpr float kStraightenDistance = 500.0f;    // the reach straightens out over this stretch before the edge
+    constexpr float kStraightenRate = 0.3f;          // the share of the heading's deviation undone at each vertex
     const float riverZ = plan.waterways[0].water.Center().y;
     for (int side = 0; side < 2; ++side) {
         const float outward = side == 0 ? 1.0f : -1.0f;  // east, then west
@@ -646,8 +648,19 @@ void PlanRiverReaches(const CitySettings& settings, CityPlan& plan) {
             if (std::abs(point.y - riverZ) > kWanderLimit) {
                 turn += point.y > riverZ ? -kSteer : kSteer;
             }
+            if (std::abs(point.x) > plan.farDistance - kStraightenDistance) {
+                turn = -deviation * kStraightenRate;  // over the last stretch the reach straightens out
+            }
             deviation = std::clamp(deviation + turn, -kMaxDeviation, kMaxDeviation);
-            point += glm::vec2(outward * std::cos(deviation), std::sin(deviation)) * kStep;
+            glm::vec2 step = glm::vec2(outward * std::cos(deviation), std::sin(deviation)) * kStep;
+            if (std::abs(point.x + step.x) >= plan.farDistance) {
+                // The last step ends exactly at the edge of the land, so that no water runs past it.
+                step *= (plan.farDistance - std::abs(point.x)) / std::abs(step.x);
+                point += step;
+                point.x = outward * plan.farDistance;
+            } else {
+                point += step;
+            }
             reach.points.push_back(point);
         }
         plan.reaches.push_back(std::move(reach));
