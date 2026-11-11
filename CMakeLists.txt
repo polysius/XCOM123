@@ -111,3 +111,21 @@ if(MSVC)
     target_compile_options(XCOM123 PRIVATE /W4 /permissive- /MP)
     set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT XCOM123)
 endif()
+
+# ---------------------------------------------------------------------------
+# City generator tests
+# ---------------------------------------------------------------------------
+# A console program that checks the generated city against the rules the crowd relies on, and
+# can draw a top-down map of it (CityTests --map city.png). It builds only the generator
+# sources (src/world/City*.cpp) and glm, so it runs without Vulkan or a window.
+file(GLOB CITY_GENERATOR_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/world/City*.cpp)
+add_executable(CityTests tests/CityTests.cpp tests/PngImage.cpp tests/PngImage.h ${CITY_GENERATOR_SOURCES})
+target_include_directories(CityTests PRIVATE src)
+target_link_libraries(CityTests PRIVATE glm::glm)
+target_compile_definitions(CityTests PRIVATE GLM_FORCE_RADIANS GLM_FORCE_DEPTH_ZERO_TO_ONE)
+if(MSVC)
+    target_compile_options(CityTests PRIVATE /W4 /permissive- /MP)
+endif()
+
+enable_testing()
+add_test(NAME CityTests COMMAND CityTests)
