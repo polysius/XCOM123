@@ -231,8 +231,8 @@ public:
         if (IsInsideObstacle(point)) {
             return Place::InsideObstacle;
         }
-        for (const Rect& plaza : plazas) {
-            if (Contains(plaza, point, kWalkableTolerance)) {
+        for (const OrientedRect& plaza : plazas) {
+            if (plaza.Contains(point, kWalkableTolerance)) {
                 return Place::Walkable;
             }
         }
@@ -262,11 +262,6 @@ private:
 
     static constexpr float kCellSize = 16.0f;
 
-    static bool Contains(const Rect& rect, glm::vec2 point, float margin) {
-        return point.x >= rect.min.x - margin && point.x <= rect.max.x + margin && point.y >= rect.min.y - margin &&
-               point.y <= rect.max.y + margin;
-    }
-
     // Boxes a person could walk into: they reach from below head height to above the ankles.
     // Footprints shrink by a few centimetres so that people brushing a wall do not count.
     void AddObstacles(const CityLayout& city) {
@@ -279,7 +274,7 @@ private:
             const glm::vec2 center(box.center.x, box.center.z);
             const glm::vec2 halfSize = glm::vec2(box.halfSize.x, box.halfSize.z) - 0.05f;
             if (halfSize.x > 0.0f && halfSize.y > 0.0f) {
-                obstacles.push_back({center - halfSize, center + halfSize});
+                obstacles.push_back({Rect{center - halfSize, center + halfSize}, box.yaw});
             }
         }
         // Bucket the obstacles into a coarse grid so each test looks at only a few.
@@ -290,9 +285,9 @@ private:
         gridRows = static_cast<int>(std::ceil(size.y / kCellSize));
         cells.assign(static_cast<size_t>(gridColumns) * static_cast<size_t>(gridRows), {});
         for (uint32_t index = 0; index < obstacles.size(); ++index) {
-            const Rect& obstacle = obstacles[index];
-            const glm::ivec2 low = CellOf(obstacle.min);
-            const glm::ivec2 high = CellOf(obstacle.max);
+            const Rect bounds = obstacles[index].Bounds();
+            const glm::ivec2 low = CellOf(bounds.min);
+            const glm::ivec2 high = CellOf(bounds.max);
             for (int y = low.y; y <= high.y; ++y) {
                 for (int x = low.x; x <= high.x; ++x) {
                     cells[static_cast<size_t>(y) * static_cast<size_t>(gridColumns) + static_cast<size_t>(x)].push_back(index);
@@ -309,16 +304,16 @@ private:
     bool IsInsideObstacle(glm::vec2 point) const {
         const glm::ivec2 cell = CellOf(point);
         for (uint32_t index : cells[static_cast<size_t>(cell.y) * static_cast<size_t>(gridColumns) + static_cast<size_t>(cell.x)]) {
-            if (Contains(obstacles[index], point, 0.0f)) {
+            if (obstacles[index].Contains(point)) {
                 return true;
             }
         }
         return false;
     }
 
-    std::vector<Rect> plazas;
+    std::vector<OrientedRect> plazas;
     std::vector<Street> streets;
-    std::vector<Rect> obstacles;
+    std::vector<OrientedRect> obstacles;
     std::vector<std::vector<uint32_t>> cells;
     glm::vec2 gridOrigin{0.0f};
     int gridColumns = 0;

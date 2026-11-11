@@ -32,11 +32,6 @@ float SegmentDistance(glm::vec2 point, glm::vec2 start, glm::vec2 end) {
     return glm::length(point - (start + span * t));
 }
 
-bool Contains(const Rect& rect, glm::vec2 point, float tolerance) {
-    return point.x >= rect.min.x - tolerance && point.x <= rect.max.x + tolerance &&
-           point.y >= rect.min.y - tolerance && point.y <= rect.max.y + tolerance;
-}
-
 }  // namespace
 
 void Walkways::Build(const CityLayout& city) {
@@ -187,9 +182,10 @@ void Walkways::BuildObstacleGrid(const CityLayout& city) {
         low = glm::min(low, node - outerEdge);
         high = glm::max(high, node + outerEdge);
     }
-    for (const Rect& plaza : plazas) {
-        low = glm::min(low, plaza.min);
-        high = glm::max(high, plaza.max);
+    for (const OrientedRect& plaza : plazas) {
+        const Rect bounds = plaza.Bounds();
+        low = glm::min(low, bounds.min);
+        high = glm::max(high, bounds.max);
     }
     gridOrigin = low - kGridMargin;
     gridColumns = static_cast<int>(std::ceil((high.x - low.x + 2.0f * kGridMargin) / gridCellSize));
@@ -293,14 +289,15 @@ bool Walkways::IsPathFree(glm::vec2 a, glm::vec2 b) const {
     return true;
 }
 
-float Walkways::FreeArea(const Rect& area) const {
+float Walkways::FreeArea(const OrientedRect& area) const {
     int freeCells = 0;
-    const glm::ivec2 low = CellOf(area.min);
-    const glm::ivec2 high = CellOf(area.max);
+    const Rect bounds = area.Bounds();
+    const glm::ivec2 low = CellOf(bounds.min);
+    const glm::ivec2 high = CellOf(bounds.max);
     for (int y = low.y; y <= high.y; ++y) {
         for (int x = low.x; x <= high.x; ++x) {
             const glm::vec2 cellCenter = gridOrigin + (glm::vec2(x, y) + 0.5f) * gridCellSize;
-            if (Contains(area, cellCenter, 0.0f) && CanStandAtUnreserved(cellCenter)) {
+            if (area.Contains(cellCenter) && CanStandAtUnreserved(cellCenter)) {
                 ++freeCells;
             }
         }
@@ -338,8 +335,8 @@ bool Walkways::IsWalkable(glm::vec2 point, float tolerance) const {
     if (IsInsideObstacle(point)) {
         return false;
     }
-    for (const Rect& plaza : plazas) {
-        if (Contains(plaza, point, tolerance)) {
+    for (const OrientedRect& plaza : plazas) {
+        if (plaza.Contains(point, tolerance)) {
             return true;
         }
     }

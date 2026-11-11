@@ -160,6 +160,58 @@ void ObstacleFollowsADiagonalTurn() {
     Check(!walkways.IsInsideObstacle({5.0f, 0.0f}), "the corner of the enclosing rectangle is empty");
 }
 
+constexpr float kQuarterTurn = 1.5707964f;
+constexpr float kEighthTurn = 0.7853982f;
+
+// A 12 m by 2 m rectangle at the origin, turned by `yaw`.
+OrientedRect LongRectangle(float yaw, glm::vec2 center = {0.0f, 0.0f}) {
+    return {Rect{center - glm::vec2(6.0f, 1.0f), center + glm::vec2(6.0f, 1.0f)}, yaw};
+}
+
+void OrientedRectWithoutTurnIsTheRect() {
+    const Rect plain{{-6.0f, -1.0f}, {6.0f, 1.0f}};
+    const OrientedRect rect = plain;
+    Check(rect.Contains({5.9f, 0.9f}) && !rect.Contains({6.1f, 0.0f}), "contains");
+    Check(rect.Contains({6.5f, 0.0f}, 1.0f), "tolerance widens it");
+    Check(rect.Bounds().min == plain.min && rect.Bounds().max == plain.max, "bounds are the rectangle");
+    Check(rect.ToFrame({3.0f, 4.0f}) == glm::vec2(3.0f, 4.0f), "frame is the world");
+    Check(rect.Overlaps(OrientedRect(Rect{{5.0f, 0.0f}, {9.0f, 3.0f}})), "overlap");
+    Check(!rect.Overlaps(OrientedRect(Rect{{6.0f, -1.0f}, {9.0f, 1.0f}})), "touching edges do not overlap");
+}
+
+void OrientedRectFollowsItsTurn() {
+    const OrientedRect rect = LongRectangle(kQuarterTurn);
+    Check(rect.Contains({0.0f, 5.0f}) && rect.Contains({0.0f, -5.0f}), "long side runs along Z");
+    Check(!rect.Contains({5.0f, 0.0f}), "world X is beside it");
+    const Rect bounds = rect.Bounds();
+    Check(std::abs(bounds.Size().x - 2.0f) < 1e-4f && std::abs(bounds.Size().y - 12.0f) < 1e-4f, "bounds swap sides");
+}
+
+void OrientedRectFrameRoundTrips() {
+    const OrientedRect rect = LongRectangle(0.6f, {40.0f, -25.0f});
+    const glm::vec2 point{51.5f, -22.25f};
+    const glm::vec2 back = rect.FromFrame(rect.ToFrame(point));
+    Check(glm::distance(back, point) < 1e-3f, "frame round trip");
+    // The corners of the frame's rectangle are corners in the world too.
+    for (glm::vec2 corner : rect.Corners()) {
+        Check(rect.Contains(corner, 1e-3f), "a corner is on the rectangle");
+    }
+}
+
+void OrientedRectOverlapUsesTheTurnNotTheBounds() {
+    const OrientedRect diagonal = LongRectangle(kEighthTurn);
+    // Another long rectangle turned the same way, 3 m to the side: a 1 m gap between them even
+    // though their bounding boxes overlap a great deal.
+    const glm::vec2 side(std::sin(kEighthTurn), std::cos(kEighthTurn));
+    const OrientedRect apart = LongRectangle(kEighthTurn, side * 3.0f);
+    const OrientedRect close = LongRectangle(kEighthTurn, side * 1.5f);
+    Check(diagonal.Bounds().Overlaps(apart.Bounds()), "the bounding boxes do overlap");
+    Check(!diagonal.Overlaps(apart), "but the rectangles do not");
+    Check(diagonal.Overlaps(close), "overlapping rectangles are found");
+    // Two thin rectangles crossing like an X.
+    Check(LongRectangle(kEighthTurn).Overlaps(LongRectangle(-kEighthTurn)), "a cross overlaps");
+}
+
 struct Test {
     const char* name;
     std::function<void()> run;
@@ -179,6 +231,10 @@ int main() {
         {"FrameSummaryOfNothingIsEmpty", FrameSummaryOfNothingIsEmpty},
         {"FrameSummaryUsesNearestRank", FrameSummaryUsesNearestRank},
         {"FrameSummaryIgnoresInputOrder", FrameSummaryIgnoresInputOrder},
+        {"OrientedRectWithoutTurnIsTheRect", OrientedRectWithoutTurnIsTheRect},
+        {"OrientedRectFollowsItsTurn", OrientedRectFollowsItsTurn},
+        {"OrientedRectFrameRoundTrips", OrientedRectFrameRoundTrips},
+        {"OrientedRectOverlapUsesTheTurnNotTheBounds", OrientedRectOverlapUsesTheTurnNotTheBounds},
         {"ObstacleStaysAxisAlignedAtYawZero", ObstacleStaysAxisAlignedAtYawZero},
         {"ObstacleFollowsAQuarterTurn", ObstacleFollowsAQuarterTurn},
         {"ObstacleFollowsADiagonalTurn", ObstacleFollowsADiagonalTurn},

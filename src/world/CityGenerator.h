@@ -1,5 +1,8 @@
 #pragma once
 
+#include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstdint>
 #include <vector>
 
@@ -26,8 +29,103 @@ struct Rect {
     }
 };
 
+// A rectangle on the ground plane that may be turned. It is `area`, an ordinary rectangle, turned
+// by `yaw` about its own centre, with the same sign convention as BoxInstance::yaw (a positive
+// angle turns +Z towards +X). A plain Rect converts to an OrientedRect that is not turned, and
+// every operation then reduces to the Rect arithmetic, so axis-aligned cities are unchanged.
+//
+// Code that works in the rectangle's own frame (sampling a point inside it, clamping a person
+// to it) moves points with ToFrame and FromFrame, which are the identity when yaw is zero.
+struct OrientedRect {
+    Rect area;
+    float yaw = 0.0f;
+
+    OrientedRect() = default;
+    OrientedRect(const Rect& unturned, float turn = 0.0f) : area(unturned), yaw(turn) {}
+
+    glm::vec2 Center() const { return area.Center(); }
+    glm::vec2 Size() const { return area.Size(); }
+    float Area() const { return area.Area(); }
+    bool IsEmpty() const { return area.IsEmpty(); }
+    OrientedRect Expanded(float amount) const { return {area.Expanded(amount), yaw}; }
+
+    // A world point expressed in the rectangle's own frame, where `area` is axis-aligned.
+    glm::vec2 ToFrame(glm::vec2 point) const {
+        if (yaw == 0.0f) {
+            return point;
+        }
+        const glm::vec2 center = Center();
+        const glm::vec2 offset = point - center;
+        const float cosine = std::cos(yaw);
+        const float sine = std::sin(yaw);
+        return center + glm::vec2(offset.x * cosine - offset.y * sine, offset.x * sine + offset.y * cosine);
+    }
+    // The reverse: a point of the rectangle's own frame placed in the world.
+    glm::vec2 FromFrame(glm::vec2 point) const {
+        if (yaw == 0.0f) {
+            return point;
+        }
+        const glm::vec2 center = Center();
+        const glm::vec2 offset = point - center;
+        const float cosine = std::cos(yaw);
+        const float sine = std::sin(yaw);
+        return center + glm::vec2(offset.x * cosine + offset.y * sine, -offset.x * sine + offset.y * cosine);
+    }
+
+    // `tolerance` widens the rectangle by that many metres on every side.
+    bool Contains(glm::vec2 point, float tolerance = 0.0f) const {
+        const glm::vec2 local = ToFrame(point);
+        return local.x >= area.min.x - tolerance && local.x <= area.max.x + tolerance &&
+               local.y >= area.min.y - tolerance && local.y <= area.max.y + tolerance;
+    }
+
+    // The smallest axis-aligned rectangle around it.
+    Rect Bounds() const {
+        if (yaw == 0.0f) {
+            return area;
+        }
+        const glm::vec2 half = Size() * 0.5f;
+        const float cosine = std::abs(std::cos(yaw));
+        const float sine = std::abs(std::sin(yaw));
+        const glm::vec2 reach(cosine * half.x + sine * half.y, sine * half.x + cosine * half.y);
+        return {Center() - reach, Center() + reach};
+    }
+
+    // The four corners in the world, counter-clockwise from the minimum corner of the frame.
+    std::array<glm::vec2, 4> Corners() const {
+        return {FromFrame(area.min), FromFrame({area.max.x, area.min.y}), FromFrame(area.max),
+                FromFrame({area.min.x, area.max.y})};
+    }
+
+    // True when the two share some area; touching edges do not count. Uses the separating axis
+    // test: two convex shapes are apart exactly when some edge direction of either separates them.
+    bool Overlaps(const OrientedRect& other) const {
+        if (yaw == 0.0f && other.yaw == 0.0f) {
+            return area.Overlaps(other.area);
+        }
+        const std::array<glm::vec2, 4> mine = Corners();
+        const std::array<glm::vec2, 4> theirs = other.Corners();
+        const glm::vec2 axes[] = {mine[1] - mine[0], mine[3] - mine[0], theirs[1] - theirs[0], theirs[3] - theirs[0]};
+        for (glm::vec2 axis : axes) {
+            float lowMine = INFINITY, highMine = -INFINITY, lowTheirs = INFINITY, highTheirs = -INFINITY;
+            for (int i = 0; i < 4; ++i) {
+                const float a = glm::dot(mine[i], axis);
+                const float b = glm::dot(theirs[i], axis);
+                lowMine = std::min(lowMine, a);
+                highMine = std::max(highMine, a);
+                lowTheirs = std::min(lowTheirs, b);
+                highTheirs = std::max(highTheirs, b);
+            }
+            if (highMine <= lowTheirs || highTheirs <= lowMine) {
+                return false;
+            }
+        }
+        return true;
+    }
+};
+
 // The street network as a graph: intersections are nodes, street segments between them are edges.
-// Every edge is a straight, axis-aligned segment with pavements on both sides.
+// Every edge is a straight segment with pavements on both sides. Edges may run at any angle.
 struct StreetGraph {
     struct Edge {
         uint32_t from;
@@ -99,21 +197,21 @@ enum class LandmarkKind : uint8_t {
 
 // The land between streets. `land` excludes the pavements around it.
 struct CityBlock {
-    Rect land;
+    OrientedRect land;
     District district;
     BlockUse use;
 };
 
 struct Landmark {
     LandmarkKind kind;
-    Rect footprint;          // the block it occupies
+    OrientedRect footprint;  // the block it occupies
     glm::vec2 entrance;      // where people would gather in front of it
 };
 
 // A street edge that crosses water, and the deck that carries it.
 struct Bridge {
     uint32_t edge;   // index into StreetGraph::edges
-    Rect deck;       // the part of the street over the water, pavements included
+    OrientedRect deck;  // the part of the street over the water, pavements included
 };
 
 struct Tree {
@@ -141,9 +239,9 @@ struct CityLayout {
     std::vector<BoxInstance> boxes;
     std::vector<CityPart> boxParts;     // what each box in `boxes` belongs to, same order
     StreetGraph streets;
-    std::vector<Rect> plazas;           // open squares people wander in, free of buildings
-    std::vector<Rect> parks;
-    std::vector<Rect> water;            // water surfaces of the river and the canal
+    std::vector<OrientedRect> plazas;   // open squares people wander in, free of buildings
+    std::vector<OrientedRect> parks;
+    std::vector<OrientedRect> water;    // water surfaces of the river and the canal
     std::vector<Bridge> bridges;
     std::vector<CityBlock> blocks;
     std::vector<Landmark> landmarks;

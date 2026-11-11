@@ -370,10 +370,10 @@ void BuildMarketHall(BoxWriter& boxes, CityLayout& city, const Rect& land, Rando
 
     // The squares around the hall.
     const float gap = 2.5f;
-    city.plazas.push_back({land.min + glm::vec2(2.0f), {land.max.x - 2.0f, hall.min.y - gap}});
-    city.plazas.push_back({{land.min.x + 2.0f, hall.max.y + gap}, land.max - glm::vec2(2.0f)});
-    city.plazas.push_back({{land.min.x + 2.0f, hall.min.y - gap}, {hall.min.x - gap, hall.max.y + gap}});
-    city.plazas.push_back({{hall.max.x + gap, hall.min.y - gap}, {land.max.x - 2.0f, hall.max.y + gap}});
+    city.plazas.push_back(Rect{land.min + glm::vec2(2.0f), {land.max.x - 2.0f, hall.min.y - gap}});
+    city.plazas.push_back(Rect{{land.min.x + 2.0f, hall.max.y + gap}, land.max - glm::vec2(2.0f)});
+    city.plazas.push_back(Rect{{land.min.x + 2.0f, hall.min.y - gap}, {hall.min.x - gap, hall.max.y + gap}});
+    city.plazas.push_back(Rect{{hall.max.x + gap, hall.min.y - gap}, {land.max.x - 2.0f, hall.max.y + gap}});
 
     PartScope scope(boxes, CityPart::Landmark);
     const Look stone = StoneLook(kChurchStone, random.Unit());
