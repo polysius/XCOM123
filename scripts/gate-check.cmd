@@ -13,8 +13,7 @@ echo == Building Release
 "%CMAKE%" --build --preset release || exit /b 1
 
 echo == Running tests
-rem ctest lives next to cmake. A checkout without tests still passes here,
-rem because building cleanly is the main check until tests exist.
+rem ctest lives next to cmake. It runs the unit_tests target from CMakeLists.txt.
 "%CMAKE_DIR%\ctest.exe" --test-dir build -C Release --output-on-failure || exit /b 1
 
 echo == Gate check passed
