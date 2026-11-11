@@ -15,6 +15,14 @@ enum class SurfaceMaterial : uint32_t {
     Facade = 1,     // building walls with procedural windows
     Plain = 2,      // anything else: roofs, ledges, fountains
     Character = 3,  // people (set by the NPC shader)
+    Water = 4,      // rivers, canals, ponds and fountain basins, with moving ripples
+    Stone = 5,      // dressed stone blocks: quays, bridges, churches, monuments
+    RoofTile = 6,   // slate or clay tiles in courses; dormer windows when flagged in the seed
+    Foliage = 7,    // tree crowns and hedges
+    Grass = 8,      // lawns
+    Glass = 9,      // leaded or framed glazing, stained glass when flagged in the seed
+    Metal = 10,     // painted iron and lead: railings, lamp posts, domes
+    Lamp = 11,      // street lamp lanterns that glow after sunset
 };
 
 // An axis-aligned box. Almost all static city geometry is made of these.
