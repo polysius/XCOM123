@@ -1,130 +1,109 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 #include <string>
 #include <vector>
 
 #include <glm/glm.hpp>
 
+#include "render/DynamicResolution.h"
+#include "render/GpuProfiler.h"
 #include "render/IRenderModule.h"
-#include "render/Meshes.h"
+#include "render/RenderTargets.h"
+#include "render/SceneGeometry.h"
+#include "render/ScenePass.h"
+#include "render/ScreenshotCapture.h"
+#include "render/ShadowPass.h"
+#include "render/TonemapPass.h"
 #include "render/VulkanContext.h"
 #include "render/VulkanUtils.h"
 
 // Vulkan 1.3 implementation of the render module.
 //
-// Every frame runs three passes:
-//   1. Shadow pass:  depth of the city and the crowd, seen from the sun, into a shadow map.
-//   2. Scene pass:   lit geometry and the sky into a multisampled HDR image (resolved at the end).
-//   3. Tonemap pass: HDR image to the window with exposure, a filmic curve and a vignette.
+// Every frame runs three passes, each in its own class:
+//   1. ShadowPass:  depth of the city and the crowd, seen from the sun, into a shadow map.
+//   2. ScenePass:   lit geometry and the sky into a multisampled HDR image, drawn at the current
+//                   render scale into the top-left part of full-size targets.
+//   3. TonemapPass: HDR image to the window with exposure, a filmic curve and a vignette,
+//                   scaling the drawn part up to the window size.
+//
+// This class owns what the passes share (frames in flight, the per-frame uniforms and their
+// descriptor sets, the swapchain semaphores) and runs the frame: wait, record, submit, present.
+// GpuProfiler times the passes, and DynamicResolution turns those times into a render scale.
 class VulkanRenderer final : public IRenderModule {
 public:
     bool Initialize(EngineContext& engine) override;
     void Shutdown() override;
     const char* GetName() const override { return "Vulkan Renderer"; }
-    const char* GetVersion() const override { return "0.1.0"; }
+    const char* GetVersion() const override { return "0.2.0"; }
 
     void SetResolution(int width, int height) override;
+    void SetResolutionSettings(const ResolutionSettings& settings) override;
     void UploadStaticScene(std::span<const BoxInstance> boxes) override;
+    void ReserveNpcCapacity(size_t npcCount) override;
     void Render(const FrameInput& frame) override;
+    bool RenderAndCapture(const FrameInput& frame, const std::string& pngPath) override;
+    RenderStats GetStats() const override;
     std::string GetDeviceName() const override;
 
 private:
+    // Two frames in flight: the CPU prepares one frame while the GPU draws the previous one.
+    // More would add a frame of input latency without making the frame rate any steadier.
     static constexpr uint32_t kFramesInFlight = 2;
 
-    // What one in-flight frame owns, so the CPU can prepare the next frame while the GPU draws this one.
+    // Order of the passes in the GPU profiler.
+    enum PassIndex : uint32_t { kShadowPassIndex, kScenePassIndex, kTonemapPassIndex };
+
     struct FrameResources {
         VkCommandPool commandPool = VK_NULL_HANDLE;
         VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
         VkSemaphore imageAvailable = VK_NULL_HANDLE;
         VkFence inFlight = VK_NULL_HANDLE;
         GpuBuffer uniforms;
-        GpuBuffer npcInstances;
         VkDescriptorSet sceneDescriptors = VK_NULL_HANDLE;
-        VkDescriptorSet tonemapDescriptors = VK_NULL_HANDLE;
     };
 
-    struct Mesh {
-        GpuBuffer vertices;
-        GpuBuffer indices;
-        uint32_t indexCount = 0;
-    };
-
-    struct PipelineDesc {
-        const char* vertexShader = nullptr;
-        const char* fragmentShader = nullptr;        // nullptr for depth-only pipelines
-        bool usesMeshInput = true;                   // false for full-screen passes
-        VkPipelineLayout layout = VK_NULL_HANDLE;
-        VkFormat colorFormat = VK_FORMAT_UNDEFINED;  // VK_FORMAT_UNDEFINED when nothing is drawn in colour
-        VkFormat depthFormat = VK_FORMAT_UNDEFINED;
-        VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
-        VkCullModeFlags cullMode = VK_CULL_MODE_NONE;
-        bool depthTest = false;
-        bool depthWrite = false;
-        VkCompareOp depthCompare = VK_COMPARE_OP_ALWAYS;
-        bool shadowBias = false;                     // depth bias and depth clamping, for the shadow map
-    };
-
-    // Set-up, in the order Initialize runs it.
     void CreateFrameResources();
-    void CreateShadowMapAndSamplers();
-    void CreateDescriptors();
-    void CreateSizeDependentResources();
-    void CreatePipelines();
-    VkPipeline CreatePipeline(const PipelineDesc& desc);
-    Mesh UploadMesh(const MeshData& data);
-
-    void DestroySizeDependentResources();
-    void DestroyMesh(Mesh& mesh);
-    void EnsureNpcCapacity(size_t npcCount);
+    void CreateSceneLayouts();
+    void CreateSceneDescriptors();
+    void CreateSwapchainSemaphores();
+    void DestroySwapchainSemaphores();
     bool RecreateSwapchain();
+    bool PresentResultNeedsNewSwapchain(VkResult result) const;
 
-    // Per-frame work.
-    glm::mat4 ComputeSunShadowMatrix(const FrameInput& frame) const;
-    void WriteFrameUniforms(FrameResources& frame, const FrameInput& input,
-                            const glm::mat4& cameraViewProjection, const glm::mat4& lightViewProjection);
-    void RecordCommands(FrameResources& frame, uint32_t imageIndex, uint32_t npcCount,
-                        const glm::mat4& cameraViewProjection, const glm::mat4& lightViewProjection);
-    void RecordShadowPass(VkCommandBuffer cmd, const FrameResources& frame, uint32_t npcCount,
-                          const glm::mat4& lightViewProjection);
-    void RecordScenePass(VkCommandBuffer cmd, const FrameResources& frame, uint32_t npcCount,
-                         const glm::mat4& cameraViewProjection);
-    void RecordTonemapPass(VkCommandBuffer cmd, const FrameResources& frame, uint32_t imageIndex);
-    void DrawBoxes(VkCommandBuffer cmd, VkPipeline pipeline) const;
-    void DrawNpcs(VkCommandBuffer cmd, VkPipeline pipeline, const FrameResources& frame, uint32_t npcCount) const;
+    // Draws and presents one frame, optionally copying it for a screenshot. Returns false when
+    // the frame was skipped (window minimised or the swapchain had to be rebuilt).
+    bool DrawFrame(const FrameInput& input, bool captureScreenshot);
+    void FeedResolutionController();
+    void WriteFrameUniforms(FrameResources& frame, const FrameInput& input, const glm::mat4& cameraViewProjection,
+                            const glm::mat4& lightViewProjection) const;
+    void RecordCommands(uint32_t frameSlot, uint32_t imageIndex, const glm::mat4& cameraViewProjection,
+                        const glm::mat4& lightViewProjection, bool captureScreenshot);
+    void Submit(const FrameResources& frame, uint32_t imageIndex);
+    void Present(uint32_t imageIndex);
 
     VulkanContext context;
     GLFWwindow* window = nullptr;
     bool resizeRequested = false;
-    uint32_t frameIndex = 0;
-    VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_1_BIT;
-
+    uint64_t frameNumber = 0;  // frames submitted so far; the frame slot is frameNumber % kFramesInFlight
     std::array<FrameResources, kFramesInFlight> frames{};
-    std::vector<VkSemaphore> renderFinished;  // one per swapchain image
-    size_t npcCapacity = 0;
-
-    GpuImage shadowMap;
-    GpuImage hdrMultisampled;  // only used when multisampling is on
-    GpuImage hdrResolved;      // the single-sample HDR image the tonemap pass reads
-    GpuImage depthBuffer;
-    VkSampler shadowSampler = VK_NULL_HANDLE;
-    VkSampler linearSampler = VK_NULL_HANDLE;
+    std::vector<VkSemaphore> renderFinished;  // one per swapchain image, see CreateSwapchainSemaphores
 
     VkDescriptorSetLayout sceneSetLayout = VK_NULL_HANDLE;
-    VkDescriptorSetLayout tonemapSetLayout = VK_NULL_HANDLE;
-    VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
+    VkDescriptorPool sceneDescriptorPool = VK_NULL_HANDLE;
     VkPipelineLayout scenePipelineLayout = VK_NULL_HANDLE;
-    VkPipelineLayout tonemapPipelineLayout = VK_NULL_HANDLE;
 
-    VkPipeline boxPipeline = VK_NULL_HANDLE;
-    VkPipeline npcPipeline = VK_NULL_HANDLE;
-    VkPipeline boxShadowPipeline = VK_NULL_HANDLE;
-    VkPipeline npcShadowPipeline = VK_NULL_HANDLE;
-    VkPipeline skyPipeline = VK_NULL_HANDLE;
-    VkPipeline tonemapPipeline = VK_NULL_HANDLE;
+    RenderTargets targets;
+    SceneGeometry geometry;
+    ShadowPass shadowPass;
+    ScenePass scenePass;
+    TonemapPass tonemapPass;
+    GpuProfiler profiler;
+    DynamicResolution dynamicResolution;
+    ScreenshotCapture screenshot;
 
-    Mesh cubeMesh;
-    Mesh personMesh;
-    GpuBuffer boxInstances;
-    uint32_t boxInstanceCount = 0;
+    uint64_t lastFedMeasurement = 0;
+    float currentRenderScale = 1.0f;
+    VkExtent2D currentRenderExtent{0, 0};
 };

@@ -1,6 +1,7 @@
 #include "core/FlyCamera.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include <GLFW/glfw3.h>
 #include <glm/gtc/matrix_transform.hpp>
@@ -13,6 +14,8 @@ constexpr float kFastSpeed = 70.0f;
 constexpr float kFieldOfView = glm::radians(60.0f);
 constexpr float kNearPlane = 0.2f;
 constexpr float kFarPlane = 4000.0f;
+// Just short of straight up or down, where the view matrix's up vector would break down.
+constexpr float kMaxPitch = 1.55f;
 
 bool IsKeyDown(GLFWwindow* window, int key) {
     return glfwGetKey(window, key) == GLFW_PRESS;
@@ -21,6 +24,22 @@ bool IsKeyDown(GLFWwindow* window, int key) {
 
 FlyCamera::FlyCamera(glm::vec3 startPosition, float yawRadians, float pitchRadians)
     : position(startPosition), yaw(yawRadians), pitch(pitchRadians) {}
+
+void FlyCamera::SetPose(glm::vec3 newPosition, float yawRadians, float pitchRadians) {
+    position = newPosition;
+    yaw = yawRadians;
+    pitch = std::clamp(pitchRadians, -kMaxPitch, kMaxPitch);
+}
+
+void FlyCamera::LookAt(glm::vec3 newPosition, glm::vec3 target) {
+    const glm::vec3 offset = target - newPosition;
+    if (glm::length(offset) < 1e-4f) {
+        position = newPosition;
+        return;  // no direction to look in; keep the current one
+    }
+    const glm::vec3 direction = glm::normalize(offset);
+    SetPose(newPosition, std::atan2(direction.x, direction.z), std::asin(std::clamp(direction.y, -1.0f, 1.0f)));
+}
 
 glm::vec3 FlyCamera::Forward() const {
     return {std::cos(pitch) * std::sin(yaw), std::sin(pitch), std::cos(pitch) * std::cos(yaw)};
@@ -71,7 +90,7 @@ void FlyCamera::UpdateLook(GLFWwindow* window) {
     // Moving the mouse right turns right, which means decreasing yaw in this right-handed setup.
     yaw -= static_cast<float>(cursorX - lastCursorX) * kMouseSensitivity;
     pitch -= static_cast<float>(cursorY - lastCursorY) * kMouseSensitivity;
-    pitch = std::clamp(pitch, -1.55f, 1.55f);
+    pitch = std::clamp(pitch, -kMaxPitch, kMaxPitch);
     lastCursorX = cursorX;
     lastCursorY = cursorY;
 }

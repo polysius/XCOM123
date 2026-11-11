@@ -7,6 +7,11 @@
 // Throws std::runtime_error naming `operation` if a Vulkan call did not succeed.
 void VkCheck(VkResult result, const char* operation);
 
+// Pipeline stages that several passes name in their barriers.
+inline constexpr VkPipelineStageFlags2 kColorOutputStage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+inline constexpr VkPipelineStageFlags2 kDepthTestStages =
+    VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+
 // A buffer in memory the CPU can write to directly. It stays mapped for its whole life.
 struct GpuBuffer {
     VkBuffer buffer = VK_NULL_HANDLE;
@@ -33,6 +38,9 @@ struct ImageDesc {
 };
 
 GpuBuffer CreateMappedBuffer(VkDevice device, VkPhysicalDevice physicalDevice, VkDeviceSize size, VkBufferUsageFlags usage);
+// A mapped buffer the GPU copies results into for the CPU to read. It prefers CPU-cached
+// memory, because reading uncached memory back over the PCIe bus is very slow.
+GpuBuffer CreateReadbackBuffer(VkDevice device, VkPhysicalDevice physicalDevice, VkDeviceSize size);
 void DestroyBuffer(VkDevice device, GpuBuffer& buffer);
 
 GpuImage CreateImage(VkDevice device, VkPhysicalDevice physicalDevice, const ImageDesc& desc);
@@ -52,3 +60,8 @@ struct ImageTransition {
     VkAccessFlags2 dstAccess;
 };
 void TransitionImage(VkCommandBuffer commandBuffer, const ImageTransition& transition);
+
+// Starts dynamic rendering over the top-left `extent` of the attachments and sets a matching
+// viewport and scissor. The attachments may be larger than `extent` (see RenderTargets).
+void BeginRendering(VkCommandBuffer commandBuffer, VkExtent2D extent, const VkRenderingAttachmentInfo* color,
+                    const VkRenderingAttachmentInfo* depth);

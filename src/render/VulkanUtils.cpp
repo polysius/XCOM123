@@ -45,7 +45,11 @@ VkDeviceMemory AllocateMemory(VkDevice device, VkPhysicalDevice physicalDevice, 
 }
 }  // namespace
 
-GpuBuffer CreateMappedBuffer(VkDevice device, VkPhysicalDevice physicalDevice, VkDeviceSize size, VkBufferUsageFlags usage) {
+namespace {
+// Creates a buffer in memory the CPU can map, keeps it mapped, and favours memory with the
+// `preferred` properties when the GPU offers it.
+GpuBuffer CreateHostVisibleBuffer(VkDevice device, VkPhysicalDevice physicalDevice, VkDeviceSize size,
+                                  VkBufferUsageFlags usage, VkMemoryPropertyFlags preferred) {
     GpuBuffer result;
     result.size = size;
 
@@ -57,14 +61,23 @@ GpuBuffer CreateMappedBuffer(VkDevice device, VkPhysicalDevice physicalDevice, V
 
     VkMemoryRequirements requirements;
     vkGetBufferMemoryRequirements(device, result.buffer, &requirements);
-    // The CPU must be able to write it. When the GPU also offers CPU-writable memory on the
-    // graphics card itself, prefer that so draws do not have to read across the PCIe bus.
     result.memory = AllocateMemory(device, physicalDevice, requirements,
-                                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                                   VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+                                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, preferred);
     VkCheck(vkBindBufferMemory(device, result.buffer, result.memory, 0), "vkBindBufferMemory");
     VkCheck(vkMapMemory(device, result.memory, 0, VK_WHOLE_SIZE, 0, &result.mapped), "vkMapMemory");
     return result;
+}
+}  // namespace
+
+GpuBuffer CreateMappedBuffer(VkDevice device, VkPhysicalDevice physicalDevice, VkDeviceSize size, VkBufferUsageFlags usage) {
+    // The CPU must be able to write it. When the GPU also offers CPU-writable memory on the
+    // graphics card itself, prefer that so draws do not have to read across the PCIe bus.
+    return CreateHostVisibleBuffer(device, physicalDevice, size, usage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+}
+
+GpuBuffer CreateReadbackBuffer(VkDevice device, VkPhysicalDevice physicalDevice, VkDeviceSize size) {
+    return CreateHostVisibleBuffer(device, physicalDevice, size, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                   VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
 }
 
 void DestroyBuffer(VkDevice device, GpuBuffer& buffer) {
@@ -152,4 +165,20 @@ void TransitionImage(VkCommandBuffer commandBuffer, const ImageTransition& trans
     dependency.imageMemoryBarrierCount = 1;
     dependency.pImageMemoryBarriers = &barrier;
     vkCmdPipelineBarrier2(commandBuffer, &dependency);
+}
+
+void BeginRendering(VkCommandBuffer commandBuffer, VkExtent2D extent, const VkRenderingAttachmentInfo* color,
+                    const VkRenderingAttachmentInfo* depth) {
+    VkRenderingInfo info{VK_STRUCTURE_TYPE_RENDERING_INFO};
+    info.renderArea = {{0, 0}, extent};
+    info.layerCount = 1;
+    info.colorAttachmentCount = color != nullptr ? 1 : 0;
+    info.pColorAttachments = color;
+    info.pDepthAttachment = depth;
+    vkCmdBeginRendering(commandBuffer, &info);
+
+    const VkViewport viewport{0.0f, 0.0f, static_cast<float>(extent.width), static_cast<float>(extent.height), 0.0f, 1.0f};
+    vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
+    const VkRect2D scissor{{0, 0}, extent};
+    vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 }

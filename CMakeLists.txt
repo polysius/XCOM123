@@ -111,3 +111,20 @@ if(MSVC)
     target_compile_options(XCOM123 PRIVATE /W4 /permissive- /MP)
     set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT XCOM123)
 endif()
+
+# ---------------------------------------------------------------------------
+# Tools
+# ---------------------------------------------------------------------------
+# crowd_bench times the crowd simulation without a window or a GPU. It builds the world
+# code (city and crowd) and the job system, nothing that needs Vulkan or GLFW.
+file(GLOB_RECURSE CROWD_BENCH_WORLD_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/world/*.cpp)
+add_executable(crowd_bench
+    tools/crowd_bench/main.cpp
+    ${CROWD_BENCH_WORLD_SOURCES}
+    src/core/JobSystem.cpp)
+target_include_directories(crowd_bench PRIVATE src)
+target_link_libraries(crowd_bench PRIVATE glm::glm)
+target_compile_definitions(crowd_bench PRIVATE GLM_FORCE_RADIANS GLM_FORCE_DEPTH_ZERO_TO_ONE)
+if(MSVC)
+    target_compile_options(crowd_bench PRIVATE /W4 /permissive- /MP)
+endif()
