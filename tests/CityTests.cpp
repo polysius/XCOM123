@@ -21,6 +21,7 @@
 #include "PngImage.h"
 #include "world/CityComposition.h"
 #include "world/CityGenerator.h"
+#include "world/CityPlan.h"
 
 namespace {
 
@@ -723,6 +724,88 @@ CityLayout GenerateTimed(const CitySettings& settings, double& milliseconds) {
     return city;
 }
 
+// Beyond the straight part of the river, the banks are levees and the grass beside them is laid in
+// cells whose jagged edge the levee must hide. Along both banks of every reach, bends included,
+// this checks that:
+//   - no ground covers the water,
+//   - a levee stands over its whole width, from the water's edge to its outer face, and
+//   - grass starts straight after it, with no gap that would show the void below.
+void CheckRiverBanks(const CityLayout& city) {
+    if (city.riverReaches.empty()) {
+        return;
+    }
+    Rect area = city.bounds.Expanded(50.0f);
+    for (const std::vector<glm::vec2>& reach : city.riverReaches) {
+        for (glm::vec2 point : reach) {
+            area.min = glm::min(area.min, point - 100.0f);
+            area.max = glm::max(area.max, point + 100.0f);
+        }
+    }
+    // Only boxes that matter here are sorted into the grid: ground, and what stands on the banks.
+    BoxGrid grid(area, 16.0f);
+    float landEdge = 0.0f;  // the open land ends here, so the grass check stops short of it
+    for (uint32_t i = 0; i < city.boxes.size(); ++i) {
+        const CityPart part = city.boxParts[i];
+        if (part == CityPart::Ground || part == CityPart::Embankment) {
+            grid.Insert(i, FootprintOf(city.boxes[i]));
+        }
+        if (part == CityPart::Ground && std::abs(TopOf(city.boxes[i])) < 0.005f) {
+            landEdge = std::max(landEdge, city.boxes[i].center.x + city.boxes[i].halfSize.x);
+        }
+    }
+    // True when a box of `part` covers `point`, rises at least to `lowestTop` and reaches down at least
+    // to `highestBottom`.
+    auto boxAt = [&](glm::vec2 point, CityPart part, float lowestTop, float highestBottom = 1000.0f) {
+        bool found = false;
+        grid.Visit({point, point}, [&](uint32_t i) {
+            found = found || (city.boxParts[i] == part && TopOf(city.boxes[i]) >= lowestTop &&
+                              BottomOf(city.boxes[i]) <= highestBottom && FootprintOf(city.boxes[i]).Contains(point));
+        });
+        return found;
+    };
+
+    const float water = city.riverReachHalfWidth;
+    const float levee = city::kReachWallThickness;
+    constexpr float kBendMargin = 10.0f;  // the levee on the inside of a bend has a small notch at the vertex
+    for (const std::vector<glm::vec2>& reach : city.riverReaches) {
+        for (size_t leg = 0; leg + 1 < reach.size(); ++leg) {
+            const glm::vec2 start = reach[leg];
+            const float length = glm::distance(start, reach[leg + 1]);
+            const glm::vec2 direction = (reach[leg + 1] - start) / length;
+            const glm::vec2 side{-direction.y, direction.x};
+            for (float along = 0.0f; along <= length; along += 4.0f) {
+                const glm::vec2 onLine = start + direction * along;
+                for (float sign : {-1.0f, 1.0f}) {
+                    // The water: nothing may lie over it.
+                    for (float across : {0.0f, water - 0.3f}) {
+                        const glm::vec2 point = onLine + side * (sign * across);
+                        if (boxAt(point, CityPart::Ground, -100.0f)) {
+                            Fail("river banks", Format("ground lies over the water at (%.1f, %.1f)", point.x, point.y));
+                        }
+                    }
+                    if (along < kBendMargin || along > length - kBendMargin) {
+                        continue;
+                    }
+                    // The levee, across its whole width.
+                    for (float across : {water + 0.15f, water + levee * 0.5f, water + levee - 0.15f}) {
+                        const glm::vec2 point = onLine + side * (sign * across);
+                        // A wall that rises above the land and goes down into the water, not just a capstone.
+                        if (!boxAt(point, CityPart::Embankment, 0.5f, -4.0f)) {
+                            Fail("river banks", Format("no levee at (%.1f, %.1f), %.1f m from the water", point.x, point.y,
+                                                       across - water));
+                        }
+                    }
+                    // Grass straight after it, unless that is past the edge of the land.
+                    const glm::vec2 grass = onLine + side * (sign * (water + levee + 0.3f));
+                    if (std::abs(grass.x) < landEdge - 5.0f && !boxAt(grass, CityPart::Ground, -100.0f)) {
+                        Fail("river banks", Format("no grass beside the levee at (%.1f, %.1f)", grass.x, grass.y));
+                    }
+                }
+            }
+        }
+    }
+}
+
 // A street's carriageway must be level with the road along its whole length: no pavement may lie
 // across it, or the street would end at a kerb. This looks along every centre line.
 void CheckRoadsStayClear(const CityLayout& city, const CityIndex& index) {
@@ -774,6 +857,7 @@ void RunContractChecks(const CityLayout& city, bool expectRiver) {
     CheckStreetGraph(city);
     CheckJunctionAngles(city);
     CheckRoadsStayClear(city, index);
+    CheckRiverBanks(city);
     CheckPavements(city, index);
     CheckBuildingsKeepClear(city);
     CheckSquares(city, index);

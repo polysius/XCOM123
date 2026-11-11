@@ -259,6 +259,8 @@ struct CityLayout {
     std::vector<OrientedRect> plazas;   // open squares people wander in, free of buildings
     std::vector<OrientedRect> parks;
     std::vector<OrientedRect> water;    // water surfaces of the river and the canal
+    std::vector<std::vector<glm::vec2>> riverReaches;  // centre lines of the river beyond its straight part
+    float riverReachHalfWidth = 0.0f;                  // half the width of the water along those reaches
     std::vector<Bridge> bridges;
     std::vector<CityBlock> blocks;
     std::vector<Landmark> landmarks;

@@ -81,6 +81,16 @@ struct Waterway {
     float wallTop;        // height of the quay walls along it
 };
 
+// The river beyond its straight part. Through the city the river runs straight, between the
+// blocks the planner lays out along it; beyond the ring road it bends. A reach is one side of that:
+// a polyline running out to the edge of the open land, always moving away from the city, so that
+// it can never cross itself.
+struct RiverReach {
+    std::vector<glm::vec2> points;  // the centre line, from where the straight river ends
+    float halfWidth;                // the water reaches this far to either side
+    float wallTop;                  // height of the bank walls
+};
+
 struct CityPlan {
     float halfSize = 0.0f;         // half the distance between the ring road centre lines
     float roadHalfWidth = 0.0f;
@@ -94,9 +104,17 @@ struct CityPlan {
     std::vector<PlannedBlock> blocks;
     std::vector<LandmarkSite> sites;
     std::vector<Waterway> waterways;  // the river first, then the canal
+    float riverStraightEnd = 0.0f;    // the straight river reaches this far from the centre, east and west
+    std::vector<RiverReach> reaches;  // the river beyond that, one reach each side (none for a district)
 };
 
 inline constexpr float kQuayWallThickness = 0.8f;
+// Beyond the ring road the banks of the river are thick levees, because the grass around a bend is
+// cut away in coarse cells and the levee hides the jagged edge. It must be wider than a cell's
+// diagonal (see LayRiverBankGrass in CityStreets.cpp).
+inline constexpr float kReachWallThickness = 4.0f;
+// The straight river continues this far past the outer pavement of the ring road.
+inline constexpr float kRiverStraightMargin = 40.0f;
 
 CityPlan PlanCity(const CitySettings& settings);
 
