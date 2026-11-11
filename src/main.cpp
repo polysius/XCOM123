@@ -241,7 +241,8 @@ int RunBenchmark(Engine& engine, const Options& options) {
     // The first frames warm up caches and GPU clocks at the start of the path and are not measured.
     const int totalFrames = kBenchmarkWarmupFrames + options.benchmarkFrames;
     Clock::time_point previousFrame = Clock::now();
-    for (int frameIndex = 0; frameIndex < totalFrames && KeepRunning(engine.window); ++frameIndex) {
+    int frameIndex = 0;
+    for (; frameIndex < totalFrames && KeepRunning(engine.window); ++frameIndex) {
         const int measuredIndex = std::max(frameIndex - kBenchmarkWarmupFrames, 0);
         const float progress = options.benchmarkFrames > 1
                                    ? static_cast<float>(measuredIndex) / static_cast<float>(options.benchmarkFrames - 1)
@@ -269,7 +270,11 @@ int RunBenchmark(Engine& engine, const Options& options) {
     }
     PrintShotCameras(path);
     const bool passed = recorder.PrintReport(engine.crowd.AgentCount(), options.targetFps);
-    return passed ? 0 : kBenchmarkFailedExitCode;
+    const bool completed = frameIndex == totalFrames;
+    if (!completed) {
+        std::cerr << "Benchmark stopped after " << frameIndex << " of " << totalFrames << " frames\n";
+    }
+    return passed && completed ? 0 : kBenchmarkFailedExitCode;
 }
 
 // Moves the crowd forward to `seconds` without drawing anything.

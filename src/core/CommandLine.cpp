@@ -1,6 +1,9 @@
 #include "core/CommandLine.h"
 
+#include <cmath>
+#include <cstdint>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <vector>
@@ -29,12 +32,26 @@ private:
 
 float ParseFloatInRange(const std::string& option, const std::string& text, float minimum, float maximum) {
     const float value = std::stof(text);
-    if (value < minimum || value > maximum) {
+    // Written so that NaN, which compares false with everything, is rejected too.
+    if (!(value >= minimum && value <= maximum)) {
         std::ostringstream message;
         message << option << " must be between " << minimum << " and " << maximum;
         throw std::invalid_argument(message.str());
     }
     return value;
+}
+
+// std::stoul accepts "-1" and wraps it around, so a leading minus sign is rejected up front.
+uint32_t ParseUnsigned(const std::string& option, const std::string& text) {
+    const size_t firstCharacter = text.find_first_not_of(" \t");
+    if (firstCharacter != std::string::npos && text[firstCharacter] == '-') {
+        throw std::invalid_argument(option + " must not be negative");
+    }
+    const unsigned long value = std::stoul(text);
+    if (value > std::numeric_limits<uint32_t>::max()) {
+        throw std::invalid_argument(option + " is too large");
+    }
+    return static_cast<uint32_t>(value);
 }
 
 int ParsePositiveInt(const std::string& option, const std::string& text) {
@@ -52,6 +69,9 @@ CameraPlacement ParseCameraPlacement(const std::string& text) {
     std::string part;
     while (std::getline(stream, part, ',')) {
         numbers.push_back(std::stof(part));
+        if (!std::isfinite(numbers.back())) {
+            throw std::invalid_argument("--camera values must be finite numbers");
+        }
     }
     if (numbers.size() != 5) {
         throw std::invalid_argument("--camera expects x,y,z,yawDeg,pitchDeg");
@@ -78,9 +98,9 @@ Options ParseCommandLine(int argc, char** argv) {
     while (arguments.HasMore()) {
         const std::string option = arguments.Next();
         if (option == "--seed") {
-            options.seed = static_cast<uint32_t>(std::stoul(arguments.ValueFor(option)));
+            options.seed = ParseUnsigned(option, arguments.ValueFor(option));
         } else if (option == "--npcs") {
-            options.npcCount = static_cast<uint32_t>(std::stoul(arguments.ValueFor(option)));
+            options.npcCount = ParseUnsigned(option, arguments.ValueFor(option));
         } else if (option == "--novsync") {
             options.vsync = false;
         } else if (option == "--benchmark") {
