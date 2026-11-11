@@ -225,7 +225,7 @@ void PrintShotCameras(const BenchmarkCameraPath& path) {
 }
 
 // Flies the fixed camera path, measures every frame and prints the report. Returns a nonzero
-// exit code when a target frame rate is given and missed.
+// exit code when a target frame rate is given and missed, or when the run stops early.
 int RunBenchmark(Engine& engine, const Options& options) {
     const BenchmarkCameraPath path(engine.city, engine.crowd);
     std::vector<std::string> shotNames;

@@ -155,6 +155,7 @@ void PrintUsage() {
         "  --gpu-budget MS          GPU frame time the dynamic resolution aims to stay under (default 14)\n"
         "Measuring:\n"
         "  --benchmark FRAMES       fly a fixed camera path for FRAMES frames without vsync, then report\n"
+        "                           (exit code 2 if the window closes before all frames are measured)\n"
         "  --target-fps N           with --benchmark: fail (exit code 2) when p99 frame time exceeds 1000/N ms\n"
         "  --screenshot FILE.png    render a few frames without vsync, save the last one, then quit\n"
         "  --screenshot-frames N    frames to render before the screenshot (default 60); screenshots use\n"
