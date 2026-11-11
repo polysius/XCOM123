@@ -24,12 +24,6 @@ These rules apply to this folder and every folder inside it.
 - Example: `gnhf --agent claude --max-run-time 2h --worktree "<objective>"`.
 - Always set a bound: `--max-iterations`, `--max-tokens`, `--max-run-time` or `--stop-when`.
 
-### Context management: `billion-context`
-- billion-context (`bili`) must be active in every session.
-- Model traffic goes through its proxy at `127.0.0.1:18787`, and its SessionStart hook starts the proxy when it is not running.
-- Use its tools (`compress`, `decompress`, `search_context`, `acp_status`) to manage context during long work. Do not turn it off or route around the proxy unless the user says so.
-- If its tools are missing or the proxy is down, tell the user and suggest running `bili start`.
-
 ### Knowledge graph: `graphify`
 - When the user types `/graphify`, use the graphify skill (`~/.claude/skills/graphify/SKILL.md`) before doing anything else.
 
