@@ -64,15 +64,17 @@ StreetLine FindCentralStreet(const CityLayout& city, bool alongX) {
 
 // The square with the most people per square metre, counted with a top-down box over each one.
 // Returns nullptr when the city has no squares.
-const Rect* FindBusiestPlaza(const CityLayout& city, const Crowd& crowd) {
-    const Rect* busiest = nullptr;
+const OrientedRect* FindBusiestPlaza(const CityLayout& city, const Crowd& crowd) {
+    const OrientedRect* busiest = nullptr;
     float bestDensity = -1.0f;
     std::vector<NpcInstance> inside;
-    for (const Rect& plaza : city.plazas) {
+    for (const OrientedRect& plaza : city.plazas) {
         const glm::vec2 centre = plaza.Center();
         const glm::vec2 halfSize = plaza.Size() * 0.5f;
-        // Looking straight down with +Z as "up" on screen, so the box's sides line up with the square's.
-        const glm::mat4 view = glm::lookAt(OnGround(centre, 500.0f), OnGround(centre, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+        // Looking straight down with the square's own +Z as "up" on screen, so the box's sides line up
+        // with the square's. That direction is +Z itself unless the square is turned.
+        const glm::vec3 up(std::sin(plaza.yaw), 0.0f, std::cos(plaza.yaw));
+        const glm::mat4 view = glm::lookAt(OnGround(centre, 500.0f), OnGround(centre, 0.0f), up);
         const glm::mat4 projection = glm::orthoRH_ZO(-halfSize.x, halfSize.x, -halfSize.y, halfSize.y, 1.0f, 1000.0f);
         crowd.CollectVisible(Frustum(projection * view), inside);
 
@@ -124,13 +126,13 @@ BenchmarkCameraPath::Shot StreetWalk(const std::string& name, float share, const
                       {OnGround(to, eyeHeight), OnGround(to + lookAhead, eyeHeight)}}};
 }
 
-BenchmarkCameraPath::Shot PlazaWalk(const Rect& plaza, float eyeHeight) {
+BenchmarkCameraPath::Shot PlazaWalk(const OrientedRect& plaza, float eyeHeight) {
     // A slow walk from one edge of the square towards its middle, looking across it.
     const glm::vec2 centre = plaza.Center();
     const glm::vec2 diagonal = plaza.Size() * 0.5f;
-    const glm::vec2 from = centre - diagonal * 0.9f;
-    const glm::vec2 to = centre - diagonal * 0.1f;
-    const glm::vec2 farSide = centre + diagonal * 2.0f;
+    const glm::vec2 from = plaza.FromFrame(centre - diagonal * 0.9f);
+    const glm::vec2 to = plaza.FromFrame(centre - diagonal * 0.1f);
+    const glm::vec2 farSide = plaza.FromFrame(centre + diagonal * 2.0f);
     return {.name = "busiest square",
             .share = 0.25f,
             .poses = {{OnGround(from, eyeHeight), OnGround(farSide, eyeHeight)},
@@ -152,8 +154,8 @@ BenchmarkCameraPath::BenchmarkCameraPath(const CityLayout& city, const Crowd& cr
     const float eyeHeight = city.walkHeight + kEyeHeight;
 
     // Without any square, the "square" shots use the city centre instead.
-    const Rect* busiest = FindBusiestPlaza(city, crowd);
-    const Rect plaza = busiest != nullptr ? *busiest : Rect{centre - glm::vec2(20.0f), centre + glm::vec2(20.0f)};
+    const OrientedRect* busiest = FindBusiestPlaza(city, crowd);
+    const OrientedRect plaza = busiest != nullptr ? *busiest : OrientedRect(Rect{centre - glm::vec2(20.0f), centre + glm::vec2(20.0f)});
 
     shots.push_back(AerialOrbit(centre, extent));
     shots.push_back(LowCrossing(city, extent));

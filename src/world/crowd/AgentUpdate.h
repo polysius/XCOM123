@@ -36,6 +36,7 @@ float NextLookAroundDelay(uint32_t& random);
 
 // A random spot in `plaza` where a person can stand: clear of obstacles, roads and reserved
 // space. Returns false if none was found in `tries` attempts.
-bool PickPlazaSpot(const Walkways& walkways, const Rect& plaza, uint32_t tries, uint32_t& random, glm::vec2& spot);
+bool PickPlazaSpot(const Walkways& walkways, const OrientedRect& plaza, uint32_t tries, uint32_t& random,
+                   glm::vec2& spot);
 
 }  // namespace crowd

@@ -70,30 +70,70 @@ constexpr float kFountainKeepOut = 5.5f;
 // How high above the pavement the space must be free for people to walk.
 constexpr float kWalkingClearance = 2.0f;
 
-Rect FootprintOf(const BoxInstance& box) {
-    return {{box.center.x - box.halfSize.x, box.center.z - box.halfSize.z},
-            {box.center.x + box.halfSize.x, box.center.z + box.halfSize.z}};
+// The ground footprint of a box, turned by its yaw.
+OrientedRect FootprintOf(const BoxInstance& box) {
+    return {Rect{{box.center.x - box.halfSize.x, box.center.z - box.halfSize.z},
+                 {box.center.x + box.halfSize.x, box.center.z + box.halfSize.z}},
+            box.yaw};
 }
 
 float BottomOf(const BoxInstance& box) { return box.center.y - box.halfSize.y; }
 float TopOf(const BoxInstance& box) { return box.center.y + box.halfSize.y; }
 
 // True when the two rectangles share more than a sliver of area.
-bool OverlapsBeyondTolerance(const Rect& a, const Rect& b) {
-    return a.min.x < b.max.x - kTolerance && b.min.x < a.max.x - kTolerance && a.min.y < b.max.y - kTolerance &&
-           b.min.y < a.max.y - kTolerance;
+bool OverlapsBeyondTolerance(const OrientedRect& a, const OrientedRect& b) {
+    if (a.yaw == 0.0f && b.yaw == 0.0f) {
+        return a.area.min.x < b.area.max.x - kTolerance && b.area.min.x < a.area.max.x - kTolerance &&
+               a.area.min.y < b.area.max.y - kTolerance && b.area.min.y < a.area.max.y - kTolerance;
+    }
+    // With turned rectangles each one is shrunk by half the tolerance before the overlap test.
+    return a.Expanded(-kTolerance * 0.5f).Overlaps(b.Expanded(-kTolerance * 0.5f));
 }
 
-bool ContainsWithTolerance(const Rect& rect, glm::vec2 point) {
-    return point.x >= rect.min.x - kTolerance && point.x <= rect.max.x + kTolerance && point.y >= rect.min.y - kTolerance &&
-           point.y <= rect.max.y + kTolerance;
+bool ContainsWithTolerance(const OrientedRect& rect, glm::vec2 point) {
+    return rect.Contains(point, kTolerance);
 }
 
-// The rectangle covered by a street segment widened by `halfWidth` on both sides.
-Rect StreetBand(const StreetGraph& streets, const StreetGraph::Edge& edge, float halfWidth) {
-    const glm::vec2 a = streets.nodes[edge.from];
-    const glm::vec2 b = streets.nodes[edge.to];
-    return Rect{glm::min(a, b), glm::max(a, b)}.Expanded(halfWidth);
+// The strip beside a street segment a to b: from `lateralLow` to `lateralHigh` metres to the side
+// of its centre line (positive is to the left of the direction a to b), and `extend` metres past
+// both ends. The strip is turned to follow the segment, whichever way it runs.
+OrientedRect SegmentStrip(glm::vec2 a, glm::vec2 b, float lateralLow, float lateralHigh, float extend) {
+    const float length = glm::length(b - a);
+    const glm::vec2 direction = (b - a) / length;
+    const glm::vec2 side{-direction.y, direction.x};
+    if (a.x == b.x || a.y == b.y) {
+        // An axis-aligned segment gives an ordinary rectangle, the bounds of the strip's corners.
+        const glm::vec2 corners[] = {a - direction * extend + side * lateralLow, a - direction * extend + side * lateralHigh,
+                                     b + direction * extend + side * lateralLow, b + direction * extend + side * lateralHigh};
+        glm::vec2 low = corners[0];
+        glm::vec2 high = corners[0];
+        for (glm::vec2 corner : corners) {
+            low = glm::min(low, corner);
+            high = glm::max(high, corner);
+        }
+        return Rect{low, high};
+    }
+    // Otherwise the strip's own frame has +X along the segment, which is a yaw of atan2(-y, x).
+    const glm::vec2 center = (a + b) * 0.5f + side * ((lateralLow + lateralHigh) * 0.5f);
+    const glm::vec2 half(length * 0.5f + extend, (lateralHigh - lateralLow) * 0.5f);
+    return {Rect{center - half, center + half}, std::atan2(-direction.y, direction.x)};
+}
+
+// The strip covered by a street segment widened by `halfWidth` on both sides.
+OrientedRect StreetBand(const StreetGraph& streets, const StreetGraph::Edge& edge, float halfWidth) {
+    return SegmentStrip(streets.nodes[edge.from], streets.nodes[edge.to], -halfWidth, halfWidth, halfWidth);
+}
+
+// The smallest axis-aligned rectangle, in the frame of `frame`, around `shape`.
+Rect BoundsInFrameOf(const OrientedRect& frame, const OrientedRect& shape) {
+    glm::vec2 low(INFINITY);
+    glm::vec2 high(-INFINITY);
+    for (glm::vec2 corner : shape.Corners()) {
+        const glm::vec2 local = frame.ToFrame(corner);
+        low = glm::min(low, local);
+        high = glm::max(high, local);
+    }
+    return {low, high};
 }
 
 bool IsBuildingPart(CityPart part) { return part == CityPart::Building || part == CityPart::Landmark; }
@@ -107,7 +147,8 @@ public:
         cells.resize(static_cast<size_t>(columns) * static_cast<size_t>(rows));
     }
 
-    void Insert(uint32_t index, const Rect& footprint) {
+    void Insert(uint32_t index, const OrientedRect& turnedFootprint) {
+        const Rect footprint = turnedFootprint.Bounds();
         const int x0 = Column(footprint.min.x);
         const int x1 = Column(footprint.max.x);
         const int z0 = Row(footprint.min.y);
@@ -156,7 +197,7 @@ CityIndex BuildIndex(const CityLayout& city) {
     CityIndex index{BoxGrid(area, 8.0f), BoxGrid(area, 8.0f)};
     for (uint32_t i = 0; i < city.boxes.size(); ++i) {
         const BoxInstance& box = city.boxes[i];
-        const Rect footprint = FootprintOf(box);
+        const OrientedRect footprint = FootprintOf(box);
         if (std::abs(TopOf(box) - city.walkHeight) < kTolerance) {
             index.pavements.Insert(i, footprint);
         }
@@ -214,7 +255,6 @@ void CheckStreetGraph(const CityLayout& city) {
         const float length = glm::length(b - a);
         Expect(length > 0.5f, "graph", Format("edge %.0f is only %.3f m long", e, length));
         Expect(std::abs(length - edge.length) < kTolerance, "graph", Format("edge %.0f stores a wrong length", e));
-        Expect(a.x == b.x || a.y == b.y, "graph", Format("edge %.0f is not axis-aligned", e));
         for (uint32_t node : {edge.from, edge.to}) {
             const auto& list = streets.edgesAtNode[node];
             Expect(std::find(list.begin(), list.end(), e) != list.end(), "graph",
@@ -276,10 +316,10 @@ void CheckPavements(const CityLayout& city, const CityIndex& index) {
 
         // The whole walking band on each side must be free of obstacles.
         for (float sign : {-1.0f, 1.0f}) {
-            const glm::vec2 inner = side * (sign * offsets[0]);
-            const glm::vec2 outer = side * (sign * offsets[2]);
-            const Rect band = Rect{glm::min(a + inner, b + outer), glm::max(a + inner, b + outer)};
-            index.obstacles.Visit(band, [&](uint32_t i) {
+            const float inner = sign * offsets[0];
+            const float outer = sign * offsets[2];
+            const OrientedRect band = SegmentStrip(a, b, std::min(inner, outer), std::max(inner, outer), 0.0f);
+            index.obstacles.Visit(band.Bounds(), [&](uint32_t i) {
                 const BoxInstance& box = city.boxes[i];
                 if (OverlapsBeyondTolerance(FootprintOf(box), band)) {
                     Fail("pavement", Format("a box at (%.1f, %.1f) blocks the pavement of edge %.0f", box.center.x,
@@ -296,7 +336,7 @@ void CheckPavements(const CityLayout& city, const CityIndex& index) {
 void CheckBuildingsKeepClear(const CityLayout& city) {
     const float streetHalf = city.roadWidth * 0.5f + city.sidewalkWidth;
     BoxGrid streetBands(city.bounds.Expanded(50.0f), 16.0f);
-    std::vector<Rect> bands;
+    std::vector<OrientedRect> bands;
     for (const StreetGraph::Edge& edge : city.streets.edges) {
         bands.push_back(StreetBand(city.streets, edge, streetHalf));
         streetBands.Insert(static_cast<uint32_t>(bands.size() - 1), bands.back());
@@ -306,21 +346,21 @@ void CheckBuildingsKeepClear(const CityLayout& city) {
             continue;
         }
         const BoxInstance& box = city.boxes[i];
-        const Rect footprint = FootprintOf(box);
+        const OrientedRect footprint = FootprintOf(box);
         const bool overhead = BottomOf(box) >= kOverhangClearance;
         if (!overhead) {
-            streetBands.Visit(footprint, [&](uint32_t band) {
+            streetBands.Visit(footprint.Bounds(), [&](uint32_t band) {
                 if (OverlapsBeyondTolerance(footprint, bands[band])) {
                     Fail("clear of streets", Format("building box at (%.1f, %.1f) stands in a street", box.center.x, box.center.z));
                 }
             });
-            for (const Rect& plaza : city.plazas) {
+            for (const OrientedRect& plaza : city.plazas) {
                 if (OverlapsBeyondTolerance(footprint, plaza)) {
                     Fail("clear of squares", Format("building box at (%.1f, %.1f) stands in a square", box.center.x, box.center.z));
                 }
             }
         }
-        for (const Rect& water : city.water) {
+        for (const OrientedRect& water : city.water) {
             if (OverlapsBeyondTolerance(footprint, water)) {
                 Fail("clear of water", Format("building box at (%.1f, %.1f) stands in the water", box.center.x, box.center.z));
             }
@@ -331,17 +371,26 @@ void CheckBuildingsKeepClear(const CityLayout& city) {
 // People wander anywhere in a square except close to its middle, so nothing may stand in a
 // square outside that keep-out area.
 void CheckSquares(const CityLayout& city, const CityIndex& index) {
-    for (const Rect& plaza : city.plazas) {
+    for (const OrientedRect& plaza : city.plazas) {
         Expect(plaza.Size().x > 1.0f && plaza.Size().y > 1.0f, "squares", "a square is too small to walk in");
-        Expect(city.bounds.Contains(plaza.min) && city.bounds.Contains(plaza.max), "squares", "a square is out of bounds");
+        bool cornersInBounds = true;
+        for (glm::vec2 corner : plaza.Corners()) {
+            cornersInBounds = cornersInBounds && city.bounds.Contains(corner);
+        }
+        Expect(cornersInBounds, "squares", "a square is out of bounds");
+        // The keep-out area and the part of a box inside the square are worked out in the square's
+        // own frame. For a box turned against the square its bounds there are slightly generous,
+        // which can only make this check stricter.
         const glm::vec2 center = plaza.Center();
         const Rect keepOut{center - glm::vec2(kFountainKeepOut), center + glm::vec2(kFountainKeepOut)};
-        index.obstacles.Visit(plaza, [&](uint32_t i) {
-            const Rect footprint = FootprintOf(city.boxes[i]);
+        index.obstacles.Visit(plaza.Bounds(), [&](uint32_t i) {
+            const OrientedRect footprint = FootprintOf(city.boxes[i]);
             if (!OverlapsBeyondTolerance(footprint, plaza)) {
                 return;
             }
-            const Rect insideSquare{glm::max(footprint.min, plaza.min), glm::min(footprint.max, plaza.max)};
+            const Rect footprintInFrame = BoundsInFrameOf(plaza, footprint);
+            const Rect insideSquare{glm::max(footprintInFrame.min, plaza.area.min),
+                                    glm::min(footprintInFrame.max, plaza.area.max)};
             const bool withinKeepOut = insideSquare.min.x >= keepOut.min.x - kTolerance &&
                                        insideSquare.max.x <= keepOut.max.x + kTolerance &&
                                        insideSquare.min.y >= keepOut.min.y - kTolerance &&
@@ -358,6 +407,13 @@ void CheckSquares(const CityLayout& city, const CityIndex& index) {
 void CheckStreetLights(const CityLayout& city, const CityIndex& index) {
     Expect(!city.streetLights.empty(), "lamps", "the city has no street lamps");
     const float roadHalf = city.roadWidth * 0.5f;
+    // Each street's road and pavement strips, built once instead of once per lamp.
+    std::vector<OrientedRect> pavements;
+    std::vector<OrientedRect> roads;
+    for (const StreetGraph::Edge& edge : city.streets.edges) {
+        pavements.push_back(StreetBand(city.streets, edge, roadHalf + city.sidewalkWidth));
+        roads.push_back(StreetBand(city.streets, edge, roadHalf));
+    }
     for (const glm::vec3& light : city.streetLights) {
         const glm::vec2 position{light.x, light.z};
         Expect(city.bounds.Contains(position), "lamps", Format("lamp at (%.1f, %.1f) is out of bounds", light.x, light.z));
@@ -365,9 +421,9 @@ void CheckStreetLights(const CityLayout& city, const CityIndex& index) {
         Expect(light.y > 3.0f && light.y < 8.0f, "lamps", Format("lamp at (%.1f, %.1f) hangs at %.1f m", light.x, light.z, light.y));
         // The lamp must stand on the pavement of some street, not in its road.
         bool besideStreet = false;
-        for (const StreetGraph::Edge& edge : city.streets.edges) {
-            const Rect pavement = StreetBand(city.streets, edge, roadHalf + city.sidewalkWidth);
-            const Rect road = StreetBand(city.streets, edge, roadHalf);
+        for (size_t edge = 0; edge < roads.size(); ++edge) {
+            const OrientedRect& pavement = pavements[edge];
+            const OrientedRect& road = roads[edge];
             if (pavement.Contains(position) && !road.Contains(position)) {
                 besideStreet = true;
             }
@@ -393,25 +449,30 @@ void CheckWaterAndBridges(const CityLayout& city) {
         const StreetGraph::Edge& edge = city.streets.edges[bridge.edge];
         const glm::vec2 a = city.streets.nodes[edge.from];
         const glm::vec2 b = city.streets.nodes[edge.to];
-        const bool alongX = a.y == b.y;
+        // Everything is measured in the deck's own frame, where the deck is axis-aligned.
+        const glm::vec2 frameA = bridge.deck.ToFrame(a);
+        const glm::vec2 frameB = bridge.deck.ToFrame(b);
+        const bool alongX = std::abs(frameA.y - frameB.y) < kTolerance;
         bool spansWater = false;
-        for (const Rect& water : city.water) {
+        for (const OrientedRect& water : city.water) {
             if (!OverlapsBeyondTolerance(bridge.deck, water)) {
                 continue;
             }
             // The deck must cover the water from bank to bank, and the street must start and
             // end on land beyond it.
-            const float deckLow = alongX ? bridge.deck.min.x : bridge.deck.min.y;
-            const float deckHigh = alongX ? bridge.deck.max.x : bridge.deck.max.y;
-            const float waterLow = alongX ? water.min.x : water.min.y;
-            const float waterHigh = alongX ? water.max.x : water.max.y;
-            const float streetLow = alongX ? std::min(a.x, b.x) : std::min(a.y, b.y);
-            const float streetHigh = alongX ? std::max(a.x, b.x) : std::max(a.y, b.y);
+            const Rect deck = bridge.deck.area;
+            const Rect waterInFrame = BoundsInFrameOf(bridge.deck, water);
+            const float deckLow = alongX ? deck.min.x : deck.min.y;
+            const float deckHigh = alongX ? deck.max.x : deck.max.y;
+            const float waterLow = alongX ? waterInFrame.min.x : waterInFrame.min.y;
+            const float waterHigh = alongX ? waterInFrame.max.x : waterInFrame.max.y;
+            const float streetLow = alongX ? std::min(frameA.x, frameB.x) : std::min(frameA.y, frameB.y);
+            const float streetHigh = alongX ? std::max(frameA.x, frameB.x) : std::max(frameA.y, frameB.y);
             spansWater = deckLow <= waterLow + kTolerance && deckHigh >= waterHigh - kTolerance && streetLow < waterLow &&
                          streetHigh > waterHigh;
         }
         Expect(spansWater, "bridges", Format("the bridge on edge %.0f does not join both banks", bridge.edge));
-        for (const Rect& water : city.water) {
+        for (const OrientedRect& water : city.water) {
             Expect(!water.Contains(a) && !water.Contains(b), "bridges", Format("edge %.0f ends in the water", bridge.edge));
         }
     }
@@ -420,8 +481,8 @@ void CheckWaterAndBridges(const CityLayout& city) {
         if (isBridge[e]) {
             continue;
         }
-        const Rect band = StreetBand(city.streets, city.streets.edges[e], streetHalf);
-        for (const Rect& water : city.water) {
+        const OrientedRect band = StreetBand(city.streets, city.streets.edges[e], streetHalf);
+        for (const OrientedRect& water : city.water) {
             Expect(!OverlapsBeyondTolerance(band, water), "water", Format("street edge %.0f runs into the water", e));
         }
     }
@@ -501,6 +562,11 @@ struct MapView {
 
     int X(float x) const { return static_cast<int>(std::floor((x - window.min.x) * pixelsPerMetre)); }
     int Y(float z) const { return static_cast<int>(std::floor((window.max.y - z) * pixelsPerMetre)); }  // north is up
+    // The world point at the middle of pixel (x, y).
+    glm::vec2 WorldAt(int x, int y) const {
+        return {window.min.x + (static_cast<float>(x) + 0.5f) / pixelsPerMetre,
+                window.max.y - (static_cast<float>(y) + 0.5f) / pixelsPerMetre};
+    }
 };
 
 // Draws box footprints from the lowest top to the highest, coloured by each box's albedo and
@@ -516,9 +582,27 @@ void DrawBoxes(RgbImage& image, const MapView& view, const CityLayout& city) {
         const BoxInstance& box = city.boxes[i];
         const float heightShade = 0.75f + 0.5f * std::clamp(TopOf(box) / 40.0f, 0.0f, 1.0f);
         const glm::vec3 color = box.color * heightShade;
-        const Rect footprint = FootprintOf(box);
-        image.FillRect(view.X(footprint.min.x), view.Y(footprint.max.y), view.X(footprint.max.x) - 1,
-                       view.Y(footprint.min.y) - 1, ToSrgbByte(color.r), ToSrgbByte(color.g), ToSrgbByte(color.b));
+        const OrientedRect footprint = FootprintOf(box);
+        const Rect bounds = footprint.Bounds();
+        const int x0 = view.X(bounds.min.x);
+        const int y0 = view.Y(bounds.max.y);
+        const int x1 = view.X(bounds.max.x) - 1;
+        const int y1 = view.Y(bounds.min.y) - 1;
+        const uint8_t red = ToSrgbByte(color.r);
+        const uint8_t green = ToSrgbByte(color.g);
+        const uint8_t blue = ToSrgbByte(color.b);
+        if (footprint.yaw == 0.0f) {
+            image.FillRect(x0, y0, x1, y1, red, green, blue);
+            continue;
+        }
+        // A turned box covers the pixels whose centres lie inside it.
+        for (int y = y0; y <= y1; ++y) {
+            for (int x = x0; x <= x1; ++x) {
+                if (footprint.Contains(view.WorldAt(x, y))) {
+                    image.Set(x, y, red, green, blue);
+                }
+            }
+        }
     }
 }
 
@@ -534,15 +618,14 @@ void DrawStreetGraph(RgbImage& image, const MapView& view, const CityLayout& cit
         const glm::vec2 b = city.streets.nodes[edge.to];
         image.DrawLine(view.X(a.x), view.Y(a.y), view.X(b.x), view.Y(b.y), 255, 160, 0);
     }
-    for (const Rect& plaza : city.plazas) {
-        const int x0 = view.X(plaza.min.x);
-        const int x1 = view.X(plaza.max.x);
-        const int y0 = view.Y(plaza.max.y);
-        const int y1 = view.Y(plaza.min.y);
-        image.DrawLine(x0, y0, x1, y0, 40, 90, 230);
-        image.DrawLine(x1, y0, x1, y1, 40, 90, 230);
-        image.DrawLine(x1, y1, x0, y1, 40, 90, 230);
-        image.DrawLine(x0, y1, x0, y0, 40, 90, 230);
+    for (const OrientedRect& plaza : city.plazas) {
+        // The outline follows the square's corners, so a turned square is drawn turned.
+        const std::array<glm::vec2, 4> corners = plaza.Corners();
+        for (size_t i = 0; i < corners.size(); ++i) {
+            const glm::vec2 from = corners[i];
+            const glm::vec2 to = corners[(i + 1) % corners.size()];
+            image.DrawLine(view.X(from.x), view.Y(from.y), view.X(to.x), view.Y(to.y), 40, 90, 230);
+        }
     }
     for (const glm::vec3& light : city.streetLights) {
         image.FillRect(view.X(light.x) - 1, view.Y(light.z) - 1, view.X(light.x) + 1, view.Y(light.z) + 1, 255, 230, 60);
@@ -633,6 +716,36 @@ void TestSeed(uint32_t seed, bool checkDeterminism) {
 
 }  // namespace
 
+// The checks above rely on the helpers that measure strips, footprints and overlaps. Checking the
+// helpers on shapes whose answer is known keeps a mistake in them from hiding a real problem.
+void CheckHelpers() {
+    // A street running diagonally, from the origin towards (+X, -Z).
+    const glm::vec2 a{0.0f, 0.0f};
+    const glm::vec2 b{30.0f, -30.0f};
+    const OrientedRect band = StreetBand(StreetGraph{{a, b}, {{0, 1, glm::length(b - a)}}, {{0}, {0}}}, {0, 1, glm::length(b - a)}, 5.0f);
+    Expect(band.Contains({15.0f, -15.0f}), "helpers", "a diagonal street band must contain its centre line");
+    Expect(band.Contains({18.0f, -12.0f}), "helpers", "a diagonal street band must contain points within its width");
+    Expect(!band.Contains({15.0f, 0.0f}), "helpers", "a diagonal street band must not contain a point 10 m off its centre line");
+    Expect(!band.Contains({-9.0f, 9.0f}), "helpers", "a diagonal street band must stop past its ends");
+
+    // The same strip on one side only.
+    const OrientedRect side = SegmentStrip(a, b, 2.0f, 4.0f, 0.0f);
+    const glm::vec2 left = glm::normalize(glm::vec2(1.0f, 1.0f));  // to the left of the direction a to b
+    Expect(side.Contains(glm::vec2(15.0f, -15.0f) + left * 3.0f), "helpers", "a one sided strip must contain its own side");
+    Expect(!side.Contains(glm::vec2(15.0f, -15.0f) - left * 3.0f), "helpers", "a one sided strip must not contain the other side");
+
+    // Overlap between turned boxes looks at the turn, not at the bounding boxes.
+    BoxInstance first{};
+    first.center = {0.0f, 1.0f, 0.0f};
+    first.halfSize = {10.0f, 1.0f, 1.0f};
+    first.yaw = 0.7853982f;
+    BoxInstance second = first;
+    second.center = {2.2f, 1.0f, 2.2f};  // 3.1 m to the side of the first: a gap of 1.1 m
+    Expect(!OverlapsBeyondTolerance(FootprintOf(first), FootprintOf(second)), "helpers", "parallel diagonal boxes with a gap must not overlap");
+    second.center = {1.1f, 1.0f, 1.1f};  // 1.6 m to the side: they overlap
+    Expect(OverlapsBeyondTolerance(FootprintOf(first), FootprintOf(second)), "helpers", "overlapping diagonal boxes must overlap");
+}
+
 int main(int argc, char** argv) {
     const Options options = ParseOptions(argc, argv);
     if (!options.mapPath.empty()) {
@@ -643,6 +756,7 @@ int main(int argc, char** argv) {
         return WriteMaps(city, options.mapPath, window, options.pixelsPerMetre) ? 0 : 1;
     }
 
+    CheckHelpers();
     const uint32_t seeds[] = {CitySettings{}.seed, 1u, 2u, 7u, 42u, 2024u};
     for (size_t i = 0; i < std::size(seeds); ++i) {
         TestSeed(seeds[i], i == 0);

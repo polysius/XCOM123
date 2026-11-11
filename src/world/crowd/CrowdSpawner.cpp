@@ -99,7 +99,7 @@ void Spawner::Run() {
 // Splits the square people among the squares by open area, never above the comfortable
 // density.
 std::vector<uint32_t> Spawner::SharePeopleAmongPlazas() {
-    const std::vector<Rect>& plazas = walkways.Plazas();
+    const std::vector<OrientedRect>& plazas = walkways.Plazas();
     std::vector<float> capacity(plazas.size());
     float totalCapacity = 0.0f;
     for (size_t plaza = 0; plaza < plazas.size(); ++plaza) {
@@ -136,12 +136,17 @@ uint32_t Spawner::SpawnPlazaPeople(uint32_t plaza, uint32_t count) {
 }
 
 bool Spawner::SpawnChatCircle(uint32_t plaza, uint32_t memberCount) {
-    const Rect& area = walkways.Plazas()[plaza];
+    const OrientedRect& square = walkways.Plazas()[plaza];
+    const Rect& area = square.area;  // the square in its own frame
     const float radius = CircleRadius(memberCount);
     const float streetClearance = walkways.OuterEdge() + radius + kCircleStreetDistance;
     for (uint32_t attempt = 0; attempt < kPlacementTries; ++attempt) {
-        const glm::vec2 center(RandomRange(random, area.min.x + radius, area.max.x - radius),
-                               RandomRange(random, area.min.y + radius, area.max.y - radius));
+        // The second coordinate is drawn first. The city has always been spawned in this order (it was
+        // the order MSVC evaluated the arguments of a vec2 constructor in), and the people's positions
+        // depend on it. Written as two statements the order no longer depends on the compiler.
+        const float frameY = RandomRange(random, area.min.y + radius, area.max.y - radius);
+        const float frameX = RandomRange(random, area.min.x + radius, area.max.x - radius);
+        const glm::vec2 center = square.FromFrame({frameX, frameY});
         if (!walkways.IsDiscFree(center, radius + kCircleRoom) ||
             walkways.DistanceToNearestStreet(center) < streetClearance) {
             continue;

@@ -204,7 +204,7 @@ void AdvanceRoute(const StepContext& context, CrowdState& state, CrowdUnit& unit
 // Square people -----------------------------------------------------------------------------
 
 void StartStroll(const StepContext& context, AgentBehaviour& behaviour, glm::vec2 position) {
-    const Rect& plaza = context.walkways.Plazas()[behaviour.plaza];
+    const OrientedRect& plaza = context.walkways.Plazas()[behaviour.plaza];
     // Prefer a spot with a clear straight path, but take any spot rather than none.
     for (uint32_t attempt = 0; attempt < kGoalTries; ++attempt) {
         glm::vec2 spot;
@@ -329,10 +329,12 @@ glm::vec2 AvoidanceSteering(const StepContext& context, CrowdState& state, const
 
 // Keeps square people inside their square. Like the route constraint it never pushes
 // anyone who is already outside further out.
-glm::vec2 KeepInPlaza(const Rect& plaza, glm::vec2 previous, glm::vec2 next) {
-    const glm::vec2 low = glm::min(plaza.min + kBodyRadius, previous);
-    const glm::vec2 high = glm::max(plaza.max - kBodyRadius, previous);
-    return glm::clamp(next, low, high);
+glm::vec2 KeepInPlaza(const OrientedRect& plaza, glm::vec2 previous, glm::vec2 next) {
+    // Clamp in the square's own frame, where its sides are axis-aligned.
+    const glm::vec2 previousInFrame = plaza.ToFrame(previous);
+    const glm::vec2 low = glm::min(plaza.area.min + kBodyRadius, previousInFrame);
+    const glm::vec2 high = glm::max(plaza.area.max - kBodyRadius, previousInFrame);
+    return plaza.FromFrame(glm::clamp(plaza.ToFrame(next), low, high));
 }
 
 // The step from `previous` towards `next` that keeps the person on its walkway and clear of
@@ -513,16 +515,20 @@ float NextLookAroundDelay(uint32_t& random) {
     return RandomRange(random, 15.0f, 120.0f);
 }
 
-bool PickPlazaSpot(const Walkways& walkways, const Rect& plaza, uint32_t tries, uint32_t& random, glm::vec2& spot) {
-    const glm::vec2 low = plaza.min + kBodyRadius;
-    const glm::vec2 high = plaza.max - kBodyRadius;
+bool PickPlazaSpot(const Walkways& walkways, const OrientedRect& plaza, uint32_t tries, uint32_t& random,
+                   glm::vec2& spot) {
+    const glm::vec2 low = plaza.area.min + kBodyRadius;
+    const glm::vec2 high = plaza.area.max - kBodyRadius;
     if (low.x >= high.x || low.y >= high.y) {
         return false;
     }
     // Squares may touch the pavements but people must never wait on a road.
     const float roadClearance = walkways.RoadHalfWidth() + kBodyRadius + 0.3f;
     for (uint32_t attempt = 0; attempt < tries; ++attempt) {
-        const glm::vec2 candidate(RandomRange(random, low.x, high.x), RandomRange(random, low.y, high.y));
+        // The second coordinate is drawn first, as it always was (see SpawnChatCircle).
+        const float frameY = RandomRange(random, low.y, high.y);
+        const float frameX = RandomRange(random, low.x, high.x);
+        const glm::vec2 candidate = plaza.FromFrame({frameX, frameY});
         if (walkways.CanStandAtUnreserved(candidate) && walkways.DistanceToNearestStreet(candidate) >= roadClearance) {
             spot = candidate;
             return true;

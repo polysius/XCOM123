@@ -27,7 +27,7 @@ public:
     void Build(const CityLayout& city);
 
     const StreetGraph& Streets() const { return streets; }
-    const std::vector<Rect>& Plazas() const { return plazas; }
+    const std::vector<OrientedRect>& Plazas() const { return plazas; }
 
     // Distances from a street's centre line: the road ends and the pavement starts at
     // RoadHalfWidth, the middle of the pavement is LaneCenter, and it ends at OuterEdge.
@@ -69,7 +69,7 @@ public:
     // or reserved space.
     bool IsPathFree(glm::vec2 a, glm::vec2 b) const;
     // How much of a square's area people can stand on, in square metres.
-    float FreeArea(const Rect& area) const;
+    float FreeArea(const OrientedRect& area) const;
 
     // Queries over the whole network (slower; for spawning and checking) -------------------
 
@@ -120,7 +120,7 @@ private:
     static void ForEachNearbySegment(const SegmentBuckets& buckets, glm::vec2 point, Visit&& visit);
 
     StreetGraph streets;
-    std::vector<Rect> plazas;
+    std::vector<OrientedRect> plazas;
     float roadHalfWidth = 0.0f;
     float laneCenter = 0.0f;
     float outerEdge = 0.0f;
