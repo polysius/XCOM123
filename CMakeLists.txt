@@ -128,3 +128,21 @@ target_compile_definitions(crowd_bench PRIVATE GLM_FORCE_RADIANS GLM_FORCE_DEPTH
 if(MSVC)
     target_compile_options(crowd_bench PRIVATE /W4 /permissive- /MP)
 endif()
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+# unit_tests covers the logic that needs no window or GPU. `ctest` runs it, and the
+# no-mistakes gate runs ctest through scripts\gate-check.cmd.
+enable_testing()
+add_executable(unit_tests
+    tests/unit_tests.cpp
+    src/core/CommandLine.cpp
+    src/core/FrameStatistics.cpp)
+target_include_directories(unit_tests PRIVATE src)
+target_link_libraries(unit_tests PRIVATE glm::glm)
+target_compile_definitions(unit_tests PRIVATE GLM_FORCE_RADIANS GLM_FORCE_DEPTH_ZERO_TO_ONE)
+if(MSVC)
+    target_compile_options(unit_tests PRIVATE /W4 /permissive- /MP)
+endif()
+add_test(NAME unit_tests COMMAND unit_tests)
