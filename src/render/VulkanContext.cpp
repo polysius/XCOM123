@@ -190,6 +190,12 @@ void VulkanContext::PickPhysicalDevice() {
         throw std::runtime_error("No GPU supports Vulkan 1.3 with dynamic rendering");
     }
     std::cout << "GPU: " << deviceProperties.deviceName << "\n";
+
+    uint32_t familyCount = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &familyCount, nullptr);
+    std::vector<VkQueueFamilyProperties> families(familyCount);
+    vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &familyCount, families.data());
+    timestampValidBits = families[queueFamily].timestampValidBits;
 }
 
 void VulkanContext::CreateDevice() {
@@ -257,7 +263,12 @@ void VulkanContext::CreateSwapchain(VkSwapchainKHR oldSwapchain) {
     createInfo.imageColorSpace = surfaceFormat.colorSpace;
     createInfo.imageExtent = swapchainExtent;
     createInfo.imageArrayLayers = 1;
+    // Copying out of swapchain images lets screenshots capture exactly what is shown on screen.
+    swapchainSupportsCopy = (capabilities.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0;
     createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    if (swapchainSupportsCopy) {
+        createInfo.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    }
     createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
     createInfo.preTransform = capabilities.currentTransform;
     createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;

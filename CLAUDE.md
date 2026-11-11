@@ -15,7 +15,7 @@ These rules apply to this folder and every folder inside it.
 
 ### Pushing code: `no-mistakes`
 - Push to GitHub only through no-mistakes, a local git gate that validates code before it reaches the real remote.
-- This repo does not have the gate yet. Run `no-mistakes init` once before the first push.
+- The gate is initialized for this repo (remote `no-mistakes`). Its settings live in `.no-mistakes.yaml`, and its test command is `scripts\gate-check.cmd`.
 - Push with `git push no-mistakes <branch>`, or drive it headlessly with `no-mistakes axi run` (see `no-mistakes axi --help`).
 - Never bypass the gate (no direct `git push origin`, no `--skip`) unless the user explicitly says so.
 
@@ -23,12 +23,6 @@ These rules apply to this folder and every folder inside it.
 - Use `gnhf` for continuous, iterative or long-running agent work (for example, overnight tasks).
 - Example: `gnhf --agent claude --max-run-time 2h --worktree "<objective>"`.
 - Always set a bound: `--max-iterations`, `--max-tokens`, `--max-run-time` or `--stop-when`.
-
-### Context management: `billion-context`
-- billion-context (`bili`) must be active in every session.
-- Model traffic goes through its proxy at `127.0.0.1:18787`, and its SessionStart hook starts the proxy when it is not running.
-- Use its tools (`compress`, `decompress`, `search_context`, `acp_status`) to manage context during long work. Do not turn it off or route around the proxy unless the user says so.
-- If its tools are missing or the proxy is down, tell the user and suggest running `bili start`.
 
 ### Knowledge graph: `graphify`
 - When the user types `/graphify`, use the graphify skill (`~/.claude/skills/graphify/SKILL.md`) before doing anything else.

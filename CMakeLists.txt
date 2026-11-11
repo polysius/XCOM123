@@ -113,6 +113,41 @@ if(MSVC)
 endif()
 
 # ---------------------------------------------------------------------------
+# Tools
+# ---------------------------------------------------------------------------
+# crowd_bench times the crowd simulation without a window or a GPU. It builds the world
+# code (city and crowd) and the job system, nothing that needs Vulkan or GLFW.
+file(GLOB_RECURSE CROWD_BENCH_WORLD_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/world/*.cpp)
+add_executable(crowd_bench
+    tools/crowd_bench/main.cpp
+    ${CROWD_BENCH_WORLD_SOURCES}
+    src/core/JobSystem.cpp)
+target_include_directories(crowd_bench PRIVATE src)
+target_link_libraries(crowd_bench PRIVATE glm::glm)
+target_compile_definitions(crowd_bench PRIVATE GLM_FORCE_RADIANS GLM_FORCE_DEPTH_ZERO_TO_ONE)
+if(MSVC)
+    target_compile_options(crowd_bench PRIVATE /W4 /permissive- /MP)
+endif()
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+# unit_tests covers the logic that needs no window or GPU. `ctest` runs it, and the
+# no-mistakes gate runs ctest through scripts\gate-check.cmd.
+enable_testing()
+add_executable(unit_tests
+    tests/unit_tests.cpp
+    src/core/CommandLine.cpp
+    src/core/FrameStatistics.cpp)
+target_include_directories(unit_tests PRIVATE src)
+target_link_libraries(unit_tests PRIVATE glm::glm)
+target_compile_definitions(unit_tests PRIVATE GLM_FORCE_RADIANS GLM_FORCE_DEPTH_ZERO_TO_ONE)
+if(MSVC)
+    target_compile_options(unit_tests PRIVATE /W4 /permissive- /MP)
+endif()
+add_test(NAME unit_tests COMMAND unit_tests)
+
+# ---------------------------------------------------------------------------
 # City generator tests
 # ---------------------------------------------------------------------------
 # A console program that checks the generated city against the rules the crowd relies on, and
@@ -126,6 +161,4 @@ target_compile_definitions(CityTests PRIVATE GLM_FORCE_RADIANS GLM_FORCE_DEPTH_Z
 if(MSVC)
     target_compile_options(CityTests PRIVATE /W4 /permissive- /MP)
 endif()
-
-enable_testing()
 add_test(NAME CityTests COMMAND CityTests)

@@ -12,6 +12,10 @@ public:
 
     void Update(GLFWwindow* window, float deltaSeconds);
 
+    // Places the camera directly, for scripted views such as screenshots and benchmarks.
+    void SetPose(glm::vec3 newPosition, float yawRadians, float pitchRadians);
+    void LookAt(glm::vec3 newPosition, glm::vec3 target);
+
     glm::mat4 ViewMatrix() const;
     // Vulkan-style projection: Y points down in clip space and depth is reversed
     // (1 at the near plane, 0 at the far plane) for much better depth precision far away.

@@ -22,11 +22,15 @@ public:
     VkDevice device = VK_NULL_HANDLE;
     VkQueue queue = VK_NULL_HANDLE;  // one queue does both drawing and presenting
     uint32_t queueFamily = 0;
+    // How many bits of a GPU timestamp are meaningful on our queue; 0 means no timestamps.
+    uint32_t timestampValidBits = 0;
     bool supportsDepthClamp = false;
 
     VkSwapchainKHR swapchain = VK_NULL_HANDLE;
     VkFormat swapchainFormat = VK_FORMAT_UNDEFINED;
     VkExtent2D swapchainExtent{0, 0};
+    // True when swapchain images can be copied out, which screenshots need.
+    bool swapchainSupportsCopy = false;
     std::vector<VkImage> swapchainImages;
     std::vector<VkImageView> swapchainViews;
 

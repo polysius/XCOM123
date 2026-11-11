@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -7,69 +8,78 @@
 
 #include "scene/SceneTypes.h"
 #include "world/CityGenerator.h"
+#include "world/crowd/CrowdSettings.h"
+#include "world/crowd/CrowdState.h"
+#include "world/crowd/CrowdVisibility.h"
+#include "world/crowd/SpatialHash.h"
+#include "world/crowd/Walkways.h"
 
 class Frustum;
+class JobSystem;
 
-struct CrowdSettings {
-    uint32_t agentCount = 10000;
-    uint32_t seed = 7;
-    float plazaShare = 0.3f;  // fraction of people who mill about in squares instead of walking the streets
+// What the crowd did in the last Update and CollectVisible, for overlays and benchmarks.
+struct CrowdStats {
+    // How many people simulated at each level of detail.
+    uint32_t nearAgents = 0;
+    uint32_t midAgents = 0;
+    uint32_t farAgents = 0;
+    // How many visible people fell in each distance band (see CrowdVisibility.h).
+    crowd::CrowdVisibility::BandCounts visibleByBand{};
+    // Where the last Update spent its time, in milliseconds.
+    double tierMs = 0.0;   // choosing tiers and counting grid cells
+    double gridMs = 0.0;   // filling the neighbour grid
+    double agentMs = 0.0;  // updating people
 };
 
 // A city crowd kept as plain data and updated in parallel on all CPU cores.
 //
-// Two simple behaviours keep it cheap enough for tens of thousands of people:
-//  - Street walkers follow the street graph along the pavements and pick a random turn at each
-//    intersection. When a turn puts their pavement on the other side, they cross the road.
-//  - Plaza wanderers stroll between random spots in a square, pausing now and then.
-// People do not avoid each other yet; see the roadmap in README.md.
+// People walk the pavements of the street graph alone or in small groups, crossing the
+// road at corners, and stop now and then to look around. In squares they stroll between
+// spots, rest, or stand talking in circles. They keep their distance from each other and
+// let oncoming people pass side by side.
+//
+// The cost is kept low with simulation level of detail around a focus point, usually the
+// camera: near people avoid each other every step, mid distance people refresh their
+// avoidance every few steps, and far people only follow their way. All of them keep
+// walking at the same speed, so nothing changes visibly when someone changes level.
 class Crowd {
 public:
+    // Runs on the engine's shared job system.
+    Crowd();
+    explicit Crowd(JobSystem& jobs);
+
     void Spawn(const CityLayout& city, const CrowdSettings& settings);
+    // The point the simulation level of detail is centred on, usually the camera position.
+    void SetFocusPoint(glm::vec3 point);
     void Update(float deltaSeconds);
-    // Replaces the contents of `visible` with the people inside the camera's view.
+    // Replaces the contents of `visible` with the people inside the camera's view, ordered
+    // nearest band first around the focus point.
     void CollectVisible(const Frustum& frustum, std::vector<NpcInstance>& visible) const;
-    size_t AgentCount() const { return agents.size(); }
+    size_t AgentCount() const { return state.AgentCount(); }
+
+    CrowdStats Stats() const;
+    // Read-only access for tools such as the crowd benchmark.
+    const crowd::CrowdState& State() const { return state; }
+    const crowd::Walkways& WalkableSpace() const { return walkways; }
 
 private:
-    enum class Behaviour : uint8_t { WalkStreets, WanderPlaza };
+    void AssignTiersAndCells();
+    void BuildNeighbourGrid();
+    void StepUnits(float deltaSeconds);
 
-    struct Agent {
-        glm::vec2 position{0.0f};
-        glm::vec3 clothingColor{1.0f};
-        float heading = 0.0f;
-        float speed = 1.3f;  // metres per second
-        float heightScale = 1.0f;
-        float walkPhase = 0.0f;
-        float stride = 0.0f;
-        uint32_t random = 1;  // this agent's own random state, so threads never share one
-        Behaviour behaviour = Behaviour::WalkStreets;
-
-        // Street walkers
-        uint32_t edge = 0;
-        float edgeDistance = 0.0f;   // metres travelled along the current edge
-        bool towardsEdgeEnd = true;  // walking from edge.from to edge.to, or the other way
-        float sideOffset = 0.0f;     // signed distance from the street centre line: which pavement
-
-        // Plaza wanderers
-        uint32_t plaza = 0;
-        glm::vec2 goal{0.0f};
-        float pauseTime = 0.0f;
-    };
-
-    void SpawnStreetWalker(Agent& agent) const;
-    void SpawnPlazaWanderer(Agent& agent) const;
-    void UpdateStreetWalker(Agent& agent, float deltaSeconds) const;
-    void UpdatePlazaWanderer(Agent& agent, float deltaSeconds) const;
-    static void UpdateAnimation(Agent& agent, glm::vec2 previousPosition, float deltaSeconds);
-    glm::vec2 StreetPosition(const Agent& agent) const;
-    glm::vec2 PickPlazaGoal(Agent& agent) const;
-    uint32_t ChooseNextEdge(uint32_t node, uint32_t currentEdge, uint32_t& random) const;
-
-    std::vector<Agent> agents;
-    StreetGraph streets;
-    std::vector<Rect> plazas;
-    float sidewalkCenterOffset = 0.0f;
-    float sidewalkWidth = 0.0f;
-    float walkHeight = 0.0f;
+    JobSystem* jobs;
+    crowd::Walkways walkways;
+    crowd::CrowdState state;
+    // Per person, its cell in the neighbour grid, or kNoIndex outside the grid's window.
+    std::vector<uint32_t> agentCells;
+    crowd::SpatialHash neighbourGrid;
+    // Per chunk of people, how many are at each simulation tier.
+    std::vector<std::array<uint32_t, 3>> chunkTierCounts;
+    mutable crowd::CrowdVisibility visibility;
+    glm::vec3 focusPoint{0.0f};
+    float simulationTime = 0.0f;
+    uint32_t stepIndex = 0;
+    double lastTierMs = 0.0;
+    double lastGridMs = 0.0;
+    double lastAgentMs = 0.0;
 };
