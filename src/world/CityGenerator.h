@@ -147,6 +147,15 @@ struct CitySettings {
     bool canal = true;             // a canal branching off the river through one bank
     int boulevardCount = 3;        // wide streets with a planted median, 0 to 3
     int extraBridgeCount = 3;      // river bridges besides the ones carrying the main avenues
+
+    // A district is the streets and blocks inside a ring road and nothing else: no river, canal,
+    // landmarks or open land around it. Satellite districts are built this way, and their asphalt
+    // lies a centimetre above the ground so that it does not fight with the land they stand on.
+    bool districtOnly = false;
+
+    // Smaller districts built on their own, turned to their own angles and placed in the open land
+    // around the city, each joined to it by a street. Fewer are made when there is no room.
+    int satelliteCount = 4;
 };
 
 // Every box is tagged with what it belongs to, so tools and tests can tell a building from a lamp.
@@ -248,7 +257,8 @@ struct CityLayout {
     std::vector<glm::vec3> streetLights;  // light positions of the street lamp lanterns
     std::vector<Tree> trees;
     std::vector<PointOfInterest> pointsOfInterest;
-    Rect bounds;                        // outer edge of the pavements along the ring road
+    Rect bounds;                        // everything: the core's ring road and any satellite districts
+    Rect coreBounds;                    // outer edge of the pavements along the core's ring road
     float roadWidth = 0.0f;
     float sidewalkCenterOffset = 0.0f;  // distance from a street's centre line to the middle of its pavements
     float sidewalkWidth = 0.0f;

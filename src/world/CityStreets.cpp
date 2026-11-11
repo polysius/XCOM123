@@ -36,6 +36,28 @@ bool ContainsPoint(const std::vector<Rect>& rects, glm::vec2 point) {
     return false;
 }
 
+// A lamp post standing on the pavement at `position`, and its light in the layout. The square
+// post is turned by `yaw` so that it lines up with a street that does not run along an axis.
+void AddLamp(BoxWriter& boxes, CityLayout& city, glm::vec2 position, float yaw = 0.0f) {
+    const Look iron{kLampIron, SurfaceMaterial::Metal, 0.45f, 0.0f};
+    const Look lantern{kLanternGlass, SurfaceMaterial::Lamp, 0.2f, 0.0f};
+    const float ground = kPavementHeight;
+    auto post = [&](float halfWidth, float bottom, float top, const Look& look) {
+        if (yaw == 0.0f) {
+            boxes.Box(glm::vec3(position.x - halfWidth, ground + bottom, position.y - halfWidth),
+                      glm::vec3(position.x + halfWidth, ground + top, position.y + halfWidth), look);
+        } else {
+            boxes.TurnedBox({position.x, ground + (bottom + top) * 0.5f, position.y},
+                            {halfWidth, (top - bottom) * 0.5f, halfWidth}, yaw, look);
+        }
+    };
+    post(0.18f, 0.0f, 0.55f, iron);
+    post(0.07f, 0.55f, 4.0f, iron);
+    post(0.22f, 4.0f, 4.6f, lantern);
+    post(0.28f, 4.6f, 4.72f, iron);
+    city.streetLights.push_back(AtHeight(position, ground + kLampHeight));
+}
+
 class StreetBuilder {
 public:
     StreetBuilder(const CityPlan& cityPlan, uint32_t seed, BoxWriter& writer, CityLayout& layout)
@@ -59,13 +81,19 @@ public:
     }
 
 private:
-    // Asphalt inside the ring road, grass beyond it, and holes where the water is.
+    // Asphalt inside the ring road, grass beyond it, and holes where the water is. A district has
+    // no grass, and its asphalt is a centimetre higher so that it does not fight with the grass of
+    // the city it is placed in.
     void LayGround() {
         PartScope scope(boxes, CityPart::Ground);
         const float paved = plan.halfSize + plan.roadHalfWidth;
         const Rect streets{glm::vec2(-paved), glm::vec2(paved)};
+        const float asphaltTop = plan.districtOnly ? kDistrictAsphaltRaise : 0.0f;
         for (const Rect& piece : Subtract(streets, waterZones)) {
-            boxes.Footprint(piece, -1.0f, 0.0f, AsphaltLook());
+            boxes.Footprint(piece, -1.0f, asphaltTop, AsphaltLook());
+        }
+        if (plan.districtOnly) {
+            return;
         }
         std::vector<Rect> cuts = waterZones;
         cuts.push_back(streets);
@@ -293,20 +321,7 @@ private:
         }
     }
 
-    void AddStreetLamp(glm::vec2 position) {
-        const Look iron{kLampIron, SurfaceMaterial::Metal, 0.45f, 0.0f};
-        const Look lantern{kLanternGlass, SurfaceMaterial::Lamp, 0.2f, 0.0f};
-        const float ground = kPavementHeight;
-        auto post = [&](float halfWidth, float bottom, float top, const Look& look) {
-            boxes.Box(glm::vec3(position.x - halfWidth, ground + bottom, position.y - halfWidth),
-                      glm::vec3(position.x + halfWidth, ground + top, position.y + halfWidth), look);
-        };
-        post(0.18f, 0.0f, 0.55f, iron);
-        post(0.07f, 0.55f, 4.0f, iron);
-        post(0.22f, 4.0f, 4.6f, lantern);
-        post(0.28f, 4.6f, 4.72f, iron);
-        city.streetLights.push_back(AtHeight(position, ground + kLampHeight));
-    }
+    void AddStreetLamp(glm::vec2 position) { AddLamp(boxes, city, position); }
 
     const CityPlan& plan;
     BoxWriter& boxes;
@@ -321,6 +336,105 @@ private:
 
 void BuildStreetsAndWater(const CityPlan& plan, uint32_t seed, BoxWriter& boxes, CityLayout& city) {
     StreetBuilder(plan, seed, boxes, city).Run();
+}
+
+namespace {
+
+glm::vec2 LeftOf(glm::vec2 direction) {
+    return {-direction.y, direction.x};
+}
+
+// The yaw of a box whose own X axis runs along `direction` on the ground.
+float YawAlong(glm::vec2 direction) {
+    return std::atan2(-direction.y, direction.x);
+}
+
+// The turn from one direction to the next, positive when the street bends to the left.
+float SignedTurn(glm::vec2 before, glm::vec2 after) {
+    return std::atan2(before.x * after.y - before.y * after.x, glm::dot(before, after));
+}
+
+// A box whose floor and roof are at heights `bottom` and `top`, lying along a street leg: it
+// spans `alongFrom` to `alongTo` metres from the leg's start and `lateralLow` to `lateralHigh`
+// to the left of its centre line.
+void LegBox(BoxWriter& boxes, glm::vec2 start, glm::vec2 direction, float alongFrom, float alongTo, float lateralLow,
+            float lateralHigh, float bottom, float top, const Look& look) {
+    const glm::vec2 center = start + direction * ((alongFrom + alongTo) * 0.5f) +
+                             LeftOf(direction) * ((lateralLow + lateralHigh) * 0.5f);
+    boxes.TurnedBox({center.x, (bottom + top) * 0.5f, center.y},
+                    {(alongTo - alongFrom) * 0.5f, (top - bottom) * 0.5f, (lateralHigh - lateralLow) * 0.5f},
+                    YawAlong(direction), look);
+}
+
+}  // namespace
+
+void BuildConnectorStreet(const std::vector<glm::vec2>& path, float roadHalfWidth, float streetHalfWidth,
+                          Random& random, BoxWriter& boxes, CityLayout& city) {
+    const size_t legCount = path.size() - 1;
+    std::vector<glm::vec2> directions(legCount);
+    std::vector<float> lengths(legCount);
+    for (size_t leg = 0; leg < legCount; ++leg) {
+        lengths[leg] = glm::distance(path[leg], path[leg + 1]);
+        directions[leg] = (path[leg + 1] - path[leg]) / lengths[leg];
+    }
+    // turns[leg] is the turn at the start of the leg, where it meets the previous one.
+    std::vector<float> turns(legCount + 1, 0.0f);
+    for (size_t leg = 1; leg < legCount; ++leg) {
+        turns[leg] = SignedTurn(directions[leg - 1], directions[leg]);
+    }
+    auto mitre = [](float turn, float halfWidth) { return halfWidth * std::tan(std::abs(turn) * 0.5f); };
+
+    for (size_t leg = 0; leg < legCount; ++leg) {
+        const glm::vec2 start = path[leg];
+        const glm::vec2 direction = directions[leg];
+        const float length = lengths[leg];
+        const float startTurn = turns[leg];
+        const float endTurn = turns[leg + 1];
+        const bool endsAtStreet = leg + 1 == legCount;
+
+        // The road reaches past each bend, so that the outside of the bend has no gap. Where it
+        // starts or ends at another street it simply meets that street's road.
+        {
+            PartScope scope(boxes, CityPart::Ground);
+            LegBox(boxes, start, direction, -mitre(startTurn, roadHalfWidth), length + mitre(endTurn, roadHalfWidth),
+                   -roadHalfWidth, roadHalfWidth, -1.0f, kDistrictAsphaltRaise, AsphaltLook());
+        }
+
+        // A pavement on each side. Next to another street the pavement begins where that street's
+        // own pavement ends. At a bend the pavement on the outside reaches past it like the road;
+        // the one on the inside stops at the kerb, since reaching further would put it in the
+        // carriageway of the next leg.
+        PartScope scope(boxes, CityPart::Pavement);
+        for (float side : {-1.0f, 1.0f}) {
+            const bool insideAtStart = side * startTurn > 0.0f;
+            const bool insideAtEnd = side * endTurn > 0.0f;
+            const float from = leg == 0 ? streetHalfWidth
+                                        : (insideAtStart ? mitre(startTurn, roadHalfWidth) : -mitre(startTurn, streetHalfWidth));
+            const float to = endsAtStreet ? length - streetHalfWidth
+                                          : (insideAtEnd ? length - mitre(endTurn, roadHalfWidth)
+                                                         : length + mitre(endTurn, streetHalfWidth));
+            if (to - from > 0.05f) {
+                const float low = side > 0.0f ? roadHalfWidth : -streetHalfWidth;
+                const float high = side > 0.0f ? streetHalfWidth : -roadHalfWidth;
+                LegBox(boxes, start, direction, from, to, low, high, 0.0f, kPavementHeight, PavingLook());
+            }
+        }
+
+        // Lamps at the kerb, alternating between the two sides, as along every other street.
+        if (length >= kLampFromJunction * 2.0f) {
+            PartScope lampScope(boxes, CityPart::StreetLamp);
+            const float usable = length - kLampFromJunction * 2.0f;
+            const int count = static_cast<int>(usable / kLampSpacing) + 1;
+            float sideSign = random.Sign();
+            for (int i = 0; i < count; ++i) {
+                const float along = count == 1 ? length * 0.5f
+                                               : kLampFromJunction + usable * static_cast<float>(i) / static_cast<float>(count - 1);
+                AddLamp(boxes, city, start + direction * along + LeftOf(direction) * ((roadHalfWidth + 0.32f) * sideSign),
+                        YawAlong(direction));
+                sideSign = -sideSign;
+            }
+        }
+    }
 }
 
 }  // namespace city

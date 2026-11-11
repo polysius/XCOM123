@@ -9,6 +9,9 @@
 #include <vector>
 
 namespace {
+// More districts than this would not fit in the open land around the city.
+constexpr uint32_t kMaxSatellites = 8;
+
 // Reads the value that follows an option, or throws when the command line ends too early.
 class ArgumentReader {
 public:
@@ -101,6 +104,12 @@ Options ParseCommandLine(int argc, char** argv) {
             options.seed = ParseUnsigned(option, arguments.ValueFor(option));
         } else if (option == "--npcs") {
             options.npcCount = ParseUnsigned(option, arguments.ValueFor(option));
+        } else if (option == "--satellites") {
+            const uint32_t count = ParseUnsigned(option, arguments.ValueFor(option));
+            if (count > kMaxSatellites) {
+                throw std::invalid_argument(option + " must be at most " + std::to_string(kMaxSatellites));
+            }
+            options.satelliteCount = static_cast<int>(count);
         } else if (option == "--novsync") {
             options.vsync = false;
         } else if (option == "--benchmark") {
@@ -144,6 +153,7 @@ void PrintUsage() {
         "World:\n"
         "  --seed N                 city and crowd seed (default 1789)\n"
         "  --npcs N                 number of people (default 10000)\n"
+        "  --satellites N           districts turned to their own angles around the city (0 to 8)\n"
         "  --sun DEGREES            sun elevation above the horizon (default 24)\n"
         "  --time SECONDS           world clock of the screenshot (0 to 3600); the crowd is simulated\n"
         "                           up to it\n"

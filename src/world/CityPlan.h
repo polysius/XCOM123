@@ -86,6 +86,7 @@ struct CityPlan {
     float roadHalfWidth = 0.0f;
     float streetHalfWidth = 0.0f;  // road plus one pavement: the centre line to the edge of the land
     float farDistance = 0.0f;      // how far the open land and the river reach beyond the centre
+    bool districtOnly = false;     // see CitySettings::districtOnly
     glm::vec2 historicCore{0.0f};
     DistrictMap districts;
     std::vector<Segment> segments;

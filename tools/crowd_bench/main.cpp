@@ -9,7 +9,7 @@
 // It only uses the public Crowd API that the engine uses, so the same file also builds
 // against older versions of the crowd for comparisons.
 //
-// Usage: crowd_bench [--npcs 50000,100000,200000] [--steps 300] [--seed 1789]
+// Usage: crowd_bench [--npcs 50000,100000,200000] [--steps 300] [--seed 1789] [--satellites 0]
 
 #include <algorithm>
 #include <chrono>
@@ -54,6 +54,7 @@ struct BenchOptions {
     std::vector<uint32_t> agentCounts{50000, 100000, 200000};
     uint32_t steps = 300;
     uint32_t seed = 1789;
+    int satellites = -1;  // satellite districts around the city; negative keeps the generator's default
 };
 
 std::vector<uint32_t> ParseCountList(const std::string& text) {
@@ -77,6 +78,8 @@ BenchOptions ParseOptions(int argc, char** argv) {
             options.steps = static_cast<uint32_t>(std::stoul(value));
         } else if (name == "--seed") {
             options.seed = static_cast<uint32_t>(std::stoul(value));
+        } else if (name == "--satellites") {
+            options.satellites = std::stoi(value);
         } else {
             std::cerr << "Unknown option " << name << " (ignored)\n";
         }
@@ -285,9 +288,9 @@ private:
         gridRows = static_cast<int>(std::ceil(size.y / kCellSize));
         cells.assign(static_cast<size_t>(gridColumns) * static_cast<size_t>(gridRows), {});
         for (uint32_t index = 0; index < obstacles.size(); ++index) {
-            const Rect bounds = obstacles[index].Bounds();
-            const glm::ivec2 low = CellOf(bounds.min);
-            const glm::ivec2 high = CellOf(bounds.max);
+            const Rect obstacleBounds = obstacles[index].Bounds();
+            const glm::ivec2 low = CellOf(obstacleBounds.min);
+            const glm::ivec2 high = CellOf(obstacleBounds.max);
             for (int y = low.y; y <= high.y; ++y) {
                 for (int x = low.x; x <= high.x; ++x) {
                     cells[static_cast<size_t>(y) * static_cast<size_t>(gridColumns) + static_cast<size_t>(x)].push_back(index);
@@ -457,6 +460,9 @@ int main(int argc, char** argv) {
 
     CitySettings citySettings;
     citySettings.seed = options.seed;
+    if (options.satellites >= 0) {
+        citySettings.satelliteCount = options.satellites;
+    }
     const CityLayout city = GenerateCity(citySettings);
     std::cout << "City (seed " << options.seed << "): " << city.boxes.size() << " boxes, " << city.streets.edges.size()
               << " street segments, " << city.plazas.size() << " squares\n";

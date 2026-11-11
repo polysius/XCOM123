@@ -16,6 +16,7 @@ namespace city {
 
 // Heights in metres. The street surface is at y = 0.
 inline constexpr float kPavementHeight = 0.15f;      // walkers stand at this height
+inline constexpr float kDistrictAsphaltRaise = 0.01f;  // see CitySettings::districtOnly
 inline constexpr float kPlazaHeight = 0.20f;
 inline constexpr float kLawnHeight = 0.24f;
 inline constexpr float kGroundFloorHeight = 4.5f;    // must match GROUND_FLOOR_HEIGHT in lit.frag
@@ -102,6 +103,9 @@ public:
     explicit BoxWriter(CityLayout& layout) : city(layout) {}
 
     void Box(glm::vec3 min, glm::vec3 max, const Look& look);
+    // A box turned about the vertical axis. `center` is its middle and `halfSize` is measured along
+    // its own axes; `yaw` has the sign convention of BoxInstance::yaw.
+    void TurnedBox(glm::vec3 center, glm::vec3 halfSize, float yaw, const Look& look);
     // A box standing on a ground footprint, spanning heights `bottom` to `top`.
     void Footprint(const Rect& footprint, float bottom, float top, const Look& look);
 

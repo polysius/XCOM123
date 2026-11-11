@@ -77,13 +77,18 @@ Rect SegmentRect(glm::vec2 a, glm::vec2 b, float halfWidth, float extend) {
 }
 
 void BoxWriter::Box(glm::vec3 min, glm::vec3 max, const Look& look) {
+    TurnedBox((min + max) * 0.5f, (max - min) * 0.5f, 0.0f, look);
+}
+
+void BoxWriter::TurnedBox(glm::vec3 center, glm::vec3 halfSize, float yaw, const Look& look) {
     BoxInstance box;
-    box.center = (min + max) * 0.5f;
+    box.center = center;
     box.material = static_cast<float>(look.material);
-    box.halfSize = (max - min) * 0.5f;
+    box.halfSize = halfSize;
     box.roughness = look.roughness;
     box.color = look.color;
     box.seed = look.seed;
+    box.yaw = yaw;
     city.boxes.push_back(box);
     city.boxParts.push_back(part);
 }

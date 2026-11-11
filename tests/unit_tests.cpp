@@ -93,6 +93,14 @@ void CommandLineRejectsConflictingModes() {
     Check(IsRejected({"--target-fps", "60"}), "target fps without benchmark");
 }
 
+void CommandLineReadsSatellites() {
+    Check(!Parse({}).satelliteCount.has_value(), "unset by default");
+    Check(Parse({"--satellites", "0"}).satelliteCount == 0, "zero is allowed");
+    Check(Parse({"--satellites", "4"}).satelliteCount == 4, "four");
+    Check(IsRejected({"--satellites", "9"}), "too many satellites");
+    Check(IsRejected({"--satellites", "-1"}), "negative satellites");
+}
+
 void BenchmarkAndScreenshotTurnVsyncOff() {
     Check(!Parse({"--benchmark", "100"}).vsync, "benchmark disables vsync");
     Check(!Parse({"--screenshot", "a.png"}).vsync, "screenshot disables vsync");
@@ -227,6 +235,7 @@ int main() {
         {"CommandLineRejectsNegativeUnsigned", CommandLineRejectsNegativeUnsigned},
         {"CommandLineRejectsBadInput", CommandLineRejectsBadInput},
         {"CommandLineRejectsConflictingModes", CommandLineRejectsConflictingModes},
+        {"CommandLineReadsSatellites", CommandLineReadsSatellites},
         {"BenchmarkAndScreenshotTurnVsyncOff", BenchmarkAndScreenshotTurnVsyncOff},
         {"FrameSummaryOfNothingIsEmpty", FrameSummaryOfNothingIsEmpty},
         {"FrameSummaryUsesNearestRank", FrameSummaryUsesNearestRank},
