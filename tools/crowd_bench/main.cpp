@@ -18,6 +18,7 @@
 #include <iomanip>
 #include <iostream>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -50,6 +51,8 @@ constexpr float kNearRadius = 35.0f;        // people this close to the camera a
 constexpr float kOverlapDistance = 0.3f;    // people closer than this count as overlapping
 constexpr float kWalkableTolerance = 0.1f;  // slack, in metres, for the walkable space test
 
+constexpr int kMaxSatellites = 8;  // the same limit as the engine's --satellites option
+
 struct BenchOptions {
     std::vector<uint32_t> agentCounts{50000, 100000, 200000};
     uint32_t steps = 300;
@@ -80,6 +83,9 @@ BenchOptions ParseOptions(int argc, char** argv) {
             options.seed = static_cast<uint32_t>(std::stoul(value));
         } else if (name == "--satellites") {
             options.satellites = std::stoi(value);
+            if (options.satellites < 0 || options.satellites > kMaxSatellites) {
+                throw std::invalid_argument("--satellites must be between 0 and " + std::to_string(kMaxSatellites));
+            }
         } else {
             std::cerr << "Unknown option " << name << " (ignored)\n";
         }
@@ -456,7 +462,13 @@ void RunBenchmark(const CityLayout& city, uint32_t agentCount, const BenchOption
 }  // namespace
 
 int main(int argc, char** argv) {
-    const BenchOptions options = ParseOptions(argc, argv);
+    BenchOptions options;
+    try {
+        options = ParseOptions(argc, argv);
+    } catch (const std::exception& error) {
+        std::cerr << "error: " << error.what() << "\n";
+        return 1;
+    }
 
     CitySettings citySettings;
     citySettings.seed = options.seed;

@@ -35,6 +35,7 @@ constexpr float kRoadClearance = 40.0f;      // kept between two joining streets
 constexpr float kLandMargin = 150.0f;        // kept from the edge of the open land
 constexpr float kSampleSpacing = 5.0f;       // spacing of the points tested along a joining street
 constexpr int kAttemptsPerDistrict = 80;
+constexpr size_t kConnectorBoxAllowance = 1000;  // room kept for the street that joins a district
 
 // A T junction of a ring road, where a joining street can be attached without moving any edge.
 struct RingJunction {
@@ -75,6 +76,58 @@ float DistanceToSegment(glm::vec2 point, glm::vec2 a, glm::vec2 b) {
     return glm::distance(point, a + span * t);
 }
 
+// The outer pavement of a ring road runs unbroken past every T junction, because nothing used to
+// leave a ring road outwards. Where a joining street leaves, the pavement is opened across its
+// road, or it would cross the street as a kerb. The pavement box that holds the point just
+// outside `junction` is cut in two, leaving a gap as wide as the road.
+void OpenPavementAt(CityLayout& city, glm::vec2 junction, glm::vec2 outward, float roadHalfWidth, float streetHalfWidth) {
+    const glm::vec2 probe = junction + outward * ((roadHalfWidth + streetHalfWidth) * 0.5f);
+    for (size_t i = 0; i < city.boxes.size(); ++i) {
+        const BoxInstance original = city.boxes[i];
+        const bool isPavementSlab = city.boxParts[i] == CityPart::Pavement &&
+                                    std::abs(original.center.y - original.halfSize.y) < 1e-3f &&
+                                    std::abs(original.center.y + original.halfSize.y - kPavementHeight) < 1e-3f;
+        if (!isPavementSlab) {
+            continue;
+        }
+        const OrientedRect footprint(Rect{{original.center.x - original.halfSize.x, original.center.z - original.halfSize.z},
+                                          {original.center.x + original.halfSize.x, original.center.z + original.halfSize.z}},
+                                     original.yaw);
+        if (!footprint.Contains(probe)) {
+            continue;
+        }
+
+        // Work in the box's own frame, along its long side, which is the way the ring road runs.
+        const bool alongX = original.halfSize.x >= original.halfSize.z;
+        const glm::vec2 here = footprint.ToFrame(probe);
+        const float at = alongX ? here.x : here.y;
+        const float low = alongX ? footprint.area.min.x : footprint.area.min.y;
+        const float high = alongX ? footprint.area.max.x : footprint.area.max.y;
+        const glm::vec2 middle = footprint.Center();
+        const float pieces[2][2] = {{low, at - roadHalfWidth}, {at + roadHalfWidth, high}};
+        bool reused = false;
+        for (const auto& piece : pieces) {
+            if (piece[1] - piece[0] <= 0.05f) {
+                continue;
+            }
+            const float center = (piece[0] + piece[1]) * 0.5f;
+            const glm::vec2 world = footprint.FromFrame(alongX ? glm::vec2(center, middle.y) : glm::vec2(middle.x, center));
+            BoxInstance cut = original;
+            cut.center.x = world.x;
+            cut.center.z = world.y;
+            (alongX ? cut.halfSize.x : cut.halfSize.z) = (piece[1] - piece[0]) * 0.5f;
+            if (!reused) {
+                city.boxes[i] = cut;  // the first piece takes the old slot
+                reused = true;
+            } else {
+                city.boxes.push_back(cut);
+                city.boxParts.push_back(CityPart::Pavement);
+            }
+        }
+        return;
+    }
+}
+
 class SatelliteBuilder {
 public:
     SatelliteBuilder(CityLayout& cityLayout, const CitySettings& citySettings, const CityPlan& cityPlan)
@@ -96,9 +149,12 @@ public:
             Random random(MixSeed(settings.seed, 0x53415400u + static_cast<uint32_t>(index)));
             for (int attempt = 0; attempt < kAttemptsPerDistrict; ++attempt) {
                 const uint32_t districtSeed = MixSeed(settings.seed, 0x44495300u + static_cast<uint32_t>(index * 256 + attempt));
-                if (TryPlace(random, districtSeed, static_cast<uint32_t>(index))) {
+                if (TryPlace(random, districtSeed, static_cast<uint32_t>(index)) || budgetReached) {
                     break;
                 }
+            }
+            if (budgetReached) {
+                return;
             }
         }
     }
@@ -112,7 +168,8 @@ private:
         const RingJunction& coreJunction = coreJunctions[static_cast<size_t>(random.Int(0, static_cast<int>(coreJunctions.size()) - 1))];
         const float firstStub = random.Range(kMinStub, kMaxStub);
         const float lastStub = random.Range(kMinStub, kMaxStub);
-        const float firstBend = random.Range(kMinBend, kMaxBend) * random.Sign();
+        const float bendSize = random.Range(kMinBend, kMaxBend);
+        const float firstBend = bendSize * random.Sign();
         const glm::vec2 firstBendAt = coreJunction.position + coreJunction.outward * firstStub;
         const glm::vec2 middleDirection = Placement{{0.0f, 0.0f}, firstBend}.Turn(coreJunction.outward);
         const glm::vec2 secondBendAt = firstBendAt + middleDirection * random.Range(kMinMiddle, kMaxMiddle);
@@ -124,8 +181,14 @@ private:
         districtSettings.citySize = random.Range(kMinDistrictSize, kMaxDistrictSize);
         districtSettings.seed = districtSeed;
         const float districtHalf = districtSettings.citySize * 0.5f;
-        const float turn = random.Range(kMinRelativeTurn, kMaxRelativeTurn) + static_cast<float>(random.Int(0, 3)) * kQuarterTurn;
+        const float relativeTurn = random.Range(kMinRelativeTurn, kMaxRelativeTurn);
+        const float quarterTurns = static_cast<float>(random.Int(0, 3));
+        const float turn = relativeTurn + quarterTurns * kQuarterTurn;
         const CityLayout district = GenerateCity(districtSettings);
+        if (city.boxes.size() + district.boxes.size() + kConnectorBoxAllowance > kMaxCityBoxes) {
+            budgetReached = true;
+            return false;
+        }
         const std::vector<RingJunction> districtJunctions = FindRingJunctions(district.streets, districtHalf);
 
         const Placement turnOnly{{0.0f, 0.0f}, turn};
@@ -191,6 +254,17 @@ private:
                 return false;
             }
         }
+        const OrientedRect roadClear = square.Expanded(kRoadClearance * 0.5f);
+        for (const std::vector<glm::vec2>& road : roads) {
+            for (size_t leg = 0; leg + 1 < road.size(); ++leg) {
+                const float length = glm::distance(road[leg], road[leg + 1]);
+                for (float along = 0.0f; along <= length; along += kSampleSpacing) {
+                    if (roadClear.Contains(road[leg] + (road[leg + 1] - road[leg]) * (along / length))) {
+                        return false;
+                    }
+                }
+            }
+        }
 
         // Points along the street. Its two ends lie on ring roads, so only the stretch between
         // the bends is tested against the core and against the district it leads to.
@@ -229,6 +303,9 @@ private:
         const uint32_t districtNodeOffset = static_cast<uint32_t>(city.streets.nodes.size());
         AppendPart(city, district, placement);
         districts.push_back(placement.Apply(OrientedRect(district.bounds)));
+        OpenPavementAt(city, coreJunction.position, coreJunction.outward, plan.roadHalfWidth, plan.streetHalfWidth);
+        OpenPavementAt(city, city.streets.nodes[districtNodeOffset + districtJunction.node],
+                       placement.Turn(districtJunction.outward), plan.roadHalfWidth, plan.streetHalfWidth);
 
         // Two new nodes for the bends and three edges joining the two ring roads.
         StreetGraph& streets = city.streets;
@@ -268,6 +345,7 @@ private:
     std::vector<OrientedRect> waterZones;       // the river and canal, widened by the clearance
     std::vector<OrientedRect> districts;        // the districts placed so far
     std::vector<std::vector<glm::vec2>> roads;  // the joining streets placed so far
+    bool budgetReached = false;                 // another district would exceed kMaxCityBoxes
 };
 
 }  // namespace

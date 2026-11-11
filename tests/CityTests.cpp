@@ -244,7 +244,8 @@ bool IsOnPavement(const CityLayout& city, const CityIndex& index, glm::vec2 poin
 
 void CheckBoxes(const CityLayout& city) {
     Expect(city.boxes.size() == city.boxParts.size(), "boxes", "every box needs a part tag");
-    Expect(city.boxes.size() < 150000, "boxes", Format("%.0f boxes is over the 150k budget", double(city.boxes.size())));
+    Expect(city.boxes.size() <= kMaxCityBoxes, "boxes",
+           Format("%.0f boxes is over the budget of %.0f", double(city.boxes.size()), double(kMaxCityBoxes)));
     for (size_t i = 0; i < city.boxes.size(); ++i) {
         const BoxInstance& box = city.boxes[i];
         const bool finite = std::isfinite(box.center.x) && std::isfinite(box.center.y) && std::isfinite(box.center.z);
@@ -697,6 +698,10 @@ Options ParseOptions(int argc, char** argv) {
             options.mapSeed = static_cast<uint32_t>(std::strtoul(argv[++i], nullptr, 10));
         } else if (argument == "--satellites" && hasValue) {
             options.mapSatellites = std::atoi(argv[++i]);
+            if (options.mapSatellites < 0 || options.mapSatellites > 8) {
+                std::printf("--satellites must be between 0 and 8\n");
+                std::exit(1);
+            }
         } else if (argument == "--scale" && hasValue) {
             options.pixelsPerMetre = std::strtof(argv[++i], nullptr);
         } else if (argument == "--window" && i + 4 < argc) {
@@ -716,6 +721,27 @@ CityLayout GenerateTimed(const CitySettings& settings, double& milliseconds) {
     CityLayout city = GenerateCity(settings);
     milliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
     return city;
+}
+
+// A street's carriageway must be level with the road along its whole length: no pavement may lie
+// across it, or the street would end at a kerb. This looks along every centre line.
+void CheckRoadsStayClear(const CityLayout& city, const CityIndex& index) {
+    const float roadHalf = city.roadWidth * 0.5f;
+    for (uint32_t e = 0; e < city.streets.edges.size(); ++e) {
+        const StreetGraph::Edge& edge = city.streets.edges[e];
+        const glm::vec2 a = city.streets.nodes[edge.from];
+        const glm::vec2 direction = (city.streets.nodes[edge.to] - a) / edge.length;
+        const glm::vec2 side{-direction.y, direction.x};
+        for (float along = 0.5f; along <= edge.length - 0.5f; along += 1.0f) {
+            // The middle of the road and a point near each kerb.
+            for (float across : {0.0f, -roadHalf * 0.8f, roadHalf * 0.8f}) {
+                const glm::vec2 point = a + direction * along + side * across;
+                if (IsOnPavement(city, index, point)) {
+                    Fail("road clear", Format("pavement lies across the road at (%.1f, %.1f) on edge %.0f", point.x, point.y, e));
+                }
+            }
+        }
+    }
 }
 
 // The crowd places pavement corners where two streets meet, and it stops being able to when two
@@ -747,6 +773,7 @@ void RunContractChecks(const CityLayout& city, bool expectRiver) {
     CheckBoxes(city);
     CheckStreetGraph(city);
     CheckJunctionAngles(city);
+    CheckRoadsStayClear(city, index);
     CheckPavements(city, index);
     CheckBuildingsKeepClear(city);
     CheckSquares(city, index);

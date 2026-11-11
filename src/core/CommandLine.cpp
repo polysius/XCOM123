@@ -9,7 +9,7 @@
 #include <vector>
 
 namespace {
-// More districts than this would not fit in the open land around the city.
+// Beyond this the city's box budget (kMaxCityBoxes) is reached before more districts are useful.
 constexpr uint32_t kMaxSatellites = 8;
 
 // Reads the value that follows an option, or throws when the command line ends too early.

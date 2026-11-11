@@ -137,6 +137,10 @@ struct StreetGraph {
     std::vector<std::vector<uint32_t>> edgesAtNode;  // indices into `edges`, for each node
 };
 
+// The most boxes a generated city may hold. The renderer draws every box in every frame, so this
+// bounds the cost of a city; satellite districts stop being added when it would be exceeded.
+inline constexpr size_t kMaxCityBoxes = 150000;
+
 struct CitySettings {
     uint32_t seed = 1789;
     float citySize = 1800.0f;      // metres between the centre lines of the ring road on opposite sides
