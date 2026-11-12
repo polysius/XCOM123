@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 #include "world/CityComposition.h"
 #include "world/CityStreets.h"
@@ -35,6 +36,17 @@ constexpr float kRoadClearance = 40.0f;      // kept between two joining streets
 constexpr float kLandMargin = 150.0f;        // kept from the edge of the open land
 constexpr float kSampleSpacing = 5.0f;       // spacing of the points tested along a joining street
 constexpr int kAttemptsPerDistrict = 80;
+
+// The first district tries to stand across the river from the core, joined by a street that crosses
+// it on a bridge. The street may meet the river at an angle, but not too shallow a one.
+constexpr int kAttemptsAcrossRiver = 60;
+constexpr float kMinRiverDistance = 90.0f;   // a junction this far or further from the river's line is used
+constexpr float kMaxRiverDistance = 480.0f;
+constexpr float kMinCrossingSine = 0.64f;    // sine of the smallest angle between the street and the river, about 40 degrees
+constexpr float kMaxCrossingBend = 55.0f * kDegree;  // the first bend may be sharper when the street heads for the river
+constexpr float kFarBank = 70.0f;            // the second bend lies this far past the levee on the far bank
+constexpr float kBridgeApproach = 12.0f;     // a bridge reaches this far past the levee, along the street's perpendicular
+constexpr float kLandBeforeBridge = 30.0f;   // the street keeps this much land between a bend and the bridge
 constexpr size_t kConnectorBoxAllowance = 1000;  // room kept for the street that joins a district
 
 // A T junction of a ring road, where a joining street can be attached without moving any edge.
@@ -64,6 +76,12 @@ std::vector<RingJunction> FindRingJunctions(const StreetGraph& streets, float ha
         junctions.push_back({node, position, outward});
     }
     return junctions;
+}
+
+// The turn about the vertical axis that carries the unit vector `local` onto the unit vector `wanted`
+// (the sign convention of Placement).
+float TurnOnto(glm::vec2 local, glm::vec2 wanted) {
+    return std::atan2(local.y * wanted.x - local.x * wanted.y, local.x * wanted.x + local.y * wanted.y);
 }
 
 float SignedTurn(glm::vec2 before, glm::vec2 after) {
@@ -142,6 +160,12 @@ public:
         for (const OrientedRect& water : city.water) {
             waterZones.push_back(water.Expanded(kWaterClearance));
         }
+        // The water of the reaches was added to the layout last, one rectangle per leg.
+        size_t reachLegs = 0;
+        for (const std::vector<glm::vec2>& reach : city.riverReaches) {
+            reachLegs += reach.size() - 1;
+        }
+        firstReachZone = waterZones.size() - reachLegs;
     }
 
     void Run() {
@@ -149,10 +173,26 @@ public:
             return;
         }
         for (int index = 0; index < settings.satelliteCount; ++index) {
+            // The first district tries to stand across the river. It draws from a stream of its own, so
+            // that when no crossing fits, the ordinary attempts below are what they would have been.
+            if (index == 0 && !city.riverReaches.empty()) {
+                Random crossingRandom(MixSeed(settings.seed, 0x42524447u));
+                bool crossed = false;
+                for (int attempt = 0; attempt < kAttemptsAcrossRiver && !crossed && !budgetReached; ++attempt) {
+                    const uint32_t districtSeed = MixSeed(settings.seed, 0x42524400u + static_cast<uint32_t>(attempt));
+                    crossed = TryPlace(crossingRandom, districtSeed, 0, true);
+                }
+                if (crossed || budgetReached) {
+                    if (budgetReached) {
+                        return;
+                    }
+                    continue;
+                }
+            }
             Random random(MixSeed(settings.seed, 0x53415400u + static_cast<uint32_t>(index)));
             for (int attempt = 0; attempt < kAttemptsPerDistrict; ++attempt) {
                 const uint32_t districtSeed = MixSeed(settings.seed, 0x44495300u + static_cast<uint32_t>(index * 256 + attempt));
-                if (TryPlace(random, districtSeed, static_cast<uint32_t>(index)) || budgetReached) {
+                if (TryPlace(random, districtSeed, static_cast<uint32_t>(index), false) || budgetReached) {
                     break;
                 }
             }
@@ -165,17 +205,31 @@ public:
 private:
     // Plans the layout of one district and its joining street. Returns false, leaving the city
     // untouched, when it does not fit.
-    bool TryPlace(Random& random, uint32_t districtSeed, uint32_t index) {
+    bool TryPlace(Random& random, uint32_t districtSeed, uint32_t index, bool acrossRiver) {
         // The street: out of the core at right angles, a bend, a straight stretch, a second bend
-        // and into the district at right angles.
-        const RingJunction& coreJunction = coreJunctions[static_cast<size_t>(random.Int(0, static_cast<int>(coreJunctions.size()) - 1))];
-        const float firstStub = random.Range(kMinStub, kMaxStub);
-        const float lastStub = random.Range(kMinStub, kMaxStub);
-        const float bendSize = random.Range(kMinBend, kMaxBend);
-        const float firstBend = bendSize * random.Sign();
-        const glm::vec2 firstBendAt = coreJunction.position + coreJunction.outward * firstStub;
-        const glm::vec2 middleDirection = Placement{{0.0f, 0.0f}, firstBend}.Turn(coreJunction.outward);
-        const glm::vec2 secondBendAt = firstBendAt + middleDirection * random.Range(kMinMiddle, kMaxMiddle);
+        // and into the district at right angles. Across the river, the straight stretch is aimed
+        // at the far bank.
+        const RingJunction* source = nullptr;
+        float lastStub = 0.0f;
+        glm::vec2 firstBendAt{0.0f};
+        glm::vec2 middleDirection{0.0f};
+        glm::vec2 secondBendAt{0.0f};
+        glm::vec2 towardsRiver{0.0f};  // across the river: the way the near side of the district must face
+        if (acrossRiver) {
+            if (!PlanCrossingStreet(random, source, lastStub, firstBendAt, middleDirection, secondBendAt, towardsRiver)) {
+                return false;
+            }
+        } else {
+            source = &coreJunctions[static_cast<size_t>(random.Int(0, static_cast<int>(coreJunctions.size()) - 1))];
+            const float firstStub = random.Range(kMinStub, kMaxStub);
+            lastStub = random.Range(kMinStub, kMaxStub);
+            const float bendSize = random.Range(kMinBend, kMaxBend);
+            const float firstBend = bendSize * random.Sign();
+            firstBendAt = source->position + source->outward * firstStub;
+            middleDirection = Placement{{0.0f, 0.0f}, firstBend}.Turn(source->outward);
+            secondBendAt = firstBendAt + middleDirection * random.Range(kMinMiddle, kMaxMiddle);
+        }
+        const RingJunction& coreJunction = *source;
 
         // The district, turned so that one of its sides faces back along the middle stretch.
         CitySettings districtSettings = settings;
@@ -184,9 +238,19 @@ private:
         districtSettings.citySize = random.Range(kMinDistrictSize, kMaxDistrictSize);
         districtSettings.seed = districtSeed;
         const float districtHalf = districtSettings.citySize * 0.5f;
-        const float relativeTurn = random.Range(kMinRelativeTurn, kMaxRelativeTurn);
-        const float quarterTurns = static_cast<float>(random.Int(0, 3));
-        const float turn = relativeTurn + quarterTurns * kQuarterTurn;
+        const glm::vec2 sideNormals[] = {{1.0f, 0.0f}, {0.0f, 1.0f}, {-1.0f, 0.0f}, {0.0f, -1.0f}};
+        float turn = 0.0f;
+        int riverSide = 0;
+        if (acrossRiver) {
+            // One of the sides of the district runs along the bank, so that a square fits beside the
+            // river instead of reaching back over it.
+            riverSide = random.Int(0, 3);
+            turn = TurnOnto(sideNormals[riverSide], towardsRiver);
+        } else {
+            const float relativeTurn = random.Range(kMinRelativeTurn, kMaxRelativeTurn);
+            const float quarterTurns = static_cast<float>(random.Int(0, 3));
+            turn = relativeTurn + quarterTurns * kQuarterTurn;
+        }
         const CityLayout district = GenerateCity(districtSettings);
         if (city.boxes.size() + district.boxes.size() + kConnectorBoxAllowance > kMaxCityBoxes) {
             budgetReached = true;
@@ -195,11 +259,12 @@ private:
         const std::vector<RingJunction> districtJunctions = FindRingJunctions(district.streets, districtHalf);
 
         const Placement turnOnly{{0.0f, 0.0f}, turn};
-        const glm::vec2 sideNormals[] = {{1.0f, 0.0f}, {0.0f, 1.0f}, {-1.0f, 0.0f}, {0.0f, -1.0f}};
-        glm::vec2 facingLocal = sideNormals[0];
-        for (glm::vec2 normal : sideNormals) {
-            if (glm::dot(turnOnly.Turn(normal), -middleDirection) > glm::dot(turnOnly.Turn(facingLocal), -middleDirection)) {
-                facingLocal = normal;
+        glm::vec2 facingLocal = sideNormals[acrossRiver ? riverSide : 0];
+        if (!acrossRiver) {
+            for (glm::vec2 normal : sideNormals) {
+                if (glm::dot(turnOnly.Turn(normal), -middleDirection) > glm::dot(turnOnly.Turn(facingLocal), -middleDirection)) {
+                    facingLocal = normal;
+                }
             }
         }
         const glm::vec2 facing = turnOnly.Turn(facingLocal);
@@ -229,15 +294,125 @@ private:
 
         const std::vector<glm::vec2> path = {coreJunction.position, firstBendAt, secondBendAt, entryAt};
         const OrientedRect square = placement.Apply(OrientedRect(district.bounds));
-        if (!Fits(square, path)) {
+        Crossing crossing;
+        if (acrossRiver && !FindCrossing(path, crossing)) {
+            return false;
+        }
+        if (!Fits(square, path, acrossRiver)) {
             return false;
         }
 
-        Commit(district, placement, coreJunction, *entry, firstBendAt, secondBendAt, index);
+        Commit(district, placement, coreJunction, *entry, firstBendAt, secondBendAt, index, acrossRiver ? &crossing : nullptr);
         return true;
     }
 
-    bool Fits(const OrientedRect& square, const std::vector<glm::vec2>& path) const {
+    // Aims a street at the far bank of a reach of the river. It leaves a T junction on the side of the
+    // core where the reach leaves, not too far from the river, and its first bend points it at a spot
+    // beyond the levee on the other bank. Returns false, planning nothing, when this try has no street.
+    bool PlanCrossingStreet(Random& random, const RingJunction*& source, float& lastStub, glm::vec2& firstBendAt,
+                            glm::vec2& middleDirection, glm::vec2& secondBendAt, glm::vec2& towardsRiver) const {
+        const size_t reachIndex = static_cast<size_t>(random.Int(0, static_cast<int>(city.riverReaches.size()) - 1));
+        const std::vector<glm::vec2>& reach = city.riverReaches[reachIndex];
+        const float outwardX = reach.front().x > 0.0f ? 1.0f : -1.0f;
+        const float riverZ = reach.front().y;
+
+        std::vector<const RingJunction*> candidates;
+        for (const RingJunction& junction : coreJunctions) {
+            const float distance = std::abs(junction.position.y - riverZ);
+            if (junction.outward.x == outwardX && distance >= kMinRiverDistance && distance <= kMaxRiverDistance) {
+                candidates.push_back(&junction);
+            }
+        }
+        if (candidates.empty()) {
+            return false;
+        }
+        source = candidates[static_cast<size_t>(random.Int(0, static_cast<int>(candidates.size()) - 1))];
+        const float firstStub = random.Range(kMinStub, kMaxStub);
+        lastStub = random.Range(kMinStub, kMaxStub);
+        firstBendAt = source->position + source->outward * firstStub;
+
+        // A leg of the reach a little way out from the first bend, whose midpoint is the aim.
+        std::vector<size_t> legs;
+        for (size_t leg = 0; leg + 1 < reach.size(); ++leg) {
+            const float out = ((reach[leg].x + reach[leg + 1].x) * 0.5f - firstBendAt.x) * outwardX;
+            if (out >= 80.0f && out <= 380.0f) {
+                legs.push_back(leg);
+            }
+        }
+        if (legs.empty()) {
+            return false;
+        }
+        const size_t leg = legs[static_cast<size_t>(random.Int(0, static_cast<int>(legs.size()) - 1))];
+        const glm::vec2 aim = (reach[leg] + reach[leg + 1]) * 0.5f;
+        const glm::vec2 along = glm::normalize(reach[leg + 1] - reach[leg]);
+        const glm::vec2 left{-along.y, along.x};
+        const float sourceSide = glm::dot(source->position - aim, left) >= 0.0f ? 1.0f : -1.0f;
+        secondBendAt = aim - left * sourceSide * (city.riverReachHalfWidth + kReachWallThickness + kFarBank);
+        towardsRiver = left * sourceSide;  // from the far bank back to the river
+
+        middleDirection = glm::normalize(secondBendAt - firstBendAt);
+        const float bend = SignedTurn(source->outward, middleDirection);
+        return std::abs(bend) >= kMinBend && std::abs(bend) <= kMaxCrossingBend;
+    }
+
+    // Where the street's straight stretch crosses the river, as distances along it.
+    struct Crossing {
+        float start = 0.0f;  // the bridge begins this far from the first bend
+        float end = 0.0f;
+    };
+
+    // Finds the one stretch of the straight stretch that is over the river, with its levees and room for
+    // the ends of a bridge, as a Crossing. There must be exactly one, with land before and after it, and
+    // the street must meet the river at a good angle. Anything else is not a crossing.
+    bool FindCrossing(const std::vector<glm::vec2>& path, Crossing& crossing) const {
+        const glm::vec2 from = path[1];
+        const float length = glm::distance(from, path[2]);
+        const glm::vec2 direction = (path[2] - from) / length;
+        const float reachRadius = city.riverReachHalfWidth + kReachWallThickness + kBridgeApproach;
+
+        int stretches = 0;
+        bool inside = false;
+        float first = 0.0f;
+        float last = 0.0f;
+        float smallestSine = 1.0f;  // the sine of the smallest angle between the street and the river it crosses
+        for (float along = 0.0f; along <= length; along += 1.0f) {
+            const glm::vec2 point = from + direction * along;
+            float nearest = std::numeric_limits<float>::max();
+            float shallowest = 1.0f;  // the smallest sine to any leg of the river within reach of this point
+            for (const std::vector<glm::vec2>& reach : city.riverReaches) {
+                for (size_t i = 0; i + 1 < reach.size(); ++i) {
+                    const float distance = DistanceToSegment(point, reach[i], reach[i + 1]);
+                    nearest = std::min(nearest, distance);
+                    if (distance < reachRadius) {
+                        const glm::vec2 river = glm::normalize(reach[i + 1] - reach[i]);
+                        shallowest = std::min(shallowest, std::abs(direction.x * river.y - direction.y * river.x));
+                    }
+                }
+            }
+            if (nearest < reachRadius) {
+                if (!inside) {
+                    ++stretches;
+                    first = along;
+                    inside = true;
+                }
+                last = along;
+                // The street meets every leg of the river it passes over, including a neighbour that bends
+                // the other way; the shallowest angle counts.
+                smallestSine = std::min(smallestSine, shallowest);
+            } else {
+                inside = false;
+            }
+        }
+        if (stretches != 1 || first < kLandBeforeBridge || last > length - kLandBeforeBridge ||
+            smallestSine < kMinCrossingSine) {
+            return false;
+        }
+        crossing.start = first;
+        crossing.end = last;
+        return true;
+    }
+
+    bool Fits(const OrientedRect& square, const std::vector<glm::vec2>& path, bool allowCrossing) const {
         for (glm::vec2 corner : square.Corners()) {
             if (std::abs(corner.x) > landLimit || std::abs(corner.y) > landLimit) {
                 return false;
@@ -275,8 +450,11 @@ private:
             const float length = glm::distance(path[leg], path[leg + 1]);
             for (float along = 0.0f; along <= length; along += kSampleSpacing) {
                 const glm::vec2 point = path[leg] + (path[leg + 1] - path[leg]) * (along / length);
-                for (const OrientedRect& water : waterZones) {
-                    if (water.Contains(point)) {
+                for (size_t zone = 0; zone < waterZones.size(); ++zone) {
+                    // A street that crosses the river is allowed over the reaches on its straight
+                    // stretch; FindCrossing has already checked that it does so cleanly.
+                    const bool crossesHere = allowCrossing && leg == 1 && zone >= firstReachZone;
+                    if (!crossesHere && waterZones[zone].Contains(point)) {
                         return false;
                     }
                 }
@@ -302,7 +480,8 @@ private:
     }
 
     void Commit(const CityLayout& district, const Placement& placement, const RingJunction& coreJunction,
-                const RingJunction& districtJunction, glm::vec2 firstBendAt, glm::vec2 secondBendAt, uint32_t index) {
+                const RingJunction& districtJunction, glm::vec2 firstBendAt, glm::vec2 secondBendAt, uint32_t index,
+                const Crossing* crossing) {
         const uint32_t districtNodeOffset = static_cast<uint32_t>(city.streets.nodes.size());
         AppendPart(city, district, placement);
         districts.push_back(placement.Apply(OrientedRect(district.bounds)));
@@ -319,6 +498,7 @@ private:
         streets.nodes.push_back(secondBendAt);
         streets.edgesAtNode.resize(streets.nodes.size());
         const uint32_t secondBend = firstBend + 1;
+        const uint32_t firstEdge = static_cast<uint32_t>(streets.edges.size());
         const uint32_t joins[][2] = {{coreJunction.node, firstBend}, {firstBend, secondBend}, {secondBend, entryNode}};
         for (const auto& join : joins) {
             const uint32_t edge = static_cast<uint32_t>(streets.edges.size());
@@ -337,6 +517,11 @@ private:
         BoxWriter boxes(city);
         Random random(MixSeed(settings.seed, 0x434F4E4Eu + index));
         BuildConnectorStreet(path, plan.roadHalfWidth, plan.streetHalfWidth, random, boxes, city);
+        if (crossing != nullptr) {
+            const glm::vec2 direction = glm::normalize(secondBendAt - firstBendAt);
+            BuildRiverBridge(firstBendAt, direction, crossing->start, crossing->end, firstEdge + 1, plan.roadHalfWidth,
+                             plan.streetHalfWidth, random, boxes, city);
+        }
     }
 
     CityLayout& city;
@@ -346,6 +531,7 @@ private:
     const float landLimit;
     Rect core;                                  // the core inside its outer pavement
     std::vector<OrientedRect> waterZones;       // the river and canal, widened by the clearance
+    size_t firstReachZone = 0;                  // the zones from here on are legs of the reaches of the river
     std::vector<OrientedRect> districts;        // the districts placed so far
     std::vector<std::vector<glm::vec2>> roads;  // the joining streets placed so far
     bool budgetReached = false;                 // another district would exceed kMaxCityBoxes

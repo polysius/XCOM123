@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <limits>
 
 #include "world/CityNature.h"
@@ -21,6 +22,9 @@ constexpr float kLampHeight = 4.3f;        // light centre above the pavement
 constexpr float kBankGrassCell = 2.0f;     // grass beside a bend of the river is laid in cells this wide
 constexpr float kBankRegionMargin = 12.0f; // the cells reach this far beyond the levees
 constexpr float kLeveeOverlap = 6.0f;      // a levee starts this far back over the wall of the straight river
+constexpr float kSillTop = -0.02f;         // the sill a bridge crosses stands a hair below the grass, which hides its edges
+constexpr float kSillMargin = 2.0f;        // the sill reaches this far past the ends of a bridge
+constexpr float kSillCutMargin = 1.5f;     // and this far past the stretch of levee the street crosses
 constexpr float kLeveeCapRise = 0.10f;     // a levee capstone stands this far above the quay wall caps, so they never fight
 
 const glm::vec3 kQuayStone{0.55f, 0.51f, 0.45f};
@@ -101,6 +105,45 @@ void AddLamp(BoxWriter& boxes, CityLayout& city, glm::vec2 position, float yaw =
     post(0.22f, 4.0f, 4.6f, lantern);
     post(0.28f, 4.6f, 4.72f, iron);
     city.streetLights.push_back(AtHeight(position, ground + kLampHeight));
+}
+
+// Draws one box of a bridge: it spans `alongMin` to `alongMax` along the street and `acrossMin` to
+// `acrossMax` to either side of its centre line, between heights `bottom` and `top`.
+using BridgeStrip = std::function<void(float alongMin, float alongMax, float acrossMin, float acrossMax, float bottom,
+                                       float top, const Look& look)>;
+
+// The body of a bridge from `start` to `end` along its street: a stone deck with a parapet on each
+// side, abutments that fill the gap cut into the walls of the banks (`wallThickness` thick), piers in
+// the water, and stepped haunches beside every support that make the openings read as arches. With
+// `layRoad` the deck also carries its own road and pavements; a street laid across open land has
+// them already.
+void BuildBridgeBody(const BridgeStrip& strip, float start, float end, float road, float street, float wallThickness,
+                     bool layRoad, const Look& stone) {
+    const float outer = street + kParapetWidth;
+    strip(start, end, -outer, outer, kDeckBottom, -0.05f, stone);
+    if (layRoad) {
+        strip(start, end, -road, road, -0.05f, 0.0f, AsphaltLook());
+        strip(start, end, -street, -road, -0.05f, kPavementHeight, PavingLook());
+        strip(start, end, road, street, -0.05f, kPavementHeight, PavingLook());
+    }
+    strip(start, end, -outer, -street, -0.05f, kParapetTop, stone);
+    strip(start, end, street, outer, -0.05f, kParapetTop, stone);
+
+    const float length = end - start;
+    const int arches = std::max(1, static_cast<int>(std::lround(length / kArchSpan)));
+    strip(start, start + wallThickness + 1.0f, -outer, outer, kWallFoot, kDeckBottom, stone);
+    strip(end - wallThickness - 1.0f, end, -outer, outer, kWallFoot, kDeckBottom, stone);
+    for (int support = 0; support <= arches; ++support) {
+        const float at = start + length * static_cast<float>(support) / static_cast<float>(arches);
+        if (support > 0 && support < arches) {
+            strip(at - 1.5f, at + 1.5f, -(street + 1.0f), street + 1.0f, kRiverBed, kDeckBottom, stone);
+            strip(at - 0.8f, at + 0.8f, -(street + 3.0f), street + 3.0f, kRiverBed, -2.2f, stone);
+        }
+        strip(std::max(start, at - 3.7f), std::min(end, at + 3.7f), -(street + 0.35f), street + 0.35f, -2.6f,
+              kDeckBottom, stone);
+        strip(std::max(start, at - 6.0f), std::min(end, at + 6.0f), -(street + 0.35f), street + 0.35f, -1.7f,
+              kDeckBottom, stone);
+    }
 }
 
 class StreetBuilder {
@@ -238,31 +281,7 @@ private:
                             bottom, top, look);
         };
 
-        // The deck: a stone body carrying the road, the pavements and a parapet on each side.
-        strip(start, end, -outer, outer, kDeckBottom, -0.05f, stone);
-        strip(start, end, -road, road, -0.05f, 0.0f, AsphaltLook());
-        strip(start, end, -street, -road, -0.05f, kPavementHeight, PavingLook());
-        strip(start, end, road, street, -0.05f, kPavementHeight, PavingLook());
-        strip(start, end, -outer, -street, -0.05f, kParapetTop, stone);
-        strip(start, end, street, outer, -0.05f, kParapetTop, stone);
-
-        // Abutments fill the gap cut into the quay walls, piers stand in the water, and stepped
-        // haunches beside every support make the openings read as arches.
-        const float length = end - start;
-        const int arches = std::max(1, static_cast<int>(std::lround(length / kArchSpan)));
-        strip(start, start + kQuayWallThickness + 1.0f, -outer, outer, kWallFoot, kDeckBottom, stone);
-        strip(end - kQuayWallThickness - 1.0f, end, -outer, outer, kWallFoot, kDeckBottom, stone);
-        for (int support = 0; support <= arches; ++support) {
-            const float at = start + length * static_cast<float>(support) / static_cast<float>(arches);
-            if (support > 0 && support < arches) {
-                strip(at - 1.5f, at + 1.5f, -(street + 1.0f), street + 1.0f, kRiverBed, kDeckBottom, stone);
-                strip(at - 0.8f, at + 0.8f, -(street + 3.0f), street + 3.0f, kRiverBed, -2.2f, stone);
-            }
-            strip(std::max(start, at - 3.7f), std::min(end, at + 3.7f), -(street + 0.35f), street + 0.35f, -2.6f,
-                  kDeckBottom, stone);
-            strip(std::max(start, at - 6.0f), std::min(end, at + 6.0f), -(street + 0.35f), street + 0.35f, -1.7f,
-                  kDeckBottom, stone);
-        }
+        BuildBridgeBody(strip, start, end, road, street, kQuayWallThickness, true, stone);
 
         bridgeBands.push_back(FromRanges(alongX, start, end, centerLine - outer, centerLine + outer));
         city.bridges.push_back({edge, FromRanges(alongX, start, end, centerLine - street, centerLine + street)});
@@ -510,6 +529,134 @@ private:
 
 void BuildStreetsAndWater(const CityPlan& plan, uint32_t seed, BoxWriter& boxes, CityLayout& city) {
     StreetBuilder(plan, seed, boxes, city).Run();
+}
+
+namespace {
+
+// `polygon` cut to the half plane where coordinate `axis` is at least `bound` (or at most it).
+std::vector<glm::vec2> ClipToHalfPlane(const std::vector<glm::vec2>& polygon, int axis, float bound, bool keepAbove) {
+    std::vector<glm::vec2> clipped;
+    for (size_t i = 0; i < polygon.size(); ++i) {
+        const glm::vec2 a = polygon[i];
+        const glm::vec2 b = polygon[(i + 1) % polygon.size()];
+        const float inA = keepAbove ? a[axis] - bound : bound - a[axis];
+        const float inB = keepAbove ? b[axis] - bound : bound - b[axis];
+        if (inA >= 0.0f) {
+            clipped.push_back(a);
+        }
+        if ((inA >= 0.0f) != (inB >= 0.0f)) {
+            clipped.push_back(a + (b - a) * (inA / (inA - inB)));
+        }
+    }
+    return clipped;
+}
+
+// Lowers the levees where the strip of a street crosses them. Each levee box that the strip touches
+// is cut at both ends of the stretch the strip covers, and the middle is a solid stone sill from the
+// box's foot up to ground level, so nothing is left open below the street. A capstone has no middle.
+// The footprint of every stretch of levee lowered is added to the layout's river crossings.
+void LowerLevees(CityLayout& city, const OrientedRect& strip) {
+    const size_t boxCount = city.boxes.size();  // pieces added below are not looked at again
+    for (size_t i = 0; i < boxCount; ++i) {
+        const BoxInstance original = city.boxes[i];
+        if (city.boxParts[i] != CityPart::Embankment || original.halfSize.x <= original.halfSize.z) {
+            continue;  // only the long levee boxes along the reaches
+        }
+        const OrientedRect footprint(Rect{{original.center.x - original.halfSize.x, original.center.z - original.halfSize.z},
+                                          {original.center.x + original.halfSize.x, original.center.z + original.halfSize.z}},
+                                     original.yaw);
+        if (!footprint.Overlaps(strip)) {
+            continue;
+        }
+
+        // The part of the strip over this box, in the box's own frame, gives the stretch along it.
+        std::vector<glm::vec2> covered;
+        for (glm::vec2 corner : strip.Corners()) {
+            covered.push_back(footprint.ToFrame(corner));
+        }
+        covered = ClipToHalfPlane(covered, 0, footprint.area.min.x, true);
+        covered = ClipToHalfPlane(covered, 0, footprint.area.max.x, false);
+        covered = ClipToHalfPlane(covered, 1, footprint.area.min.y, true);
+        covered = ClipToHalfPlane(covered, 1, footprint.area.max.y, false);
+        if (covered.empty()) {
+            continue;
+        }
+        float low = covered.front().x;
+        float high = covered.front().x;
+        for (glm::vec2 point : covered) {
+            low = std::min(low, point.x);
+            high = std::max(high, point.x);
+        }
+        low = std::max(low - kSillCutMargin, footprint.area.min.x);
+        high = std::min(high + kSillCutMargin, footprint.area.max.x);
+
+        const float bottom = original.center.y - original.halfSize.y;
+        const bool isBody = bottom < -4.0f;
+        const glm::vec2 middle = footprint.Center();
+        struct Piece {
+            float from;
+            float to;
+            bool sill;
+        };
+        const Piece pieces[] = {{footprint.area.min.x, low, false}, {low, high, true}, {high, footprint.area.max.x, false}};
+        bool reused = false;
+        for (const Piece& piece : pieces) {
+            if (piece.to - piece.from <= 0.05f || (piece.sill && !isBody)) {
+                continue;
+            }
+            const glm::vec2 world = footprint.FromFrame({(piece.from + piece.to) * 0.5f, middle.y});
+            BoxInstance part = original;
+            part.center.x = world.x;
+            part.center.z = world.y;
+            part.halfSize.x = (piece.to - piece.from) * 0.5f;
+            if (piece.sill) {
+                part.center.y = (bottom + kSillTop) * 0.5f;
+                part.halfSize.y = (kSillTop - bottom) * 0.5f;
+                city.riverCrossings.push_back(OrientedRect(
+                    Rect{world - glm::vec2(part.halfSize.x, part.halfSize.z), world + glm::vec2(part.halfSize.x, part.halfSize.z)},
+                    original.yaw));
+            }
+            if (!reused) {
+                city.boxes[i] = part;  // the first piece takes the old slot
+                reused = true;
+            } else {
+                city.boxes.push_back(part);
+                city.boxParts.push_back(CityPart::Embankment);
+            }
+        }
+    }
+}
+
+}  // namespace
+
+void BuildRiverBridge(glm::vec2 origin, glm::vec2 direction, float start, float end, uint32_t edge, float roadHalfWidth,
+                      float streetHalfWidth, Random& random, BoxWriter& boxes, CityLayout& city) {
+    const float outer = streetHalfWidth + kParapetWidth;
+    {
+        PartScope scope(boxes, CityPart::Bridge);
+        const Look stone = StoneLook(kBridgeStone, random.Unit());
+        auto strip = [&](float alongMin, float alongMax, float acrossMin, float acrossMax, float bottom, float top,
+                         const Look& look) {
+            LegBox(boxes, origin, direction, alongMin, alongMax, acrossMin, acrossMax, bottom, top, look);
+        };
+        BuildBridgeBody(strip, start, end, roadHalfWidth, streetHalfWidth, kReachWallThickness, false, stone);
+    }
+
+    // The street, the parapets and a little beyond them stand on the sill.
+    const float sillFrom = start - kSillMargin;
+    const float sillTo = end + kSillMargin;
+    const float yaw = YawAlong(direction);
+    auto stripAround = [&](float from, float to, float halfWidth) {
+        const glm::vec2 center = origin + direction * ((from + to) * 0.5f);
+        const glm::vec2 half((to - from) * 0.5f, halfWidth);
+        return OrientedRect(Rect{center - half, center + half}, yaw);
+    };
+    const OrientedRect sillZone = stripAround(sillFrom, sillTo, outer + 1.0f);
+    LowerLevees(city, sillZone);
+
+    city.bridges.push_back({edge, stripAround(start, end, streetHalfWidth)});
+    const glm::vec2 middle = origin + direction * ((start + end) * 0.5f) + LeftOf(direction) * (streetHalfWidth - 0.6f);
+    city.pointsOfInterest.push_back({AtHeight(middle, kPavementHeight), LeftOf(direction), PointOfInterestKind::BridgeView});
 }
 
 void BuildConnectorStreet(const std::vector<glm::vec2>& path, float roadHalfWidth, float streetHalfWidth,
