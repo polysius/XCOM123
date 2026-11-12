@@ -10,6 +10,7 @@
 
 #include "core/CommandLine.h"
 #include "core/FrameStatistics.h"
+#include "physics/PropField.h"
 #include "world/Crowd.h"
 #include "world/TerrainField.h"
 #include "world/crowd/Walkways.h"
@@ -227,6 +228,101 @@ void APassageThatStartsOutsideEverySquareIsNotAPortal() {
     Check(walkways.Portals().empty(), "there is no square to come from");
 }
 
+void CommandLineReadsProps() {
+    Check(Parse({}).propCount == 0, "no props by default");
+    Check(Parse({"--props", "50"}).propCount == 50, "fifty props");
+    Check(IsRejected({"--props", "99999"}), "too many props");
+    Check(IsRejected({"--props", "-3"}), "negative props");
+}
+
+void ABodyIsDrawnWithTheLayoutOfABox() {
+    Check(sizeof(BodyInstance) == sizeof(BoxInstance), "body.vert reads the same instance size as box.vert");
+}
+
+// A flat ground 120 m across with a square on it, as a city of one block.
+CityLayout CityWithASquare() {
+    CityLayout city;
+    city.bounds = {{-60.0f, -60.0f}, {60.0f, 60.0f}};
+    city.boxes.push_back({.center = {0.0f, -0.5f, 0.0f}, .halfSize = {60.0f, 0.5f, 60.0f}});
+    city.boxParts.push_back(CityPart::Ground);
+    city.plazas.push_back(Rect{{-6.0f, -6.0f}, {6.0f, 6.0f}});     // a small square
+    city.plazas.push_back(Rect{{-30.0f, 10.0f}, {30.0f, 50.0f}});  // and a larger one
+    return city;
+}
+
+bool InstancesAreFinite(std::span<const BodyInstance> instances) {
+    for (const BodyInstance& instance : instances) {
+        const glm::vec3 c = instance.center;
+        const glm::vec4 q = instance.orientation;
+        if (!std::isfinite(c.x) || !std::isfinite(c.y) || !std::isfinite(c.z) || !std::isfinite(q.x) || !std::isfinite(q.w)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void PropsFallOnTheGroundAndComeToRest() {
+    physics::PropField props;
+    props.Spawn(CityWithASquare(), {.count = 80, .seed = 5});
+    Check(props.Count() == 80, "every prop is made");
+    Check(props.Boxes().size() + props.Spheres().size() == 80, "and drawn as a box or a sphere");
+    for (int step = 0; step < 20 * 60; ++step) {
+        props.Update(1.0f / 60.0f);
+    }
+    Check(InstancesAreFinite(props.Boxes()) && InstancesAreFinite(props.Spheres()), "no prop has a number that is not a number");
+    float lowest = 1e9f;
+    for (const BodyInstance& instance : props.Boxes()) {
+        lowest = std::min(lowest, instance.center.y);
+    }
+    for (const BodyInstance& instance : props.Spheres()) {
+        lowest = std::min(lowest, instance.center.y);
+    }
+    Check(lowest > 0.15f, "nothing has sunk into the ground, lowest centre " + std::to_string(lowest));
+    Check(props.AwakeCount() < 15, "the heap has come to rest, awake " + std::to_string(props.AwakeCount()));
+}
+
+void PropsAreDroppedOverTheLargestSquare() {
+    physics::PropField props;
+    props.Spawn(CityWithASquare(), {.count = 10, .seed = 1});
+    Check(props.DropCentre().y > 10.0f && props.DropCentre().y < 50.0f, "the heap is over the larger square");
+    for (const BodyInstance& instance : props.Boxes()) {
+        Check(instance.center.z > 10.0f && instance.center.z < 50.0f && std::abs(instance.center.x) < 30.0f, "and every prop starts over it");
+    }
+}
+
+void PropsAreTheSameEveryTime() {
+    physics::PropField first;
+    physics::PropField second;
+    first.Spawn(CityWithASquare(), {.count = 60, .seed = 9});
+    second.Spawn(CityWithASquare(), {.count = 60, .seed = 9});
+    for (int step = 0; step < 6 * 60; ++step) {
+        first.Update(1.0f / 60.0f);
+        second.Update(1.0f / 60.0f);
+    }
+    bool identical = first.Boxes().size() == second.Boxes().size();
+    for (size_t i = 0; identical && i < first.Boxes().size(); ++i) {
+        identical = first.Boxes()[i].center == second.Boxes()[i].center && first.Boxes()[i].orientation == second.Boxes()[i].orientation;
+    }
+    Check(identical, "two heaps with the same seed fall the same way");
+}
+
+void APropOnAHeightenedGroundIsDroppedOnItToo() {
+    // The props fall on whatever is solid near the square, not only on ground at the level of the city.
+    CityLayout city = CityWithASquare();
+    city.boxes.push_back({.center = {0.0f, 1.0f, 30.0f}, .halfSize = {30.0f, 1.0f, 20.0f}});  // a platform two metres high over the square
+    city.boxParts.push_back(CityPart::Terrace);
+    physics::PropField props;
+    props.Spawn(city, {.count = 20, .seed = 3});
+    for (int step = 0; step < 10 * 60; ++step) {
+        props.Update(1.0f / 60.0f);
+    }
+    float lowest = 1e9f;
+    for (const BodyInstance& instance : props.Boxes()) {
+        lowest = std::min(lowest, instance.center.y);
+    }
+    Check(lowest > 2.1f, "props rest on the platform, not under it, lowest centre " + std::to_string(lowest));
+}
+
 constexpr float kQuarterTurn = 1.5707964f;
 constexpr float kEighthTurn = 0.7853982f;
 
@@ -400,6 +496,7 @@ int main() {
         {"CommandLineRejectsConflictingModes", CommandLineRejectsConflictingModes},
         {"CommandLineCanSwitchTerracesOff", CommandLineCanSwitchTerracesOff},
         {"CommandLineReadsSatellites", CommandLineReadsSatellites},
+        {"CommandLineReadsProps", CommandLineReadsProps},
         {"BenchmarkAndScreenshotTurnVsyncOff", BenchmarkAndScreenshotTurnVsyncOff},
         {"FrameSummaryOfNothingIsEmpty", FrameSummaryOfNothingIsEmpty},
         {"FrameSummaryUsesNearestRank", FrameSummaryUsesNearestRank},
@@ -421,6 +518,11 @@ int main() {
         {"ObstacleStaysAxisAlignedAtYawZero", ObstacleStaysAxisAlignedAtYawZero},
         {"ObstacleFollowsAQuarterTurn", ObstacleFollowsAQuarterTurn},
         {"ObstacleFollowsADiagonalTurn", ObstacleFollowsADiagonalTurn},
+        {"ABodyIsDrawnWithTheLayoutOfABox", ABodyIsDrawnWithTheLayoutOfABox},
+        {"PropsFallOnTheGroundAndComeToRest", PropsFallOnTheGroundAndComeToRest},
+        {"PropsAreDroppedOverTheLargestSquare", PropsAreDroppedOverTheLargestSquare},
+        {"PropsAreTheSameEveryTime", PropsAreTheSameEveryTime},
+        {"APropOnAHeightenedGroundIsDroppedOnItToo", APropOnAHeightenedGroundIsDroppedOnItToo},
         {"ARoomWithAFreePassageIsAPortal", ARoomWithAFreePassageIsAPortal},
         {"AConversationCannotStandOnAPassage", AConversationCannotStandOnAPassage},
         {"ABlockedPassageIsNotAPortal", ABlockedPassageIsNotAPortal},

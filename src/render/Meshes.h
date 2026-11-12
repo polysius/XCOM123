@@ -31,5 +31,8 @@ enum class BodyPart : int {
 // A cube spanning -1..1 on every axis. Box instances stretch it to their own size.
 MeshData CreateUnitCube();
 
+// A sphere of radius 1, with normals pointing out. Sphere bodies stretch it to their radius.
+MeshData CreateUnitSphere();
+
 // A simple low-poly person, about 1.75 m tall, standing on the origin and facing +Z.
 MeshData CreatePersonMesh();

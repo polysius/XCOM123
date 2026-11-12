@@ -324,6 +324,7 @@ bool VulkanRenderer::DrawFrame(const FrameInput& input, bool captureScreenshot) 
     profiler.CollectResults(context.device, frameSlot);
     FeedResolutionController();
     geometry.WriteNpcs(context, frameSlot, input.npcs);
+    geometry.WriteBodies(context, frameSlot, input.bodyBoxes, input.bodySpheres);
 
     uint32_t imageIndex = 0;
     const VkResult acquireResult = vkAcquireNextImageKHR(context.device, context.swapchain, UINT64_MAX,

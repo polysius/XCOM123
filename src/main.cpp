@@ -19,6 +19,7 @@
 #include "core/CommandLine.h"
 #include "core/FlyCamera.h"
 #include "core/Module_Interface.h"
+#include "physics/PropField.h"
 #include "render/IRenderModule.h"
 #include "scene/Frustum.h"
 #include "world/CityGenerator.h"
@@ -66,6 +67,7 @@ struct Engine {
     CityLayout city;
     Crowd crowd;
     std::vector<NpcInstance> visibleNpcs;
+    physics::PropField props;  // crates, barrels and balls under the physics engine; none unless --props is given
 };
 
 // Returns 0 when the window is minimised.
@@ -96,6 +98,16 @@ double UpdateCrowd(Engine& engine, float deltaSeconds, FrameInput& frame) {
     engine.crowd.CollectVisible(Frustum(frame.projection * frame.view), engine.visibleNpcs);
     frame.npcs = engine.visibleNpcs;
     return MillisecondsBetween(start, Clock::now());
+}
+
+// Moves the props forward and puts them into the frame.
+void UpdateProps(Engine& engine, float deltaSeconds, FrameInput& frame) {
+    if (engine.props.Count() == 0) {
+        return;
+    }
+    engine.props.Update(deltaSeconds);
+    frame.bodyBoxes = engine.props.Boxes();
+    frame.bodySpheres = engine.props.Spheres();
 }
 
 // Polls window events. Returns false once the window should close.
@@ -202,6 +214,7 @@ int RunInteractive(Engine& engine, const Options& options) {
                                    static_cast<float>(MillisecondsBetween(startTime, now) / 1000.0);
         FrameInput frame = MakeFrameInput(camera, aspect, sunElevation, worldSeconds);
         const double crowdMs = UpdateCrowd(engine, deltaSeconds, frame);
+        UpdateProps(engine, deltaSeconds, frame);
         engine.renderer->Render(frame);
         title.AddFrame(crowdMs, engine);
     }
@@ -254,6 +267,7 @@ int RunBenchmark(Engine& engine, const Options& options) {
         const float worldSeconds = startSeconds + static_cast<float>(frameIndex) * kFixedTimeStep;
         FrameInput frame = MakeFrameInput(camera, aspect, sunElevation, worldSeconds);
         const double crowdMs = UpdateCrowd(engine, kFixedTimeStep, frame);
+        UpdateProps(engine, kFixedTimeStep, frame);
         engine.renderer->Render(frame);
         title.AddFrame(crowdMs, engine);
 
@@ -277,11 +291,14 @@ int RunBenchmark(Engine& engine, const Options& options) {
     return passed && completed ? 0 : kBenchmarkFailedExitCode;
 }
 
-// Moves the crowd forward to `seconds` without drawing anything.
-void PreRollCrowd(Crowd& crowd, float seconds) {
+// Moves the crowd and the props forward to `seconds` without drawing anything.
+void PreRollWorld(Engine& engine, float seconds) {
     while (seconds > 0.0f) {
         const float step = std::min(seconds, kPreRollTimeStep);
-        crowd.Update(step);
+        engine.crowd.Update(step);
+        if (engine.props.Count() > 0) {
+            engine.props.Update(step);
+        }
         seconds -= step;
     }
 }
@@ -296,7 +313,7 @@ int RunScreenshot(Engine& engine, const Options& options) {
     const float finalSeconds = options.worldTimeSeconds.value_or(renderedSeconds);
     const float firstFrameSeconds = std::max(finalSeconds - renderedSeconds, 0.0f);
     engine.crowd.SetFocusPoint(camera.Position());
-    PreRollCrowd(engine.crowd, firstFrameSeconds);
+    PreRollWorld(engine, firstFrameSeconds);
 
     for (int frameIndex = 0; frameIndex < frames; ++frameIndex) {
         if (!KeepRunning(engine.window)) {
@@ -306,6 +323,7 @@ int RunScreenshot(Engine& engine, const Options& options) {
         const float worldSeconds = firstFrameSeconds + static_cast<float>(frameIndex + 1) * kFixedTimeStep;
         FrameInput frame = MakeFrameInput(camera, aspect, sunElevation, worldSeconds);
         UpdateCrowd(engine, kFixedTimeStep, frame);
+        UpdateProps(engine, kFixedTimeStep, frame);
 
         const bool lastFrame = frameIndex + 1 == frames;
         if (!lastFrame) {
@@ -333,7 +351,12 @@ ResolutionSettings MakeResolutionSettings(const Options& options) {
 void PrintWorldSummary(const Options& options, const Engine& engine) {
     std::cout << "City (seed " << options.seed << "): " << engine.city.boxes.size() << " boxes, "
               << engine.city.streets.edges.size() << " street segments, " << engine.city.plazas.size()
-              << " squares, " << engine.crowd.AgentCount() << " people\n";
+              << " squares, " << engine.crowd.AgentCount() << " people";
+    if (engine.props.Count() > 0) {
+        std::cout << ", " << engine.props.Count() << " props above the square at (" << engine.props.DropCentre().x << ", "
+                  << engine.props.DropCentre().y << ")";
+    }
+    std::cout << "\n";
     if (!options.IsBenchmark() && !options.IsScreenshot()) {
         std::cout << "Controls: hold the right mouse button to look, WASD to move, E/Q to go up/down,\n"
                   << "          Shift to go faster, Z/X to lower/raise the sun, Esc to quit\n";
@@ -372,6 +395,9 @@ int RunEngine(const Options& options, GLFWwindow* window) {
     // Reserve room for everyone up front, so the renderer never grows buffers mid-flight.
     engine.renderer->ReserveNpcCapacity(engine.crowd.AgentCount());
     engine.visibleNpcs.reserve(engine.crowd.AgentCount());
+    if (options.propCount > 0) {
+        engine.props.Spawn(engine.city, {.count = options.propCount, .seed = options.seed});
+    }
     PrintWorldSummary(options, engine);
 
     if (options.IsBenchmark()) {

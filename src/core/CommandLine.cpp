@@ -11,6 +11,8 @@
 #include "world/CityGenerator.h"
 
 namespace {
+// More props than this cost more to simulate than a frame can spare.
+constexpr uint32_t kMaxProps = 20000;
 // Reads the value that follows an option, or throws when the command line ends too early.
 class ArgumentReader {
 public:
@@ -109,6 +111,12 @@ Options ParseCommandLine(int argc, char** argv) {
                 throw std::invalid_argument(option + " must be at most " + std::to_string(kMaxSatellites));
             }
             options.satelliteCount = static_cast<int>(count);
+        } else if (option == "--props") {
+            const uint32_t count = ParseUnsigned(option, arguments.ValueFor(option));
+            if (count > kMaxProps) {
+                throw std::invalid_argument(option + " must be at most " + std::to_string(kMaxProps));
+            }
+            options.propCount = count;
         } else if (option == "--no-terraces") {
             options.terraces = false;
         } else if (option == "--novsync") {
@@ -156,6 +164,7 @@ void PrintUsage() {
         "  --npcs N                 number of people (default 10000)\n"
         "  --satellites N           districts turned to their own angles around the city (0 to 8)\n"
         "  --no-terraces            keep the satellite districts level, with no terraces and stairs\n"
+        "  --props N                drop N crates, barrels and balls into the largest square, under physics\n"
         "  --sun DEGREES            sun elevation above the horizon (default 24)\n"
         "  --time SECONDS           world clock of the screenshot (0 to 3600); the crowd is simulated\n"
         "                           up to it\n"
