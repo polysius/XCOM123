@@ -36,8 +36,15 @@ uint8_t BandOf(float distanceSquared) {
 
 NpcInstance MakeNpcInstance(const AgentMotion& motion, const AgentLook& look, float gaitLength, float lagSeconds,
                             const Walkways& walkways) {
-    const glm::vec2 position = motion.position + motion.velocity * lagSeconds;
-    const float extraDistance = glm::length(motion.velocity) * lagSeconds;
+    // A person who is behind in time is drawn a little ahead along its velocity. That point is not
+    // always clear: walking towards a pew or a stall it can lie inside it. Such a person is drawn
+    // where the simulation put it, which is never inside anything.
+    glm::vec2 position = motion.position + motion.velocity * lagSeconds;
+    float extraDistance = glm::length(motion.velocity) * lagSeconds;
+    if (walkways.IsInsideObstacle(position)) {
+        position = motion.position;
+        extraDistance = 0.0f;
+    }
 
     NpcInstance instance;
     // The height is that of the ground where the person is drawn, which is a little past the stored

@@ -223,6 +223,9 @@ public:
     explicit WalkableSpaceCheck(const CityLayout& city) : plazas(city.plazas) {
         for (const Interior& interior : city.interiors) {
             plazas.push_back(interior.floor);  // rooms inside landmarks are walked in like squares
+            if (interior.hasPassage) {
+                plazas.push_back(interior.passage);  // and so are the ways in
+            }
         }
         roadHalfWidth = city.sidewalkCenterOffset - city.sidewalkWidth * 0.5f;
         outerEdge = city.sidewalkCenterOffset + city.sidewalkWidth * 0.5f;
@@ -389,6 +392,7 @@ struct SanityReport {
     size_t pavementsChecked = 0;      // points on the pavements, which the layout says people may stand on
     size_t pavementDisagreements = 0; // of those, the ones the crowd will not let a person stand on
     size_t indoors = 0;               // people standing on the floor of a room inside a landmark
+    size_t inDoorways = 0;            // people on the way in or out, on a passage but not on a floor
 };
 
 bool IsFinite(const NpcInstance& npc) {
@@ -434,6 +438,10 @@ SanityReport CheckCrowd(const Crowd& crowd, const CityLayout& city, glm::vec3 ca
         for (const Interior& interior : city.interiors) {
             if (interior.floor.Contains(point)) {
                 ++report.indoors;
+                break;
+            }
+            if (interior.hasPassage && interior.passage.Contains(point)) {
+                ++report.inDoorways;
                 break;
             }
         }
@@ -523,7 +531,8 @@ void RunBenchmark(const CityLayout& city, uint32_t agentCount, const BenchOption
               << sanity.obstacleDisagreements << " of " << sanity.obstaclesChecked << " obstacles and "
               << sanity.pavementDisagreements << " of " << sanity.pavementsChecked << " pavement points\n"
               << "  indoors: " << sanity.indoors << " of " << sanity.readBack << " people are inside the "
-              << city.interiors.size() << " rooms of the landmarks\n";
+              << city.interiors.size() << " rooms of the landmarks, " << crowd.WalkableSpace().Portals().size()
+              << " of them with a way in; " << sanity.inDoorways << " people are on their way through a passage\n";
 }
 
 }  // namespace

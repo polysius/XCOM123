@@ -234,10 +234,19 @@ struct Landmark {
 // A room inside a landmark where people can walk: the floor between its walls. Its furniture is
 // made of ordinary boxes, so the crowd treats it like a square with obstacles in it. `door` is
 // the middle of the room's doorway.
+//
+// A room with a passage can be entered: `passage` is the strip of ground people walk along from a
+// spot in the square outside (`outsideSpot`) through the doorways to a spot on the floor
+// (`insideSpot`). The strip is as narrow as the narrowest doorway and runs straight, and it lies
+// clear of obstacles.
 struct Interior {
     LandmarkKind kind;
     OrientedRect floor;
     glm::vec2 door;
+    bool hasPassage = false;
+    OrientedRect passage;
+    glm::vec2 outsideSpot{0.0f};
+    glm::vec2 insideSpot{0.0f};
 };
 
 // A street edge that crosses water, and the deck that carries it.

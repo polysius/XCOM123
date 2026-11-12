@@ -14,6 +14,7 @@ namespace {
 
 // Boxes that reach into this height range above the walking surface are in people's way.
 // Lower boxes are kerbs and paving; higher ones are ledges and balconies overhead.
+constexpr uint32_t kNoPlaza = 0xFFFFFFFFu;
 constexpr float kObstacleLowest = 0.25f;
 constexpr float kObstacleHighest = 1.6f;
 // Obstacle footprints are shrunk by this much before they are drawn into the grid, so that
@@ -52,6 +53,35 @@ void Walkways::Build(const CityLayout& city) {
     BuildArms();
     BuildCrosswalks();
     BuildObstacleGrid(city);
+    BuildPortals(city);
+}
+
+void Walkways::BuildPortals(const CityLayout& city) {
+    portals.clear();
+    portalsOfPlaza.assign(plazas.size(), {});
+    const uint32_t streetPlazaCount = static_cast<uint32_t>(city.plazas.size());
+    for (uint32_t room = 0; room < static_cast<uint32_t>(city.interiors.size()); ++room) {
+        const Interior& interior = city.interiors[room];
+        if (!interior.hasPassage) {
+            continue;
+        }
+        // The square outside is the first one that holds the spot. Without one, or with something
+        // standing on either spot, the room has no way in.
+        uint32_t outside = kNoPlaza;
+        for (uint32_t plaza = 0; plaza < streetPlazaCount && outside == kNoPlaza; ++plaza) {
+            if (plazas[plaza].Contains(interior.outsideSpot)) {
+                outside = plaza;
+            }
+        }
+        if (outside == kNoPlaza || !CanStandAt(interior.outsideSpot) || !CanStandAt(interior.insideSpot) ||
+            !IsPathFree(interior.outsideSpot, interior.insideSpot)) {
+            continue;
+        }
+        const uint32_t inside = streetPlazaCount + room;
+        portalsOfPlaza[outside].push_back(static_cast<uint32_t>(portals.size()));
+        portalsOfPlaza[inside].push_back(static_cast<uint32_t>(portals.size()));
+        portals.push_back({outside, inside, interior.passage, interior.outsideSpot, interior.insideSpot});
+    }
 }
 
 void Walkways::BuildArms() {
@@ -355,6 +385,11 @@ bool Walkways::IsWalkable(glm::vec2 point, float tolerance) const {
     }
     for (const OrientedRect& plaza : plazas) {
         if (plaza.Contains(point, tolerance)) {
+            return true;
+        }
+    }
+    for (const Portal& portal : portals) {
+        if (portal.passage.Contains(point, tolerance)) {
             return true;
         }
     }

@@ -53,6 +53,11 @@ constexpr float kStuckSpeedShare = 0.2f;
 constexpr float kWalkerStuckSeconds = 5.0f;
 constexpr float kStrollerStuckSeconds = 4.0f;
 constexpr uint32_t kGoalTries = 6;
+// The chance that a stroller who has finished a pause goes through a portal instead of strolling on.
+// Leaving a room is less likely than entering it, so that rooms keep most of the people who start in them.
+constexpr float kEnterRoomChance = 0.30f;
+constexpr float kLeaveRoomChance = 0.12f;
+constexpr float kPortalArriveDistance = 0.5f;
 
 // Animation -------------------------------------------------------------------------------
 
@@ -220,15 +225,67 @@ void StartStroll(const StepContext& context, AgentBehaviour& behaviour, glm::vec
     behaviour.stuckTimer = 0.0f;
 }
 
+// Sends the stroller towards a room or out of one, if its square has a portal and it feels like it.
+bool TryStartThroughPortal(const StepContext& context, AgentBehaviour& behaviour) {
+    const Walkways& walkways = context.walkways;
+    const std::vector<uint32_t>& portals = walkways.PortalsOfPlaza(behaviour.plaza);
+    if (portals.empty()) {
+        return false;
+    }
+    const uint32_t portalIndex = portals[HashInteger(behaviour.random) % portals.size()];
+    const Walkways::Portal& portal = walkways.Portals()[portalIndex];
+    const bool leaving = behaviour.plaza == portal.insidePlaza;
+    if (RandomUnit(behaviour.random) >= (leaving ? kLeaveRoomChance : kEnterRoomChance)) {
+        return false;
+    }
+    behaviour.portal = portalIndex;
+    behaviour.portalStage = 0;
+    behaviour.goal = leaving ? portal.insideSpot : portal.outsideSpot;  // the end of the passage on this side
+    behaviour.activity = Activity::Walking;
+    behaviour.stuckTimer = 0.0f;
+    return true;
+}
+
+// Walks to the near end of a portal, then along its passage to the far end, where the person
+// joins the square or the room on the other side.
+Intent PortalIntent(const StepContext& context, AgentBehaviour& behaviour, glm::vec2 position) {
+    const Walkways::Portal& portal = context.walkways.Portals()[behaviour.portal];
+    const bool leaving = behaviour.plaza == portal.insidePlaza;
+    const glm::vec2 toGoal = behaviour.goal - position;
+    const float distance = glm::length(toGoal);
+    if (distance < kPortalArriveDistance) {
+        if (behaviour.portalStage == 0) {
+            behaviour.portalStage = 1;
+            behaviour.goal = leaving ? portal.outsideSpot : portal.insideSpot;
+        } else {
+            behaviour.plaza = leaving ? portal.outsidePlaza : portal.insidePlaza;
+            behaviour.portal = kNoIndex;
+            behaviour.activity = Activity::Resting;
+            behaviour.activityTimer = RandomRange(behaviour.random, 1.0f, 4.0f);
+            return StandingIntent(GestureKind::None, 0.0f);
+        }
+    }
+    Intent intent;
+    intent.velocity = SafeNormalize(behaviour.goal - position) * behaviour.preferredSpeed;
+    return intent;
+}
+
 Intent PlazaWandererIntent(const StepContext& context, CrowdState& state, uint32_t agent) {
     AgentBehaviour& behaviour = state.behaviour[agent];
     const glm::vec2 position = state.motion[agent].position;
+
+    if (behaviour.portal != kNoIndex) {
+        return PortalIntent(context, behaviour, position);
+    }
 
     if (behaviour.activity != Activity::Walking) {
         behaviour.activityTimer -= context.deltaSeconds;
         if (behaviour.activityTimer > 0.0f) {
             const bool looking = behaviour.activity == Activity::LookingAround;
             return StandingIntent(looking ? GestureKind::LookAround : GestureKind::None, looking ? 1.0f : 0.0f);
+        }
+        if (TryStartThroughPortal(context, behaviour)) {
+            return PortalIntent(context, behaviour, position);
         }
         StartStroll(context, behaviour, position);
     }
@@ -345,13 +402,19 @@ glm::vec2 KeepOnWalkway(const StepContext& context, const CrowdState& state, uin
     const Walkways& walkways = context.walkways;
     const AgentBehaviour& behaviour = state.behaviour[agent];
     const bool walksStreets = behaviour.role == AgentRole::StreetWalker || behaviour.role == AgentRole::GroupFollower;
+    const bool inPassage = !walksStreets && behaviour.portal != kNoIndex && behaviour.portalStage == 1;
     // Strollers keep out of conversation circles, unless they somehow ended up in one.
     const bool respectReserved = behaviour.role == AgentRole::PlazaWanderer && walkways.CanStandAtUnreserved(previous);
 
     const glm::vec2 candidates[] = {next, {next.x, previous.y}, {previous.x, next.y}};
     for (glm::vec2 candidate : candidates) {
-        candidate = walksStreets ? ConstrainToRoute(walkways, state.routes[agent], previous, candidate)
-                                 : KeepInPlaza(walkways.Plazas()[behaviour.plaza], previous, candidate);
+        if (walksStreets) {
+            candidate = ConstrainToRoute(walkways, state.routes[agent], previous, candidate);
+        } else if (inPassage) {
+            candidate = KeepInPlaza(walkways.Portals()[behaviour.portal].passage, previous, candidate);
+        } else {
+            candidate = KeepInPlaza(walkways.Plazas()[behaviour.plaza], previous, candidate);
+        }
         const bool free = respectReserved ? walkways.CanStandAtUnreserved(candidate) : walkways.CanStandAt(candidate);
         if (free) {
             return candidate;
@@ -405,7 +468,14 @@ void UpdateStuckTimer(const StepContext& context, CrowdState& state, uint32_t ag
 
     if (behaviour.role == AgentRole::PlazaWanderer) {
         if (behaviour.stuckTimer > kStrollerStuckSeconds) {
-            StartStroll(context, behaviour, state.motion[agent].position);
+            // Someone stuck on the way to a portal gives up and strolls instead. In the passage there
+            // is no square to stroll in, so they keep trying to get through.
+            if (behaviour.portal != kNoIndex && behaviour.portalStage == 0) {
+                behaviour.portal = kNoIndex;
+            }
+            if (behaviour.portal == kNoIndex) {
+                StartStroll(context, behaviour, state.motion[agent].position);
+            }
         }
         return;
     }

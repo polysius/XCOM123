@@ -82,6 +82,9 @@ void AppendPart(CityLayout& city, const CityLayout& part, const Placement& place
     AppendEach(city.interiors, part.interiors, [&](Interior interior) {
         interior.floor = placement.Apply(interior.floor);
         interior.door = placement.Apply(interior.door);
+        interior.passage = placement.Apply(interior.passage);
+        interior.outsideSpot = placement.Apply(interior.outsideSpot);
+        interior.insideSpot = placement.Apply(interior.insideSpot);
         return interior;
     });
     AppendEach(city.streetLights, part.streetLights, [&](glm::vec3 light) { return PlaceOnGround(placement, light); });
