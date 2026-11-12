@@ -261,6 +261,7 @@ struct CityLayout {
     std::vector<OrientedRect> water;    // water surfaces of the river and the canal
     std::vector<std::vector<glm::vec2>> riverReaches;  // centre lines of the river beyond its straight part
     float riverReachHalfWidth = 0.0f;                  // half the width of the water along those reaches
+    std::vector<OrientedRect> riverCrossings;          // where the levee is lowered to the ground for a bridge
     std::vector<Bridge> bridges;
     std::vector<CityBlock> blocks;
     std::vector<Landmark> landmarks;

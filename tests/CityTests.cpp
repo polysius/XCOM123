@@ -145,6 +145,31 @@ OrientedRect StreetBand(const StreetGraph& streets, const StreetGraph::Edge& edg
     return SegmentStrip(streets.nodes[edge.from], streets.nodes[edge.to], -halfWidth, halfWidth, halfWidth);
 }
 
+// Where the line from `point` along `direction` passes through `rect`, as distances along the line.
+// False when it misses.
+bool LineThroughRect(const OrientedRect& rect, glm::vec2 point, glm::vec2 direction, float& from, float& to) {
+    const glm::vec2 start = rect.ToFrame(point);
+    const glm::vec2 along = rect.ToFrame(point + direction) - start;  // the direction in the rectangle's own frame
+    from = -INFINITY;
+    to = INFINITY;
+    for (int axis = 0; axis < 2; ++axis) {
+        if (std::abs(along[axis]) < 1e-6f) {
+            if (start[axis] < rect.area.min[axis] || start[axis] > rect.area.max[axis]) {
+                return false;
+            }
+            continue;
+        }
+        float near = (rect.area.min[axis] - start[axis]) / along[axis];
+        float far = (rect.area.max[axis] - start[axis]) / along[axis];
+        if (near > far) {
+            std::swap(near, far);
+        }
+        from = std::max(from, near);
+        to = std::min(to, far);
+    }
+    return from < to;
+}
+
 // The smallest axis-aligned rectangle, in the frame of `frame`, around `shape`.
 Rect BoundsInFrameOf(const OrientedRect& frame, const OrientedRect& shape) {
     glm::vec2 low(INFINITY);
@@ -475,29 +500,43 @@ void CheckWaterAndBridges(const CityLayout& city, bool expectRiver) {
         const StreetGraph::Edge& edge = city.streets.edges[bridge.edge];
         const glm::vec2 a = city.streets.nodes[edge.from];
         const glm::vec2 b = city.streets.nodes[edge.to];
-        // Everything is measured in the deck's own frame, where the deck is axis-aligned.
-        const glm::vec2 frameA = bridge.deck.ToFrame(a);
-        const glm::vec2 frameB = bridge.deck.ToFrame(b);
-        const bool alongX = std::abs(frameA.y - frameB.y) < kTolerance;
-        bool spansWater = false;
+        // Everything is measured along the street from its start: where the deck lies, and where the
+        // street passes through each piece of water, whichever way the water is turned.
+        const glm::vec2 direction = (b - a) / edge.length;
+        float deckFrom = INFINITY;
+        float deckTo = -INFINITY;
+        for (glm::vec2 corner : bridge.deck.Corners()) {
+            const float along = glm::dot(corner - a, direction);
+            deckFrom = std::min(deckFrom, along);
+            deckTo = std::max(deckTo, along);
+        }
+        bool overWater = false;
+        bool spansAll = true;
         for (const OrientedRect& water : city.water) {
-            if (!OverlapsBeyondTolerance(bridge.deck, water)) {
+            float waterFrom = 0.0f;
+            float waterTo = 0.0f;
+            if (!OverlapsBeyondTolerance(bridge.deck, water) || !LineThroughRect(water, a, direction, waterFrom, waterTo)) {
                 continue;
             }
-            // The deck must cover the water from bank to bank, and the street must start and
-            // end on land beyond it.
-            const Rect deck = bridge.deck.area;
-            const Rect waterInFrame = BoundsInFrameOf(bridge.deck, water);
-            const float deckLow = alongX ? deck.min.x : deck.min.y;
-            const float deckHigh = alongX ? deck.max.x : deck.max.y;
-            const float waterLow = alongX ? waterInFrame.min.x : waterInFrame.min.y;
-            const float waterHigh = alongX ? waterInFrame.max.x : waterInFrame.max.y;
-            const float streetLow = alongX ? std::min(frameA.x, frameB.x) : std::min(frameA.y, frameB.y);
-            const float streetHigh = alongX ? std::max(frameA.x, frameB.x) : std::max(frameA.y, frameB.y);
-            spansWater = deckLow <= waterLow + kTolerance && deckHigh >= waterHigh - kTolerance && streetLow < waterLow &&
-                         streetHigh > waterHigh;
+            overWater = true;
+            // The deck must cover the water from bank to bank, and the street must start and end on
+            // land beyond it.
+            spansAll = spansAll && deckFrom <= waterFrom + kTolerance && deckTo >= waterTo - kTolerance && waterFrom > 0.0f &&
+                       waterTo < edge.length;
+            // The street must meet the river at an angle that is not shallow.
+            // The river runs along the long side of the water, a leg of a reach being as long as it is
+            // wide. A rectangle's own X axis points along (cos yaw, -sin yaw) and its own Y axis along
+            // (sin yaw, cos yaw), and the Y axis counts only when that side is clearly the longer one,
+            // as it is for the canal.
+            const bool alongOwnX = water.Size().y < water.Size().x * 1.5f;
+            const glm::vec2 river = alongOwnX ? glm::vec2(std::cos(water.yaw), -std::sin(water.yaw))
+                                              : glm::vec2(std::sin(water.yaw), std::cos(water.yaw));
+            const float sine = std::abs(direction.x * river.y - direction.y * river.x);
+            Expect(sine >= 0.6f, "bridges",
+                   Format("the bridge on edge %.0f meets the river at only %.0f degrees", bridge.edge,
+                          std::asin(std::min(sine, 1.0f)) * 57.29578));
         }
-        Expect(spansWater, "bridges", Format("the bridge on edge %.0f does not join both banks", bridge.edge));
+        Expect(overWater && spansAll, "bridges", Format("the bridge on edge %.0f does not join both banks", bridge.edge));
         for (const OrientedRect& water : city.water) {
             Expect(!water.Contains(a) && !water.Contains(b), "bridges", Format("edge %.0f ends in the water", bridge.edge));
         }
@@ -563,6 +602,8 @@ void PrintSummary(const CityLayout& city, double milliseconds) {
         std::printf(" %s %zu,", DistrictName(district), count);
     }
     std::printf(" (%zu with houses)\n", buildingBlocks);
+
+    std::printf("  river crossings: %zu\n", city.riverCrossings.size());
 
     static const char* kLandmarkNames[] = {"cathedral", "palace", "market hall", "clock tower", "parish church"};
     std::printf("  landmarks:");
@@ -785,6 +826,39 @@ void CheckRiverBanks(const CityLayout& city) {
 
     const float water = city.riverReachHalfWidth;
     const float levee = city::kReachWallThickness;
+    // Where a bridge crosses, the levee is lowered to a sill level with the ground. There the wall
+    // must still be solid down into the water, but need not rise above the land.
+    auto inCrossing = [&](glm::vec2 point) {
+        for (const OrientedRect& crossing : city.riverCrossings) {
+            if (crossing.Contains(point)) {
+                return true;
+            }
+        }
+        return false;
+    };
+    auto lowestLeveeTop = [&](glm::vec2 point) { return inCrossing(point) ? -0.05f : 0.5f; };
+    // The road of a bridge is ground over the water, and is meant to be.
+    auto onBridge = [&](glm::vec2 point) {
+        for (const Bridge& bridge : city.bridges) {
+            if (bridge.deck.Contains(point, 0.5f)) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    // The levee is lowered only where a bridge crosses: every lowered piece must lie close to a deck.
+    constexpr float kMostFromDeck = 30.0f;
+    for (const OrientedRect& piece : city.riverCrossings) {
+        float nearest = INFINITY;
+        for (const Bridge& bridge : city.bridges) {
+            const glm::vec2 local = bridge.deck.ToFrame(piece.Center());
+            const glm::vec2 outside = glm::max(glm::max(bridge.deck.area.min - local, local - bridge.deck.area.max), glm::vec2(0.0f));
+            nearest = std::min(nearest, glm::length(outside));
+        }
+        Expect(nearest <= kMostFromDeck, "river banks",
+               Format("levee lowered %.0f m from the nearest bridge, at (%.1f, %.1f)", nearest, piece.Center().x, piece.Center().y));
+    }
 
     // The bends. At each vertex the water, the levee and the grass are checked along the bisector of
     // the bend, on both banks. A point on the bisector is closest to the vertex itself on the outside
@@ -806,7 +880,7 @@ void CheckRiverBanks(const CityLayout& city) {
                 const char* where = outside ? "outside" : "inside";
                 for (float across : {water + 0.15f, water + levee * 0.5f, water + levee - 0.15f}) {
                     const glm::vec2 point = at(across);
-                    if (!boxAt(point, CityPart::Embankment, 0.5f, -4.0f)) {
+                    if (!boxAt(point, CityPart::Embankment, lowestLeveeTop(point), -4.0f)) {
                         Fail("river banks", std::string("no levee on the ") + where + " of a bend at " +
                                                 Format("(%.1f, %.1f)", point.x, point.y));
                     }
@@ -833,7 +907,7 @@ void CheckRiverBanks(const CityLayout& city) {
                     // The water: nothing may lie over it.
                     for (float across : {0.0f, water - 0.3f}) {
                         const glm::vec2 point = onLine + side * (sign * across);
-                        if (boxAt(point, CityPart::Ground, -100.0f)) {
+                        if (!onBridge(point) && boxAt(point, CityPart::Ground, -100.0f)) {
                             Fail("river banks", Format("ground lies over the water at (%.1f, %.1f)", point.x, point.y));
                         }
                     }
@@ -844,7 +918,7 @@ void CheckRiverBanks(const CityLayout& city) {
                     for (float across : {water + 0.15f, water + levee * 0.5f, water + levee - 0.15f}) {
                         const glm::vec2 point = onLine + side * (sign * across);
                         // A wall that rises above the land and goes down into the water, not just a capstone.
-                        if (!boxAt(point, CityPart::Embankment, 0.5f, -4.0f)) {
+                        if (!boxAt(point, CityPart::Embankment, lowestLeveeTop(point), -4.0f)) {
                             Fail("river banks", Format("no levee at (%.1f, %.1f), %.1f m from the water", point.x, point.y,
                                                        across - water));
                         }
@@ -939,6 +1013,9 @@ void TestSeed(uint32_t seed, bool checkDeterminism, bool districtOnly = false, i
     PrintSummary(city, milliseconds);
 
     RunContractChecks(city, !districtOnly);
+    if (!districtOnly && satellites > 0 && seed == CitySettings{}.seed) {
+        Expect(!city.riverCrossings.empty(), "bridges", "the default city has no bridge over the bent river");
+    }
     if (checkDeterminism) {
         CheckDeterminism(settings, city);
     }

@@ -18,4 +18,13 @@ void BuildStreetsAndWater(const CityPlan& plan, uint32_t seed, BoxWriter& boxes,
 void BuildConnectorStreet(const std::vector<glm::vec2>& path, float roadHalfWidth, float streetHalfWidth,
                           Random& random, BoxWriter& boxes, CityLayout& city);
 
+// A bridge for a joining street where it crosses a reach of the river: the street runs from `origin`
+// along `direction`, graph edge `edge`, and the bridge spans `start` to `end` metres along it, from
+// land to land across the water and the levees. Its road and pavements are already laid by
+// BuildConnectorStreet. The levees are lowered to a stone sill level with the ground along the whole
+// crossing, so the street runs over them without a step, and the layout gains the bridge and the
+// crossing. The bridge may meet the river at any angle.
+void BuildRiverBridge(glm::vec2 origin, glm::vec2 direction, float start, float end, uint32_t edge, float roadHalfWidth,
+                      float streetHalfWidth, Random& random, BoxWriter& boxes, CityLayout& city);
+
 }  // namespace city
