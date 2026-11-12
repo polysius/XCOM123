@@ -157,7 +157,8 @@ enum GlassFlag : uint32_t {
 };
 
 enum MetalFlag : uint32_t {
-    kMetalRailing = 1,  // vertical balusters
+    kMetalRailing = 1,   // vertical balusters
+    kMetalVerdigris = 2, // weathered copper gone blue green, with rain streaks
 };
 
 inline float PatternSeed(uint32_t variant, float random01) {

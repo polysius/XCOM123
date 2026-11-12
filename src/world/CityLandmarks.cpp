@@ -331,7 +331,7 @@ void BuildPalace(BoxWriter& boxes, CityLayout& city, const Rect& land, Random& r
     Block(boxes, frame, pavilionFront - 0.5f, pavilionBack + 0.5f, -kPavilionHalf - 0.5f, kPavilionHalf + 0.5f,
           pavilionTop - 0.4f, pavilionTop + 0.1f, trim);
     const glm::vec2 domeCenter = frame.Point((pavilionFront + pavilionBack) * 0.5f, 0.0f);
-    const Look dome{kCopperPatina, SurfaceMaterial::Metal, 0.5f, 0.0f};
+    const Look dome{kCopperPatina, SurfaceMaterial::Metal, 0.5f, PatternSeed(kMetalVerdigris, 0.5f)};
     SquareBox(boxes, domeCenter, 9.0f, pavilionTop + 0.1f, pavilionTop + 3.4f, stone);
     const float domeSteps[][2] = {{8.6f, 2.4f}, {7.2f, 2.2f}, {5.3f, 1.8f}, {3.0f, 1.2f}};
     float domeBase = pavilionTop + 3.4f;
@@ -442,7 +442,7 @@ void BuildClockTower(BoxWriter& boxes, CityLayout& city, const Rect& land, Distr
     const Look trim{kTrimStone, SurfaceMaterial::Plain, 0.75f, 0.0f};
     const Look clock{kClockFace, SurfaceMaterial::Lamp, 0.4f, 0.0f};
     const Look louvres{kDarkOpening, SurfaceMaterial::Plain, 0.9f, 0.0f};
-    const Look copper{kCopperPatina, SurfaceMaterial::Metal, 0.5f, 0.0f};
+    const Look copper{kCopperPatina, SurfaceMaterial::Metal, 0.5f, PatternSeed(kMetalVerdigris, 0.5f)};
     const float towerU = frame.length - 9.0f;
     const glm::vec2 center = frame.Point(towerU, 0.0f);
     SquareBox(boxes, center, 5.5f, 0.0f, 4.5f, stone);
