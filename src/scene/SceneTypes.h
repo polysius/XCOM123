@@ -70,6 +70,17 @@ struct NpcInstance {
 };
 static_assert(sizeof(NpcInstance) == 48, "NpcInstance must match the shader instance layout");
 
+// The simulated surface of the river near one place: for every cell of a grid, how far the water is above its
+// still level, or -1000 where the cell has no water. Cell (0, 0) has its corner at `origin` (world X and Z), and
+// the cells run along X first.
+struct WaterField {
+    std::span<const float> offsets;
+    glm::vec2 origin{0.0f};
+    float cellSize = 0.0f;
+    int width = 0;
+    int height = 0;
+};
+
 // Everything the renderer needs to draw one frame.
 struct FrameInput {
     glm::mat4 view{1.0f};
@@ -80,4 +91,5 @@ struct FrameInput {
     std::span<const NpcInstance> npcs;
     std::span<const BodyInstance> bodyBoxes;    // props drawn as boxes
     std::span<const BodyInstance> bodySpheres;  // props drawn as spheres
+    WaterField water;                           // the simulated river, if there is one
 };

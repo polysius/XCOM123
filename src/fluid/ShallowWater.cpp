@@ -34,6 +34,9 @@ void ShallowWater::Initialise(const WaterSettings& waterSettings) {
     depth.assign(cells, 0.0f);
     solid.assign(cells, 0);
     outflowScale.assign(cells, 1.0f);
+    sponge.assign(cells, 0.0f);
+    restLevel = 0.0f;
+    pendingSeconds = 0.0f;
     flowU.assign(static_cast<size_t>(settings.width + 1) * static_cast<size_t>(settings.height), 0.0f);
     flowV.assign(static_cast<size_t>(settings.width) * static_cast<size_t>(settings.height + 1), 0.0f);
     scratchU = flowU;
@@ -61,7 +64,12 @@ void ShallowWater::SetDepth(int i, int j, float waterDepth) {
     }
 }
 
+void ShallowWater::SetSponge(int i, int j, float rate) {
+    sponge[Index(i, j)] = std::max(rate, 0.0f);
+}
+
 void ShallowWater::FillToLevel(float level) {
+    restLevel = level;
     for (size_t cell = 0; cell < depth.size(); ++cell) {
         depth[cell] = solid[cell] == 0 ? std::max(level - bed[cell], 0.0f) : 0.0f;
     }
@@ -219,6 +227,13 @@ void ShallowWater::SmallStep(float dt) {
         Advect(dt);
     }
     MoveWater(dt);
+    // In a sponge the surface is drawn back to the rest level, which takes the waves out of the water.
+    for (size_t cell = 0; cell < depth.size(); ++cell) {
+        if (sponge[cell] > 0.0f && solid[cell] == 0) {
+            const float rest = std::max(restLevel - bed[cell], 0.0f);
+            depth[cell] += (rest - depth[cell]) * std::min(sponge[cell] * dt, 1.0f);
+        }
+    }
 }
 
 // The water flows down the slope of its surface, and loses a little speed to the bed.
@@ -241,7 +256,8 @@ void ShallowWater::AccelerateByTheSurfaceSlope(float dt) {
         if ((!firstWet && bed[first] >= secondSurface) || (!secondWet && bed[second] >= firstSurface)) {
             return 0.0f;
         }
-        return (flow - push * (secondSurface - firstSurface)) * keep;
+        const float soak = 1.0f / (1.0f + 0.5f * (sponge[first] + sponge[second]) * dt);
+        return (flow - push * (secondSurface - firstSurface)) * keep * soak;
     };
     for (int j = 0; j < settings.height; ++j) {
         for (int i = 1; i < settings.width; ++i) {

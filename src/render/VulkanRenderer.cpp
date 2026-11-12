@@ -1,5 +1,6 @@
 #include "render/VulkanRenderer.h"
 
+#include <algorithm>
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
@@ -18,6 +19,9 @@ constexpr float kFogDensity = 0.0022f;
 constexpr std::array<std::string_view, 3> kPassNames = {"shadow", "scene", "tonemap"};
 // A screenshot frame can be skipped while the swapchain is rebuilt; try this many times.
 constexpr int kScreenshotAttempts = 4;
+
+// The header of the water field buffer: a vec4 and an ivec4, as the shader's WaterField block starts.
+constexpr VkDeviceSize kWaterFieldHeaderBytes = 32;
 
 // Mirrors FrameUniforms in shaders/common.glsl. It only holds mat4 and vec4 members, so the
 // C++ layout matches the shader's std140 layout without any padding rules to think about.
@@ -96,6 +100,7 @@ void VulkanRenderer::Shutdown() {
 
     for (FrameResources& frame : frames) {
         DestroyBuffer(device, frame.uniforms);
+        DestroyBuffer(device, frame.waterField);
         vkDestroyFence(device, frame.inFlight, nullptr);
         vkDestroySemaphore(device, frame.imageAvailable, nullptr);
         vkDestroyCommandPool(device, frame.commandPool, nullptr);  // also frees its command buffer
@@ -131,12 +136,15 @@ void VulkanRenderer::CreateFrameResources() {
 
         frame.uniforms = CreateMappedBuffer(context.device, context.physicalDevice, sizeof(FrameUniforms),
                                             VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+        frame.waterField = CreateMappedBuffer(context.device, context.physicalDevice, kWaterFieldHeaderBytes,
+                                              VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        std::memset(frame.waterField.mapped, 0, kWaterFieldHeaderBytes);  // no simulated river yet
     }
 }
 
 void VulkanRenderer::CreateSceneLayouts() {
     // Scene and shadow shaders read the per-frame uniforms and the shadow map.
-    VkDescriptorSetLayoutBinding bindings[2]{};
+    VkDescriptorSetLayoutBinding bindings[3]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
@@ -145,9 +153,13 @@ void VulkanRenderer::CreateSceneLayouts() {
     bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[1].descriptorCount = 1;
     bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[2].binding = 2;
+    bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[2].descriptorCount = 1;
+    bindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    layoutInfo.bindingCount = 2;
+    layoutInfo.bindingCount = 3;
     layoutInfo.pBindings = bindings;
     VkCheck(vkCreateDescriptorSetLayout(context.device, &layoutInfo, nullptr, &sceneSetLayout),
             "vkCreateDescriptorSetLayout");
@@ -162,10 +174,11 @@ void VulkanRenderer::CreateSceneDescriptors() {
     const VkDescriptorPoolSize poolSizes[] = {
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kFramesInFlight},
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kFramesInFlight},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kFramesInFlight},
     };
     VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     poolInfo.maxSets = kFramesInFlight;
-    poolInfo.poolSizeCount = 2;
+    poolInfo.poolSizeCount = 3;
     poolInfo.pPoolSizes = poolSizes;
     VkCheck(vkCreateDescriptorPool(context.device, &poolInfo, nullptr, &sceneDescriptorPool), "vkCreateDescriptorPool");
 
@@ -179,7 +192,8 @@ void VulkanRenderer::CreateSceneDescriptors() {
         const VkDescriptorBufferInfo uniformInfo{frame.uniforms.buffer, 0, sizeof(FrameUniforms)};
         const VkDescriptorImageInfo shadowInfo{shadowPass.ComparisonSampler(), shadowPass.MapView(),
                                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-        VkWriteDescriptorSet writes[2]{};
+        const VkDescriptorBufferInfo waterInfo{frame.waterField.buffer, 0, VK_WHOLE_SIZE};
+        VkWriteDescriptorSet writes[3]{};
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet = frame.sceneDescriptors;
         writes[0].dstBinding = 0;
@@ -192,7 +206,13 @@ void VulkanRenderer::CreateSceneDescriptors() {
         writes[1].descriptorCount = 1;
         writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         writes[1].pImageInfo = &shadowInfo;
-        vkUpdateDescriptorSets(context.device, 2, writes, 0, nullptr);
+        writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[2].dstSet = frame.sceneDescriptors;
+        writes[2].dstBinding = 2;
+        writes[2].descriptorCount = 1;
+        writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[2].pBufferInfo = &waterInfo;
+        vkUpdateDescriptorSets(context.device, 3, writes, 0, nullptr);
     }
 }
 
@@ -309,6 +329,34 @@ bool VulkanRenderer::RenderAndCapture(const FrameInput& input, const std::string
     return false;
 }
 
+void VulkanRenderer::WriteWaterField(FrameResources& frame, const WaterField& water) {
+    const size_t cells = static_cast<size_t>(std::max(water.width, 0)) * static_cast<size_t>(std::max(water.height, 0));
+    const bool present = cells > 0 && water.offsets.size() >= cells && water.cellSize > 0.0f;
+    const VkDeviceSize needed = kWaterFieldHeaderBytes + (present ? cells * sizeof(float) : 0);
+    if (needed > frame.waterField.size) {
+        // The slot's previous frame is finished, so its buffer can be replaced and the descriptor pointed at the new one.
+        DestroyBuffer(context.device, frame.waterField);
+        frame.waterField = CreateMappedBuffer(context.device, context.physicalDevice, needed, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        const VkDescriptorBufferInfo info{frame.waterField.buffer, 0, VK_WHOLE_SIZE};
+        VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        write.dstSet = frame.sceneDescriptors;
+        write.dstBinding = 2;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        write.pBufferInfo = &info;
+        vkUpdateDescriptorSets(context.device, 1, &write, 0, nullptr);
+    }
+    // The header is what shaders/lit.frag reads as WaterField: four floats, then four ints.
+    auto* header = static_cast<unsigned char*>(frame.waterField.mapped);
+    const float info[4] = {water.origin.x, water.origin.y, water.cellSize, 0.0f};
+    const int32_t size[4] = {water.width, water.height, present ? 1 : 0, 0};
+    std::memcpy(header, info, sizeof(info));
+    std::memcpy(header + sizeof(info), size, sizeof(size));
+    if (present) {
+        std::memcpy(header + kWaterFieldHeaderBytes, water.offsets.data(), cells * sizeof(float));
+    }
+}
+
 bool VulkanRenderer::DrawFrame(const FrameInput& input, bool captureScreenshot) {
     if (resizeRequested && !RecreateSwapchain()) {
         return false;  // the window is minimised
@@ -325,6 +373,7 @@ bool VulkanRenderer::DrawFrame(const FrameInput& input, bool captureScreenshot) 
     FeedResolutionController();
     geometry.WriteNpcs(context, frameSlot, input.npcs);
     geometry.WriteBodies(context, frameSlot, input.bodyBoxes, input.bodySpheres);
+    WriteWaterField(frame, input.water);
 
     uint32_t imageIndex = 0;
     const VkResult acquireResult = vkAcquireNextImageKHR(context.device, context.swapchain, UINT64_MAX,

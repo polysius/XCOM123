@@ -12,6 +12,14 @@
 
 layout(set = 0, binding = 1) uniform sampler2DShadow shadowMap;
 
+// The simulated river near one place, written by the engine every frame: how far the water surface is above its
+// still level in every cell of a grid, or -1000 where a cell has no water.
+layout(std430, set = 0, binding = 2) readonly buffer WaterField {
+    vec4 info;        // xy: world X and Z of the corner of cell (0, 0), z: the size of a cell in metres
+    ivec4 size;       // x: cells along X, y: cells along Z, z: 1 when there is a simulated river
+    float offsets[];  // cell by cell, along X first
+} waterField;
+
 layout(location = 0) in vec3 inWorldPosition;
 layout(location = 1) in vec3 inNormal;
 layout(location = 2) in vec3 inAlbedo;
@@ -459,8 +467,44 @@ vec2 WaveSlope(vec2 position, vec2 direction, float wavelength, float steepness,
     return direction * (steepness * cos(phase));
 }
 
+// How far the simulated water surface is above its still level at a world point, blended between the cells that
+// have water around it; 0 where there is none.
+float SimulatedWaterOffset(vec2 xz) {
+    vec2 inCells = (xz - waterField.info.xy) / waterField.info.z - 0.5;
+    ivec2 base = ivec2(floor(inCells));
+    vec2 t = fract(inCells);
+    float sum = 0.0;
+    float weights = 0.0;
+    for (int dz = 0; dz < 2; ++dz) {
+        for (int dx = 0; dx < 2; ++dx) {
+            ivec2 cell = base + ivec2(dx, dz);
+            if (cell.x < 0 || cell.y < 0 || cell.x >= waterField.size.x || cell.y >= waterField.size.y) {
+                continue;
+            }
+            float offset = waterField.offsets[cell.y * waterField.size.x + cell.x];
+            if (offset < -500.0) {
+                continue;
+            }
+            float weight = (dx == 0 ? 1.0 - t.x : t.x) * (dz == 0 ? 1.0 - t.y : t.y);
+            sum += weight * offset;
+            weights += weight;
+        }
+    }
+    return weights > 0.0001 ? sum / weights : 0.0;
+}
+
+// The slope of the simulated surface along X and Z there.
+vec2 SimulatedWaterSlope(vec2 xz) {
+    if (waterField.size.z == 0) {
+        return vec2(0.0);
+    }
+    float step = waterField.info.z;
+    return vec2(SimulatedWaterOffset(xz + vec2(step, 0.0)) - SimulatedWaterOffset(xz - vec2(step, 0.0)),
+                SimulatedWaterOffset(xz + vec2(0.0, step)) - SimulatedWaterOffset(xz - vec2(0.0, step))) / (2.0 * step);
+}
+
 // Calm river water: a few overlapping waves tilt the normal, and the sky does the rest through
-// the Fresnel reflection in the lighting below.
+// the Fresnel reflection in the lighting below. Where the river is simulated, its waves tilt it too.
 Surface WaterSurface(Surface surface, inout vec3 normal, vec3 position, Pattern pattern) {
     if (normal.y < 0.5) {
         return surface;  // the sides are hidden behind the quay walls
@@ -473,6 +517,7 @@ Surface WaterSurface(Surface surface, inout vec3 normal, vec3 position, Pattern 
     vec2 ripples = WaveSlope(p, vec2(0.954, -0.3), 2.3, 0.025, time)
                  + WaveSlope(p, vec2(-0.2, -0.98), 1.1, 0.02, time);
     slope += ripples * pattern.detailFade;
+    slope += SimulatedWaterSlope(p) * 2.0;  // the simulated waves are low, so they are drawn a little steeper
     normal = normalize(vec3(-slope.x, 1.0, -slope.y));
     surface.roughness = 0.05;
     surface.reflectance = 0.02;

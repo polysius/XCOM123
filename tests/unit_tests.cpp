@@ -235,6 +235,13 @@ void CommandLineReadsProps() {
     Check(IsRejected({"--props", "-3"}), "negative props");
 }
 
+void CommandLineReadsTheRiverSimulation() {
+    Check(!Parse({}).riverSimulation && Parse({}).rainPerSecond == 40, "the river is not simulated by default");
+    Check(Parse({"--river-sim"}).riverSimulation, "and --river-sim turns it on");
+    Check(Parse({"--rain", "300"}).rainPerSecond == 300, "rain");
+    Check(IsRejected({"--rain", "99999"}), "too much rain");
+}
+
 void ABodyIsDrawnWithTheLayoutOfABox() {
     Check(sizeof(BodyInstance) == sizeof(BoxInstance), "body.vert reads the same instance size as box.vert");
 }
@@ -511,6 +518,7 @@ int main() {
         {"CommandLineCanSwitchTerracesOff", CommandLineCanSwitchTerracesOff},
         {"CommandLineReadsSatellites", CommandLineReadsSatellites},
         {"CommandLineReadsProps", CommandLineReadsProps},
+        {"CommandLineReadsTheRiverSimulation", CommandLineReadsTheRiverSimulation},
         {"BenchmarkAndScreenshotTurnVsyncOff", BenchmarkAndScreenshotTurnVsyncOff},
         {"FrameSummaryOfNothingIsEmpty", FrameSummaryOfNothingIsEmpty},
         {"FrameSummaryUsesNearestRank", FrameSummaryUsesNearestRank},

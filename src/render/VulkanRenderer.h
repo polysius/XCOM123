@@ -61,6 +61,7 @@ private:
         VkSemaphore imageAvailable = VK_NULL_HANDLE;
         VkFence inFlight = VK_NULL_HANDLE;
         GpuBuffer uniforms;
+        GpuBuffer waterField;  // the simulated river: a small header, then the offset of every cell
         VkDescriptorSet sceneDescriptors = VK_NULL_HANDLE;
     };
 
@@ -76,6 +77,8 @@ private:
     // the frame was skipped (window minimised or the swapchain had to be rebuilt).
     bool DrawFrame(const FrameInput& input, bool captureScreenshot);
     void FeedResolutionController();
+    // Copies the simulated river of this frame into the slot's buffer, making the buffer bigger first when needed.
+    void WriteWaterField(FrameResources& frame, const WaterField& water);
     void WriteFrameUniforms(FrameResources& frame, const FrameInput& input, const glm::mat4& cameraViewProjection,
                             const glm::mat4& lightViewProjection) const;
     void RecordCommands(uint32_t frameSlot, uint32_t imageIndex, const glm::mat4& cameraViewProjection,
