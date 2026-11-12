@@ -165,6 +165,17 @@ if(MSVC)
 endif()
 add_test(NAME physics_tests COMMAND physics_tests)
 
+# fluid_tests checks the shallow water simulation: still water, wave speed, volume, slopes, dry ground.
+file(GLOB FLUID_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/fluid/*.cpp)
+add_executable(fluid_tests tests/FluidTests.cpp ${FLUID_SOURCES})
+target_include_directories(fluid_tests PRIVATE src)
+target_link_libraries(fluid_tests PRIVATE glm::glm)
+target_compile_definitions(fluid_tests PRIVATE GLM_FORCE_RADIANS GLM_FORCE_DEPTH_ZERO_TO_ONE)
+if(MSVC)
+    target_compile_options(fluid_tests PRIVATE /W4 /permissive- /MP)
+endif()
+add_test(NAME fluid_tests COMMAND fluid_tests)
+
 # ---------------------------------------------------------------------------
 # City generator tests
 # ---------------------------------------------------------------------------
