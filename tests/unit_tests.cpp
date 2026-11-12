@@ -202,6 +202,14 @@ void ARoomWithAFreePassageIsAPortal() {
     Check(!walkways.IsWalkable({0.0f, 4.0f}, 0.0f), "and the ground beside it is not");
 }
 
+void AConversationCannotStandOnAPassage() {
+    crowd::Walkways walkways;
+    walkways.Build(CityWithARoom());
+    Check(!walkways.IsDiscFree({0.0f, 0.0f}, 1.0f), "a disc on the passage is not free");
+    Check(!walkways.IsDiscFree({0.0f, 2.0f}, 1.5f), "nor one that reaches into it");
+    Check(walkways.IsDiscFree({-20.0f, 6.0f}, 1.0f), "a disc in the square away from the passage is free");
+}
+
 void ABlockedPassageIsNotAPortal() {
     CityLayout city = CityWithARoom();
     city.boxes.push_back({.center = {0.0f, 1.0f, 0.0f}, .halfSize = {0.5f, 1.0f, 0.5f}});
@@ -414,6 +422,7 @@ int main() {
         {"ObstacleFollowsAQuarterTurn", ObstacleFollowsAQuarterTurn},
         {"ObstacleFollowsADiagonalTurn", ObstacleFollowsADiagonalTurn},
         {"ARoomWithAFreePassageIsAPortal", ARoomWithAFreePassageIsAPortal},
+        {"AConversationCannotStandOnAPassage", AConversationCannotStandOnAPassage},
         {"ABlockedPassageIsNotAPortal", ABlockedPassageIsNotAPortal},
         {"APassageThatStartsOutsideEverySquareIsNotAPortal", APassageThatStartsOutsideEverySquareIsNotAPortal},
     };

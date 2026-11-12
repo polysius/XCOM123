@@ -423,8 +423,9 @@ glm::vec2 KeepOnWalkway(const StepContext& context, const CrowdState& state, uin
     const bool walksStreets = behaviour.role == AgentRole::StreetWalker || behaviour.role == AgentRole::GroupFollower;
     const bool inPassage = !walksStreets && behaviour.portal != kNoIndex && behaviour.portalStage >= 1;
     // Strollers keep out of conversation circles, unless they somehow ended up in one.
-    // Someone on their way through a portal ignores them: a circle beside the passage must not stop them.
-    const bool respectReserved = behaviour.role == AgentRole::PlazaWanderer && behaviour.portal == kNoIndex &&
+    // Someone in a passage ignores them, so a circle beside it cannot stop them there. Crossing the
+    // square to the passage they keep out of circles like any other stroller.
+    const bool respectReserved = behaviour.role == AgentRole::PlazaWanderer && !inPassage &&
                                  walkways.CanStandAtUnreserved(previous);
 
     const glm::vec2 candidates[] = {next, {next.x, previous.y}, {previous.x, next.y}};
