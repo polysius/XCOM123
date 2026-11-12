@@ -297,7 +297,10 @@ void PreRollWorld(Engine& engine, float seconds) {
         const float step = std::min(seconds, kPreRollTimeStep);
         engine.crowd.Update(step);
         if (engine.props.Count() > 0) {
-            engine.props.Update(step);
+            // The physics catches up in pieces of a frame, so that none of the time is dropped.
+            for (float left = step; left > 0.0f; left -= kFixedTimeStep) {
+                engine.props.Update(std::min(left, kFixedTimeStep));
+            }
         }
         seconds -= step;
     }

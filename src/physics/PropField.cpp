@@ -12,7 +12,9 @@ constexpr float kCellSize = 2.0f;          // props start in cells this wide, so
 constexpr int kMaxCellsAcross = 6;         // and in a heap no wider than this many cells
 constexpr float kOffCentre = 10.0f;        // the heap is this far from the middle of the square, clear of a fountain
 constexpr float kFirstLayerHeight = 3.0f;  // metres above the ground at which the lowest props start
-constexpr float kLayerSpacing = 1.4f;
+constexpr float kLayerSpacing = 2.0f;      // more than the widest prop, so that none starts inside another
+constexpr float kHighestFloor = 12.0f;     // a box with its top higher than this is not a floor: a tree or a roof
+constexpr float kFallDepth = 80.0f;        // props this far below the ground under the heap have fallen out of the world
 
 const glm::vec3 kWoods[] = {{0.52f, 0.36f, 0.20f}, {0.45f, 0.30f, 0.16f}, {0.60f, 0.45f, 0.26f}, {0.38f, 0.26f, 0.15f}};
 const glm::vec3 kBarrelPaints[] = {{0.45f, 0.10f, 0.08f}, {0.10f, 0.22f, 0.40f}, {0.12f, 0.32f, 0.16f}, {0.30f, 0.30f, 0.32f}};
@@ -45,6 +47,29 @@ BodyInstance MakeInstance(glm::vec3 halfSize, glm::vec3 color, SurfaceMaterial m
     instance.seed = seed;
     instance.orientation = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
     return instance;
+}
+
+// The height of the highest solid thing under `point` that a prop could stand on: the ground, pavement and
+// plaza, or the terrace the square stands on. Things above `ceiling` (trees, roofs) are not floors.
+float GroundHeightAt(const CityLayout& city, glm::vec2 point, float ceiling) {
+    float height = 0.0f;
+    for (size_t i = 0; i < city.boxes.size(); ++i) {
+        const BoxInstance& box = city.boxes[i];
+        const float top = box.center.y + box.halfSize.y;
+        if (city.boxParts[i] == CityPart::Water || top > ceiling || top <= height) {
+            continue;
+        }
+        // The point in the box's own axes, where the footprint is axis aligned.
+        const glm::vec2 offset = point - glm::vec2(box.center.x, box.center.z);
+        const float cosine = std::cos(box.yaw);
+        const float sine = std::sin(box.yaw);
+        const float alongX = offset.x * cosine - offset.y * sine;
+        const float alongZ = offset.x * sine + offset.y * cosine;
+        if (std::abs(alongX) <= box.halfSize.x && std::abs(alongZ) <= box.halfSize.z) {
+            height = top;
+        }
+    }
+    return height;
 }
 
 }  // namespace
@@ -89,6 +114,14 @@ void PropField::Spawn(const CityLayout& city, const PropSettings& settings) {
     const glm::vec2 low = heapCentre - size * 0.5f;
     dropCentre = area.FromFrame(heapCentre);
 
+    // The first layer starts above the highest ground under the heap, which may be a terrace.
+    float groundHeight = 0.0f;
+    const glm::vec2 corners[] = {size * 0.5f, {-size.x * 0.5f, size.y * 0.5f}, {size.x * 0.5f, -size.y * 0.5f}, -size * 0.5f, {0.0f, 0.0f}};
+    for (glm::vec2 corner : corners) {
+        groundHeight = std::max(groundHeight, GroundHeightAt(city, area.FromFrame(heapCentre + corner), kHighestFloor));
+    }
+    fallLimit = groundHeight - kFallDepth;
+
     std::mt19937 random(settings.seed * 2654435761u + 17u);
     for (uint32_t i = 0; i < settings.count; ++i) {
         const int cell = static_cast<int>(i) % perLayer;
@@ -98,7 +131,7 @@ void PropField::Spawn(const CityLayout& city, const PropSettings& settings) {
         const glm::vec2 ground = area.FromFrame(inFrame);
 
         BodyDescription description;
-        description.position = {ground.x, kFirstLayerHeight + static_cast<float>(layer) * kLayerSpacing, ground.y};
+        description.position = {ground.x, groundHeight + kFirstLayerHeight + static_cast<float>(layer) * kLayerSpacing, ground.y};
         const glm::vec3 axis = glm::normalize(glm::vec3(Unit(random) + 0.1f, Unit(random), Unit(random)));
         description.orientation = glm::angleAxis(Unit(random) * 6.2831853f, axis);
         description.linearVelocity = {(Unit(random) - 0.5f) * 2.0f, 0.0f, (Unit(random) - 0.5f) * 2.0f};
@@ -132,6 +165,14 @@ void PropField::Spawn(const CityLayout& city, const PropSettings& settings) {
 
 void PropField::Update(float seconds) {
     world.Update(seconds);
+    // A prop that has gone through the river, which has no floor, would fall for ever and never sleep.
+    for (const std::vector<uint32_t>* bodies : {&boxBodies, &sphereBodies}) {
+        for (uint32_t index : *bodies) {
+            if (world.GetBody(index).position.y < fallLimit) {
+                world.Disable(index);
+            }
+        }
+    }
     RefreshInstances();
 }
 

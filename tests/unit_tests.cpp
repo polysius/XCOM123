@@ -309,7 +309,7 @@ void PropsAreTheSameEveryTime() {
 void APropOnAHeightenedGroundIsDroppedOnItToo() {
     // The props fall on whatever is solid near the square, not only on ground at the level of the city.
     CityLayout city = CityWithASquare();
-    city.boxes.push_back({.center = {0.0f, 1.0f, 30.0f}, .halfSize = {30.0f, 1.0f, 20.0f}});  // a platform two metres high over the square
+    city.boxes.push_back({.center = {0.0f, 3.0f, 30.0f}, .halfSize = {30.0f, 3.0f, 20.0f}});  // a platform six metres high under the square
     city.boxParts.push_back(CityPart::Terrace);
     physics::PropField props;
     props.Spawn(city, {.count = 20, .seed = 3});
@@ -320,7 +320,21 @@ void APropOnAHeightenedGroundIsDroppedOnItToo() {
     for (const BodyInstance& instance : props.Boxes()) {
         lowest = std::min(lowest, instance.center.y);
     }
-    Check(lowest > 2.1f, "props rest on the platform, not under it, lowest centre " + std::to_string(lowest));
+    Check(lowest > 6.1f, "props start above a platform higher than the first layer and rest on it, lowest centre " +
+                             std::to_string(lowest));
+}
+
+void PropsThatFallOutOfTheWorldAreTakenOutOfTheSimulation() {
+    CityLayout city;  // no ground at all
+    city.bounds = {{-60.0f, -60.0f}, {60.0f, 60.0f}};
+    city.plazas.push_back(Rect{{-10.0f, -10.0f}, {10.0f, 10.0f}});
+    physics::PropField props;
+    props.Spawn(city, {.count = 30, .seed = 2});
+    for (int step = 0; step < 10 * 60; ++step) {
+        props.Update(1.0f / 60.0f);
+    }
+    Check(props.AwakeCount() == 0, "props that fell far below the world no longer cost anything, awake " +
+                                       std::to_string(props.AwakeCount()));
 }
 
 constexpr float kQuarterTurn = 1.5707964f;
@@ -523,6 +537,7 @@ int main() {
         {"PropsAreDroppedOverTheLargestSquare", PropsAreDroppedOverTheLargestSquare},
         {"PropsAreTheSameEveryTime", PropsAreTheSameEveryTime},
         {"APropOnAHeightenedGroundIsDroppedOnItToo", APropOnAHeightenedGroundIsDroppedOnItToo},
+        {"PropsThatFallOutOfTheWorldAreTakenOutOfTheSimulation", PropsThatFallOutOfTheWorldAreTakenOutOfTheSimulation},
         {"ARoomWithAFreePassageIsAPortal", ARoomWithAFreePassageIsAPortal},
         {"AConversationCannotStandOnAPassage", AConversationCannotStandOnAPassage},
         {"ABlockedPassageIsNotAPortal", ABlockedPassageIsNotAPortal},

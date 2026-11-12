@@ -54,6 +54,8 @@ struct BodyInstance {
     glm::vec4 orientation;  // a unit quaternion: x, y, z, then the scalar part w
 };
 static_assert(sizeof(BodyInstance) == 64, "BodyInstance must match the shader instance layout");
+static_assert(offsetof(BodyInstance, orientation) == offsetof(BoxInstance, yaw),
+              "body.vert reads the orientation where box.vert reads the turn");
 
 // One visible person.
 struct NpcInstance {

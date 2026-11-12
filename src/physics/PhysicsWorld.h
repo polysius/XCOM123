@@ -28,7 +28,7 @@ namespace physics {
 struct PhysicsSettings {
     glm::vec3 gravity{0.0f, -9.81f, 0.0f};
     float fixedStep = 1.0f / 120.0f;  // seconds simulated per step
-    int maxStepsPerUpdate = 8;        // a long frame is cut short rather than snowballing
+    int maxStepsPerUpdate = 12;       // a frame longer than this many steps is cut short rather than snowballing
     int solverIterations = 12;
     int positionIterations = 4;       // passes of the overlap removal
     float penetrationSlop = 0.005f;   // overlap that is left alone, so resting contacts do not jitter
@@ -63,6 +63,9 @@ public:
     void SetVelocity(uint32_t index, glm::vec3 linear, glm::vec3 angular);
     // Wakes a body and the whole group that sleeps with it.
     void Wake(uint32_t index);
+    // Takes a body out of the simulation for good: it stays where it is, as an immovable body, and costs
+    // almost nothing. For bodies that have fallen out of the world.
+    void Disable(uint32_t index);
 
     // Simulates `seconds`, in as many fixed steps as fit, carrying the remainder to the next call.
     void Update(float seconds);

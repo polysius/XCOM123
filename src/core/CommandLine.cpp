@@ -11,8 +11,8 @@
 #include "world/CityGenerator.h"
 
 namespace {
-// More props than this cost more to simulate than a frame can spare.
-constexpr uint32_t kMaxProps = 20000;
+// More props than this cost far more to simulate than a frame can spare.
+constexpr uint32_t kMaxProps = 5000;
 // Reads the value that follows an option, or throws when the command line ends too early.
 class ArgumentReader {
 public:

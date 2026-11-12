@@ -38,7 +38,8 @@ public:
     std::span<const BodyInstance> Boxes() const { return boxInstances; }
     std::span<const BodyInstance> Spheres() const { return sphereInstances; }
     const PhysicsWorld& World() const { return world; }
-    // The middle of the square the props were dropped over, on the ground.
+    // The middle of the heap the props were dropped in, on the ground. The heap stands a little off the
+    // middle of the square.
     glm::vec2 DropCentre() const { return dropCentre; }
 
 private:
@@ -46,6 +47,7 @@ private:
 
     PhysicsWorld world;
     glm::vec2 dropCentre{0.0f};
+    float fallLimit = -100.0f;  // props that fall below this height have left the world and are taken out
     std::vector<uint32_t> boxBodies;     // the world's bodies that are drawn as boxes, with their instances
     std::vector<uint32_t> sphereBodies;
     std::vector<BodyInstance> boxInstances;
