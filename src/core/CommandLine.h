@@ -19,6 +19,7 @@ struct Options {
     uint32_t npcCount = 10000;
     std::optional<int> satelliteCount;  // satellite districts around the city; unset keeps the generator's default
     bool terraces = true;               // whether satellite districts may stand on terraces
+    uint32_t propCount = 0;             // crates, barrels and balls dropped into the largest square
     bool vsync = true;
     bool showHelp = false;
 

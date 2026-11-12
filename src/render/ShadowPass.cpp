@@ -44,6 +44,8 @@ void ShadowPass::Create(const VulkanContext& context, VkPipelineLayout sceneLayo
     shadow.vertexShader = "box.vert";
     shadow.meshInput = MeshInput::Boxes;
     boxPipeline = CreateGraphicsPipeline(context.device, shadow);
+    shadow.vertexShader = "body.vert";
+    bodyPipeline = CreateGraphicsPipeline(context.device, shadow);
     shadow.vertexShader = "npc.vert";
     shadow.meshInput = MeshInput::People;
     npcPipeline = CreateGraphicsPipeline(context.device, shadow);
@@ -52,8 +54,10 @@ void ShadowPass::Create(const VulkanContext& context, VkPipelineLayout sceneLayo
 void ShadowPass::Destroy(VkDevice device) {
     vkDestroyPipeline(device, boxPipeline, nullptr);
     vkDestroyPipeline(device, npcPipeline, nullptr);
+    vkDestroyPipeline(device, bodyPipeline, nullptr);
     vkDestroySampler(device, comparisonSampler, nullptr);
     DestroyImage(device, shadowMap);
+    bodyPipeline = VK_NULL_HANDLE;
     boxPipeline = VK_NULL_HANDLE;
     npcPipeline = VK_NULL_HANDLE;
     comparisonSampler = VK_NULL_HANDLE;
@@ -121,6 +125,7 @@ void ShadowPass::Record(VkCommandBuffer cmd, const SceneGeometry& geometry, uint
     BeginRendering(cmd, {kMapSize, kMapSize}, nullptr, &depthAttachment);
     vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &lightViewProjection);
     geometry.DrawBoxes(cmd, boxPipeline);
+    geometry.DrawBodies(cmd, bodyPipeline, frameSlot);
     geometry.DrawNpcs(cmd, npcPipeline, frameSlot);
     vkCmdEndRendering(cmd);
 

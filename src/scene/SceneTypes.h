@@ -41,6 +41,22 @@ struct BoxInstance {
 };
 static_assert(sizeof(BoxInstance) == 64, "BoxInstance must match the shader instance layout");
 
+// A rigid body of the physics engine, drawn as a box or a sphere with its full orientation. The layout
+// is that of BoxInstance, with a quaternion where the box has its turn about the vertical axis, so that
+// shaders/body.vert reads the same instance data.
+struct BodyInstance {
+    glm::vec3 center;
+    float material;    // a SurfaceMaterial, stored as float for the shader
+    glm::vec3 halfSize;  // spheres: the radius on every axis
+    float roughness;
+    glm::vec3 color;
+    float seed;
+    glm::vec4 orientation;  // a unit quaternion: x, y, z, then the scalar part w
+};
+static_assert(sizeof(BodyInstance) == 64, "BodyInstance must match the shader instance layout");
+static_assert(offsetof(BodyInstance, orientation) == offsetof(BoxInstance, yaw),
+              "body.vert reads the orientation where box.vert reads the turn");
+
 // One visible person.
 struct NpcInstance {
     glm::vec3 position;  // feet position in world space
@@ -62,4 +78,6 @@ struct FrameInput {
     glm::vec3 sunDirection{0.0f, 1.0f, 0.0f};  // unit vector pointing towards the sun
     float timeSeconds = 0.0f;
     std::span<const NpcInstance> npcs;
+    std::span<const BodyInstance> bodyBoxes;    // props drawn as boxes
+    std::span<const BodyInstance> bodySpheres;  // props drawn as spheres
 };

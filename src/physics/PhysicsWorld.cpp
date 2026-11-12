@@ -199,6 +199,21 @@ void PhysicsWorld::Wake(uint32_t index) {
     sleepingGroups.erase(group);
 }
 
+void PhysicsWorld::Disable(uint32_t index) {
+    Body& body = bodies[index];
+    if (body.isStatic) {
+        return;
+    }
+    Wake(index);
+    body.isStatic = true;
+    body.inverseMass = 0.0f;
+    body.inverseInertiaLocal = glm::vec3(0.0f);
+    body.inverseInertiaWorld = glm::mat3(0.0f);
+    body.linearVelocity = glm::vec3(0.0f);
+    body.angularVelocity = glm::vec3(0.0f);
+    staticGridIsStale = true;
+}
+
 size_t PhysicsWorld::AwakeBodyCount() const {
     return static_cast<size_t>(std::count_if(bodies.begin(), bodies.end(), [](const Body& b) { return !b.isStatic && !b.isAsleep; }));
 }

@@ -32,8 +32,15 @@ public:
     // The GPU must have finished the slot's previous frame.
     void WriteNpcs(const VulkanContext& context, uint32_t frameSlot, std::span<const NpcInstance> npcs);
 
+    // Copies this frame's props into the slot's buffers, growing them first when needed.
+    // The GPU must have finished the slot's previous frame.
+    void WriteBodies(const VulkanContext& context, uint32_t frameSlot, std::span<const BodyInstance> boxes,
+                     std::span<const BodyInstance> spheres);
+
     void DrawBoxes(VkCommandBuffer cmd, VkPipeline pipeline) const;
     void DrawNpcs(VkCommandBuffer cmd, VkPipeline pipeline, uint32_t frameSlot) const;
+    // Draws the props of the slot: the boxes, then the spheres, with the body pipeline.
+    void DrawBodies(VkCommandBuffer cmd, VkPipeline pipeline, uint32_t frameSlot) const;
 
 private:
     struct Mesh {
@@ -48,13 +55,26 @@ private:
         uint32_t count = 0;  // people written for the frame being drawn from this slot
     };
 
+    // The props of one frame, as boxes and as spheres, each in an instance buffer of its own.
+    struct BodySlot {
+        GpuBuffer boxInstances;
+        GpuBuffer sphereInstances;
+        size_t boxCapacity = 0;
+        size_t sphereCapacity = 0;
+        uint32_t boxCount = 0;
+        uint32_t sphereCount = 0;
+    };
+
+    static void GrowBodyBuffer(const VulkanContext& context, GpuBuffer& buffer, size_t& capacity, size_t count);
     static Mesh UploadMesh(const VulkanContext& context, const MeshData& data);
     static void DestroyMesh(VkDevice device, Mesh& mesh);
     static void GrowNpcSlot(const VulkanContext& context, NpcSlot& slot, size_t npcCount);
 
     Mesh cubeMesh;
     Mesh personMesh;
+    Mesh sphereMesh;
     GpuBuffer boxInstances;
     uint32_t boxInstanceCount = 0;
     std::vector<NpcSlot> npcSlots;
+    std::vector<BodySlot> bodySlots;
 };

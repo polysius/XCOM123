@@ -37,4 +37,5 @@ private:
     VkPipelineLayout layout = VK_NULL_HANDLE;  // owned by the renderer
     VkPipeline boxPipeline = VK_NULL_HANDLE;
     VkPipeline npcPipeline = VK_NULL_HANDLE;
+    VkPipeline bodyPipeline = VK_NULL_HANDLE;
 };

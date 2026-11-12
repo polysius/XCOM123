@@ -918,6 +918,27 @@ void AnImpossiblyHeavyFastBodyDoesNotCorruptTheGround() {
     Check(IsFinite(world.GetBody(far)) && Near(world.GetBody(far).position.y, 0.5f, 0.02f), "and neither is a box far away");
 }
 
+void ALongUpdateStepIsNotSlowMotion() {
+    PhysicsWorld world;
+    const uint32_t ball = AddSphere(world, {0.0f, 10.0f, 0.0f});
+    for (int i = 0; i < 10; ++i) {
+        world.Update(0.1f);  // a slow frame: more than a handful of fixed steps each
+    }
+    Check(Near(world.GetBody(ball).position.y, 10.0f - 4.905f, 0.1f),
+          "a ball falls 4.9 m in a second of long updates, got " + std::to_string(10.0f - world.GetBody(ball).position.y));
+}
+
+void ADisabledBodyStaysWhereItIsAndCostsNothing() {
+    PhysicsWorld world;
+    const uint32_t ball = AddSphere(world, {0.0f, 10.0f, 0.0f});
+    Simulate(world, 0.5f);
+    world.Disable(ball);
+    const glm::vec3 where = world.GetBody(ball).position;
+    Simulate(world, 2.0f);
+    Check(world.GetBody(ball).position == where, "a disabled body does not move");
+    Check(world.AwakeBodyCount() == 0, "and is not awake");
+}
+
 }  // namespace
 
 int main() {
@@ -971,6 +992,8 @@ int main() {
         {"ABoxWellAboveAPlateStillMakesAFaceContact", ABoxWellAboveAPlateStillMakesAFaceContact},
         {"TwoFastBallsMeetingHeadOnDoNotPassThroughEachOther", TwoFastBallsMeetingHeadOnDoNotPassThroughEachOther},
         {"AnImpossiblyHeavyFastBodyDoesNotCorruptTheGround", AnImpossiblyHeavyFastBodyDoesNotCorruptTheGround},
+        {"ALongUpdateStepIsNotSlowMotion", ALongUpdateStepIsNotSlowMotion},
+        {"ADisabledBodyStaysWhereItIsAndCostsNothing", ADisabledBodyStaysWhereItIsAndCostsNothing},
     };
     for (const Test& test : tests) {
         const int failuresBefore = failureCount;

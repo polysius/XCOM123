@@ -38,6 +38,30 @@ MeshData CreateUnitCube() {
     return mesh;
 }
 
+MeshData CreateUnitSphere() {
+    constexpr int kRings = 12;
+    constexpr int kSegments = 20;
+    constexpr float kPi = 3.14159265f;
+    MeshData mesh;
+    for (int ring = 0; ring <= kRings; ++ring) {
+        const float theta = kPi * static_cast<float>(ring) / static_cast<float>(kRings);
+        for (int segment = 0; segment <= kSegments; ++segment) {
+            const float phi = 2.0f * kPi * static_cast<float>(segment) / static_cast<float>(kSegments);
+            const glm::vec3 point(std::sin(theta) * std::cos(phi), std::cos(theta), std::sin(theta) * std::sin(phi));
+            mesh.vertices.push_back({point, point, 0.0f});
+        }
+    }
+    // Two triangles per quad, wound counter-clockwise when seen from outside.
+    for (int ring = 0; ring < kRings; ++ring) {
+        for (int segment = 0; segment < kSegments; ++segment) {
+            const uint32_t a = static_cast<uint32_t>(ring * (kSegments + 1) + segment);
+            const uint32_t b = a + kSegments + 1;
+            mesh.indices.insert(mesh.indices.end(), {a, a + 1, b, a + 1, b + 1, b});
+        }
+    }
+    return mesh;
+}
+
 MeshData CreatePersonMesh() {
     MeshData mesh;
     // Legs hang from the hips at 0.9 m; npc.vert swings them around that height.

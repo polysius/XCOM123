@@ -22,6 +22,8 @@ void ScenePass::Create(const VulkanContext& context, VkPipelineLayout sceneLayou
     lit.vertexShader = "box.vert";
     lit.meshInput = MeshInput::Boxes;
     boxPipeline = CreateGraphicsPipeline(context.device, lit);
+    lit.vertexShader = "body.vert";
+    bodyPipeline = CreateGraphicsPipeline(context.device, lit);
     lit.vertexShader = "npc.vert";
     lit.meshInput = MeshInput::People;
     npcPipeline = CreateGraphicsPipeline(context.device, lit);
@@ -43,7 +45,9 @@ void ScenePass::Create(const VulkanContext& context, VkPipelineLayout sceneLayou
 void ScenePass::Destroy(VkDevice device) {
     vkDestroyPipeline(device, boxPipeline, nullptr);
     vkDestroyPipeline(device, npcPipeline, nullptr);
+    vkDestroyPipeline(device, bodyPipeline, nullptr);
     vkDestroyPipeline(device, skyPipeline, nullptr);
+    bodyPipeline = VK_NULL_HANDLE;
     boxPipeline = VK_NULL_HANDLE;
     npcPipeline = VK_NULL_HANDLE;
     skyPipeline = VK_NULL_HANDLE;
@@ -79,6 +83,7 @@ void ScenePass::Record(VkCommandBuffer cmd, const RenderTargets& targets, VkExte
     BeginRendering(cmd, renderExtent, &colorAttachment, &depthAttachment);
     vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &cameraViewProjection);
     geometry.DrawBoxes(cmd, boxPipeline);
+    geometry.DrawBodies(cmd, bodyPipeline, frameSlot);
     geometry.DrawNpcs(cmd, npcPipeline, frameSlot);
     // The sky goes last and only fills the pixels no geometry covered.
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, skyPipeline);

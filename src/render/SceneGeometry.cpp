@@ -7,11 +7,18 @@
 
 namespace {
 constexpr size_t kInitialNpcCapacity = 16384;
+constexpr size_t kInitialBodyCapacity = 1024;
 }  // namespace
 
 void SceneGeometry::Create(const VulkanContext& context, uint32_t frameSlots) {
     cubeMesh = UploadMesh(context, CreateUnitCube());
     personMesh = UploadMesh(context, CreatePersonMesh());
+    sphereMesh = UploadMesh(context, CreateUnitSphere());
+    bodySlots.resize(frameSlots);
+    for (BodySlot& slot : bodySlots) {
+        GrowBodyBuffer(context, slot.boxInstances, slot.boxCapacity, kInitialBodyCapacity);
+        GrowBodyBuffer(context, slot.sphereInstances, slot.sphereCapacity, kInitialBodyCapacity);
+    }
     npcSlots.resize(frameSlots);
     for (NpcSlot& slot : npcSlots) {
         GrowNpcSlot(context, slot, kInitialNpcCapacity);
@@ -21,6 +28,12 @@ void SceneGeometry::Create(const VulkanContext& context, uint32_t frameSlots) {
 void SceneGeometry::Destroy(VkDevice device) {
     DestroyMesh(device, cubeMesh);
     DestroyMesh(device, personMesh);
+    DestroyMesh(device, sphereMesh);
+    for (BodySlot& slot : bodySlots) {
+        DestroyBuffer(device, slot.boxInstances);
+        DestroyBuffer(device, slot.sphereInstances);
+    }
+    bodySlots.clear();
     DestroyBuffer(device, boxInstances);
     boxInstanceCount = 0;
     for (NpcSlot& slot : npcSlots) {
@@ -52,6 +65,31 @@ void SceneGeometry::WriteNpcs(const VulkanContext& context, uint32_t frameSlot, 
         std::memcpy(slot.instances.mapped, npcs.data(), npcs.size_bytes());
     }
     slot.count = static_cast<uint32_t>(npcs.size());
+}
+
+void SceneGeometry::WriteBodies(const VulkanContext& context, uint32_t frameSlot, std::span<const BodyInstance> boxes,
+                                std::span<const BodyInstance> spheres) {
+    BodySlot& slot = bodySlots[frameSlot];
+    GrowBodyBuffer(context, slot.boxInstances, slot.boxCapacity, boxes.size());
+    GrowBodyBuffer(context, slot.sphereInstances, slot.sphereCapacity, spheres.size());
+    if (!boxes.empty()) {
+        std::memcpy(slot.boxInstances.mapped, boxes.data(), boxes.size_bytes());
+    }
+    if (!spheres.empty()) {
+        std::memcpy(slot.sphereInstances.mapped, spheres.data(), spheres.size_bytes());
+    }
+    slot.boxCount = static_cast<uint32_t>(boxes.size());
+    slot.sphereCount = static_cast<uint32_t>(spheres.size());
+}
+
+void SceneGeometry::GrowBodyBuffer(const VulkanContext& context, GpuBuffer& buffer, size_t& capacity, size_t count) {
+    if (count <= capacity) {
+        return;
+    }
+    capacity = std::max(count, capacity * 2);
+    DestroyBuffer(context.device, buffer);
+    buffer = CreateMappedBuffer(context.device, context.physicalDevice, capacity * sizeof(BodyInstance),
+                                VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
 }
 
 void SceneGeometry::GrowNpcSlot(const VulkanContext& context, NpcSlot& slot, size_t npcCount) {
@@ -90,6 +128,27 @@ void SceneGeometry::DrawNpcs(VkCommandBuffer cmd, VkPipeline pipeline, uint32_t 
     vkCmdBindIndexBuffer(cmd, personMesh.indices.buffer, 0, VK_INDEX_TYPE_UINT32);
     // One draw call for the whole crowd.
     vkCmdDrawIndexed(cmd, personMesh.indexCount, slot.count, 0, 0, 0);
+}
+
+void SceneGeometry::DrawBodies(VkCommandBuffer cmd, VkPipeline pipeline, uint32_t frameSlot) const {
+    const BodySlot& slot = bodySlots[frameSlot];
+    if (slot.boxCount == 0 && slot.sphereCount == 0) {
+        return;
+    }
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    const VkDeviceSize offsets[] = {0, 0};
+    if (slot.boxCount > 0) {
+        const VkBuffer buffers[] = {cubeMesh.vertices.buffer, slot.boxInstances.buffer};
+        vkCmdBindVertexBuffers(cmd, 0, 2, buffers, offsets);
+        vkCmdBindIndexBuffer(cmd, cubeMesh.indices.buffer, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(cmd, cubeMesh.indexCount, slot.boxCount, 0, 0, 0);
+    }
+    if (slot.sphereCount > 0) {
+        const VkBuffer buffers[] = {sphereMesh.vertices.buffer, slot.sphereInstances.buffer};
+        vkCmdBindVertexBuffers(cmd, 0, 2, buffers, offsets);
+        vkCmdBindIndexBuffer(cmd, sphereMesh.indices.buffer, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(cmd, sphereMesh.indexCount, slot.sphereCount, 0, 0, 0);
+    }
 }
 
 SceneGeometry::Mesh SceneGeometry::UploadMesh(const VulkanContext& context, const MeshData& data) {
