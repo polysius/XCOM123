@@ -44,6 +44,8 @@ const uint FACADE_NARROW_BAYS = 4u;
 const uint FACADE_WIDE_BAYS = 8u;
 const uint FACADE_SHUTTERS = 16u;
 const uint FACADE_RUSTICATED = 32u;
+const uint FACADE_ARCHED = 64u;
+const uint FACADE_STUCCO = 128u;
 const uint ROOF_DORMERS = 1u;
 const uint GLASS_STAINED = 1u;
 const uint METAL_RAILING = 1u;
@@ -184,11 +186,56 @@ Pattern ComputePattern(vec3 normal, uint flags) {
 // Walls
 // ---------------------------------------------------------------------------------------------
 
+// How far a point of a window bay is inside a round-headed opening, in metres: negative inside,
+// positive outside. The opening is `halfWidth` either side of the middle of the bay, rises
+// straight from `bottom` and ends in a semicircle, all measured in metres up the storey.
+float ArchDistance(float acrossBay, float up, float halfWidth, float bottom, float top) {
+    float springLine = top - halfWidth;
+    vec2 fromCentre = vec2(abs(acrossBay), max(up - springLine, 0.0));
+    return max(length(fromCentre) - halfWidth, bottom - up);
+}
+
+// The window mask of one opening, and in `ring` the stone surround that frames it.
+float ArchedOpening(Pattern pattern, float bayFraction, float bayMetres, float up, vec2 acrossRange, vec2 upRange,
+                    out float ring) {
+    float halfWidth = (acrossRange.y - acrossRange.x) * 0.5 * bayMetres;
+    float acrossBay = (bayFraction - 0.5 * (acrossRange.x + acrossRange.y)) * bayMetres;
+    float distance = ArchDistance(acrossBay, up, halfWidth, upRange.x, upRange.y);
+    float blur = max(pattern.metresPerPixel * 1.5, 1e-3);
+    float opening = 1.0 - smoothstep(-blur, blur, distance);
+    float outer = 1.0 - smoothstep(0.14 - blur, 0.14 + blur, distance);
+    // A pale keystone wedge crowns the arch.
+    float keystone = (1.0 - smoothstep(0.11 - blur, 0.11 + blur, abs(acrossBay)))
+                   * smoothstep(upRange.y - 0.02 - blur, upRange.y - 0.02 + blur, up)
+                   * (1.0 - smoothstep(upRange.y + 0.26 - blur, upRange.y + 0.26 + blur, up));
+    ring = max(outer - opening, keystone);
+    return opening;
+}
+
+// Smooth hand-troweled plaster: soft trowel swirls, repainted patches, hairline cracks, and a
+// damp stain rising from the foot of the wall.
+Surface StuccoFinish(Surface surface, Pattern pattern, float height, float seedRandom) {
+    float swirls = ValueNoise(pattern.face * 2.2 + seedRandom * 29.0);
+    float patches = ValueNoise(pattern.face * 0.45 + seedRandom * 61.0);
+    surface.albedo *= mix(0.94, 1.04, swirls) * mix(0.93, 1.05, patches);
+    float crackLine = 1.0 - smoothstep(0.0, 0.02, abs(ValueNoise(pattern.face * vec2(1.3, 0.9) + seedRandom * 13.0) - 0.5));
+    surface.albedo *= 1.0 - 0.14 * crackLine * pattern.detailFade;
+    surface.albedo *= mix(0.78, 1.0, smoothstep(0.3, 1.8, height));
+    surface.roughness = 0.95;
+    return surface;
+}
+
 Surface FacadeSurface(Surface surface, vec3 normal, Pattern pattern, uint flags, float seedRandom) {
     if (abs(normal.y) > 0.5) {
         surface.albedo *= 0.55;  // flat top of a building, mostly hidden under its roof
         return surface;
     }
+    bool arched = (flags & FACADE_ARCHED) != 0u;
+    float archRing = 0.0;
+    // The width of one window bay in metres, found the same way as in ComputePattern.
+    bool facesX = abs(inLocalNormal.x) > 0.5;
+    float wallWidth = max(facesX ? inBoxSize.z : inBoxSize.x, 0.01);
+    float bayMetres = wallWidth / max(1.0, floor(wallWidth / BayWidth(flags)));
 
     float height = inLocalPosition.y;
     float bayFraction = fract(pattern.bay);
@@ -203,6 +250,11 @@ Surface FacadeSurface(Surface surface, vec3 normal, Pattern pattern, uint flags,
             // Tall shop fronts with a painted sign board above them.
             windowMask = Band(bayFraction, 0.12, 0.88, pattern.wallBlur.x) * Band(pattern.groundFloor, 0.05, 0.78, pattern.wallBlur.z);
             averageWindowCoverage = 0.76 * 0.73;
+            if (arched) {
+                windowMask = ArchedOpening(pattern, bayFraction, bayMetres, height, vec2(0.12, 0.88),
+                                           vec2(0.05, 0.78) * GROUND_FLOOR_HEIGHT, archRing);
+                averageWindowCoverage *= 0.9;
+            }
             float signBoard = Band(bayFraction, 0.06, 0.94, pattern.wallBlur.x) * Band(pattern.groundFloor, 0.81, 0.93, pattern.wallBlur.z);
             vec3 paint = mix(vec3(0.08, 0.16, 0.12), vec3(0.32, 0.08, 0.07), step(0.5, Hash(vec2(floor(pattern.bay), seedRandom * 53.0))));
             surface.albedo = mix(surface.albedo, paint, signBoard * pattern.wallSharpness);
@@ -210,6 +262,11 @@ Surface FacadeSurface(Surface surface, vec3 normal, Pattern pattern, uint flags,
             // A residential ground floor: smaller windows above a stone plinth.
             windowMask = Band(bayFraction, 0.32, 0.68, pattern.wallBlur.x) * Band(pattern.groundFloor, 0.3, 0.8, pattern.wallBlur.z);
             averageWindowCoverage = 0.36 * 0.5;
+            if (arched) {
+                windowMask = ArchedOpening(pattern, bayFraction, bayMetres, height, vec2(0.32, 0.68),
+                                           vec2(0.3, 0.8) * GROUND_FLOOR_HEIGHT, archRing);
+                averageWindowCoverage *= 0.9;
+            }
         }
         if ((flags & FACADE_RUSTICATED) != 0u) {
             // Deep horizontal grooves cut into the stone of the ground floor.
@@ -225,7 +282,12 @@ Surface FacadeSurface(Surface surface, vec3 normal, Pattern pattern, uint flags,
         // A pale stone ledge along every floor line, and a stone surround around each window.
         float ledge = mix(0.11, Band(floorFraction, -0.05, 0.06, pattern.wallBlur.y), pattern.wallSharpness);
         float surround = Band(bayFraction, 0.25, 0.75, pattern.wallBlur.x) * Band(floorFraction, 0.13, 0.87, pattern.wallBlur.y);
-        surface.albedo *= 1.0 + 0.15 * ledge + 0.1 * surround * pattern.wallSharpness;
+        surface.albedo *= 1.0 + 0.15 * ledge + (arched ? 0.0 : 0.1) * surround * pattern.wallSharpness;
+        if (arched) {
+            windowMask = ArchedOpening(pattern, bayFraction, bayMetres, floorFraction * UPPER_FLOOR_HEIGHT, vec2(0.30, 0.70),
+                                       vec2(0.18, 0.82) * UPPER_FLOOR_HEIGHT, archRing);
+            averageWindowCoverage *= 0.9;
+        }
         if ((flags & FACADE_SHUTTERS) != 0u) {
             // Painted wooden shutters folded back either side of the window.
             float shutters = (Band(bayFraction, 0.15, 0.29, pattern.wallBlur.x) + Band(bayFraction, 0.71, 0.85, pattern.wallBlur.x))
@@ -241,6 +303,10 @@ Surface FacadeSurface(Surface surface, vec3 normal, Pattern pattern, uint flags,
     // Large soft stains so walls are not one flat colour, and a darker plinth at the foot.
     float weathering = ValueNoise(vec2(pattern.along * 0.35, height * 0.12) + seedRandom * 57.0);
     surface.albedo *= mix(0.82, 1.06, weathering) * mix(0.8, 1.0, smoothstep(0.5, 0.7, height));
+    surface.albedo *= 1.0 + 0.2 * archRing * pattern.wallSharpness;
+    if ((flags & FACADE_STUCCO) != 0u) {
+        surface = StuccoFinish(surface, pattern, height, seedRandom);
+    }
     // Little sky reaches the bottom of a narrow street, and walls are dirtier there.
     surface.occlusion *= mix(0.55, 1.0, smoothstep(0.0, 9.0, inWorldPosition.y));
 

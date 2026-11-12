@@ -1085,8 +1085,44 @@ void CheckJunctionAngles(const CityLayout& city) {
     }
 }
 
+constexpr uint32_t kArchitectureFlags = city::kFacadeArched | city::kFacadeStucco;
+
+// The pattern flags the shader reads sit in the whole-number part of a box's seed.
+uint32_t PatternFlagsOf(const BoxInstance& box) {
+    return static_cast<uint32_t>(box.seed);
+}
+
+bool IsFacadeBox(const CityLayout& city, size_t i) {
+    return city.boxParts[i] == CityPart::Building && static_cast<uint32_t>(city.boxes[i].material) ==
+                                                         static_cast<uint32_t>(SurfaceMaterial::Facade);
+}
+
+// Round-headed windows and troweled plaster belong to the old quarter, the market and the
+// residential blocks. The grand district and the landmarks keep their square-cut stone.
+void CheckArchitecture(const CityLayout& city) {
+    for (size_t i = 0; i < city.boxes.size(); ++i) {
+        const uint32_t flags = PatternFlagsOf(city.boxes[i]);
+        if ((flags & kArchitectureFlags) == 0) {
+            continue;
+        }
+        if (city.boxParts[i] == CityPart::Landmark) {
+            Fail("architecture", Format("a landmark wall at (%.1f, %.1f) has arches or stucco", city.boxes[i].center.x,
+                                        city.boxes[i].center.z));
+            continue;
+        }
+        const glm::vec2 where(city.boxes[i].center.x, city.boxes[i].center.z);
+        for (const CityBlock& block : city.blocks) {
+            if (block.district == District::Grand && block.land.Contains(where)) {
+                Fail("architecture", Format("a grand district wall at (%.1f, %.1f) has arches or stucco", where.x, where.y));
+                break;
+            }
+        }
+    }
+}
+
 void RunContractChecks(const CityLayout& city, bool expectRiver) {
     const CityIndex index = BuildIndex(city);
+    CheckArchitecture(city);
     CheckBoxes(city);
     CheckStreetGraph(city);
     CheckJunctionAngles(city);
@@ -1182,6 +1218,23 @@ void TestSeed(uint32_t seed, bool checkDeterminism, bool districtOnly = false, i
             hasStair = hasStair || zone.rise > 0.0f;
         }
         Expect(hasTerrace && hasStair, "terrain", "the default city has no raised district with a stair");
+    }
+    if (!districtOnly && seed == CitySettings{}.seed) {
+        bool hasArches = false;
+        bool hasStucco = false;
+        CityLayout planted = city;
+        for (size_t i = 0; i < city.boxes.size(); ++i) {
+            if (IsFacadeBox(city, i)) {
+                hasArches = hasArches || (PatternFlagsOf(city.boxes[i]) & city::kFacadeArched) != 0;
+                hasStucco = hasStucco || (PatternFlagsOf(city.boxes[i]) & city::kFacadeStucco) != 0;
+            }
+            if (city.boxParts[i] == CityPart::Landmark) {
+                planted.boxes[i].seed = static_cast<float>(city::kFacadeArched) + 0.5f;  // an arched cathedral
+            }
+        }
+        Expect(hasArches && hasStucco, "architecture", "the default city has no arched or stuccoed buildings");
+        Expect(CountFailuresOf([&] { CheckArchitecture(planted); }) > 0, "architecture",
+               "the check did not notice a landmark with arched windows");
     }
     if (checkDeterminism) {
         CheckDeterminism(settings, city);
