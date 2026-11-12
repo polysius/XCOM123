@@ -96,6 +96,37 @@ void AddPews(BoxWriter& boxes, const LocalFrame& frame, const RoomSpec& room, co
     }
 }
 
+void AddColumns(BoxWriter& boxes, const LocalFrame& frame, const ColumnLayout& layout, const Look& stone) {
+    for (float u = layout.uFirst; u <= layout.uLast + 1e-3f; u += layout.spacing) {
+        for (float v : layout.rowV) {
+            const glm::vec2 at = frame.Point(u, v);
+            boxes.Footprint({at - glm::vec2(layout.halfSize), at + glm::vec2(layout.halfSize)}, kFloorBottom, layout.height, stone);
+        }
+    }
+}
+
+void AddHangingLamps(BoxWriter& boxes, const LocalFrame& frame, const RoomSpec& room, float spacing) {
+    constexpr float kHangingDrop = 4.5f;   // from the ceiling to the lamp
+    constexpr float kLampHalfSize = 0.35f;
+    constexpr float kLampHeight = 0.5f;
+    const Look lantern{{1.0f, 0.78f, 0.5f}, SurfaceMaterial::Lamp, 0.3f, 0.0f};
+    const Look chain{{0.05f, 0.05f, 0.055f}, SurfaceMaterial::Metal, 0.5f, 0.0f};
+    const float t = room.wallThickness;
+    const float ceiling = room.height - kCeilingThickness;
+    const float u0 = room.uFront + t + spacing * 0.5f;
+    const float u1 = room.uBack - t;
+    const float v0 = room.vLeft + t + spacing * 0.5f;
+    const float v1 = room.vRight - t;
+    for (float u = u0; u < u1; u += spacing) {
+        for (float v = v0; v < v1; v += spacing) {
+            const glm::vec2 at = frame.Point(u, v);
+            boxes.Footprint({at - glm::vec2(kLampHalfSize), at + glm::vec2(kLampHalfSize)}, ceiling - kHangingDrop - kLampHeight,
+                            ceiling - kHangingDrop, lantern);
+            boxes.Footprint({at - glm::vec2(0.03f), at + glm::vec2(0.03f)}, ceiling - kHangingDrop, ceiling, chain);
+        }
+    }
+}
+
 void AddAltar(BoxWriter& boxes, const LocalFrame& frame, float u, const Look& stone) {
     constexpr float kHalfDepth = 0.55f;
     constexpr float kHalfLength = 1.3f;

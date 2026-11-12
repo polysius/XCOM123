@@ -1142,7 +1142,7 @@ bool LandmarkObstacleAt(const CityLayout& city, glm::vec2 point) {
 }
 
 // A room people walk in must be closed: walls all round it except for its doorways, and a doorway
-// that nothing blocks. Only churches have walls; the market hall stands on open piers.
+// that nothing blocks. The market hall has no walls: it stands on open piers.
 void CheckInteriors(const CityLayout& city) {
     constexpr float kOutside = 0.4f;      // how far beyond the floor the wall is sampled
     constexpr float kStep = 0.5f;
@@ -1151,16 +1151,26 @@ void CheckInteriors(const CityLayout& city) {
     for (const Interior& interior : city.interiors) {
         const Rect floor = interior.floor.Bounds();
         Expect(floor.Area() > 50.0f, "interiors", "a room has hardly any floor");
-        if (interior.kind != LandmarkKind::ParishChurch) {
+        if (interior.kind == LandmarkKind::MarketHall) {
             continue;
         }
-        Expect(!LandmarkObstacleAt(city, interior.door), "interiors", "something blocks the doorway of a church");
-        const glm::vec2 size = floor.Size();
-        const bool longAlongX = size.x >= size.y;
+        Expect(!LandmarkObstacleAt(city, interior.door), "interiors", "something blocks the doorway of a hall");
+        // The doorways are in the front wall, the side of the floor nearest the door, and in the wall
+        // opposite it. Sides 0 and 1 run along X at the low and high Z, sides 2 and 3 along Z.
+        const glm::vec2 sideMiddles[4] = {{(floor.min.x + floor.max.x) * 0.5f, floor.min.y},
+                                          {(floor.min.x + floor.max.x) * 0.5f, floor.max.y},
+                                          {floor.min.x, (floor.min.y + floor.max.y) * 0.5f},
+                                          {floor.max.x, (floor.min.y + floor.max.y) * 0.5f}};
+        int frontSide = 0;
+        for (int side = 1; side < 4; ++side) {
+            if (glm::distance(sideMiddles[side], interior.door) < glm::distance(sideMiddles[frontSide], interior.door)) {
+                frontSide = side;
+            }
+        }
         for (int side = 0; side < 4; ++side) {
-            const bool alongX = side < 2;  // sides 0 and 1 run along X, at the low and high Z
+            const bool alongX = side < 2;
             const bool high = (side % 2) == 1;
-            const bool isEnd = alongX != longAlongX;
+            const bool isEnd = side == frontSide || side == (frontSide ^ 1);
             const float fixed = alongX ? (high ? floor.max.y + kOutside : floor.min.y - kOutside)
                                        : (high ? floor.max.x + kOutside : floor.min.x - kOutside);
             const float first = alongX ? floor.min.x : floor.min.y;
@@ -1172,7 +1182,7 @@ void CheckInteriors(const CityLayout& city) {
                 }
                 const glm::vec2 point = alongX ? glm::vec2(along, fixed) : glm::vec2(fixed, along);
                 if (!LandmarkObstacleAt(city, point)) {
-                    Fail("interiors", Format("a church has a gap in its wall at (%.1f, %.1f), floor from (%.1f, %.1f)", point.x,
+                    Fail("interiors", Format("a hall has a gap in its wall at (%.1f, %.1f), floor from (%.1f, %.1f)", point.x,
                                              point.y, floor.min.x, floor.min.y) +
                                           Format(" to (%.1f, %.1f)", floor.max.x, floor.max.y));
                     break;
@@ -1302,8 +1312,7 @@ void TestSeed(uint32_t seed, bool checkDeterminism, bool districtOnly = false, i
         }
         Expect(hasArches && hasStucco, "architecture", "the default city has no arched or stuccoed buildings");
         Expect(spires > 0, "architecture", "the default city has no belvedere with a copper spire");
-        Expect(!city.interiors.empty(), "interiors", "the default city has no room to walk in");
-        // A wall knocked out of a church must be noticed.
+        Expect(!city.interiors.empty(), "interiors", "the default city has no room to walk in");        // A wall knocked out of a church must be noticed.
         CityLayout breached = city;
         for (const Interior& interior : city.interiors) {
             if (interior.kind != LandmarkKind::ParishChurch) {

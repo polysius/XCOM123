@@ -8,6 +8,7 @@
 // the same thickness all round, and each of its two end walls may have a doorway in the middle.
 
 #include <optional>
+#include <vector>
 
 #include "world/CityFrame.h"
 
@@ -50,6 +51,22 @@ struct PewLayout {
     int rowsPerBlock;
 };
 void AddPews(BoxWriter& boxes, const LocalFrame& frame, const RoomSpec& room, const PewLayout& layout, const Look& wood);
+
+// Columns standing in rows along the room, at each of the given `rowV` across the room, every
+// `spacing` metres from `uFirst` to `uLast`.
+struct ColumnLayout {
+    float uFirst;
+    float uLast;
+    float spacing;
+    std::vector<float> rowV;
+    float halfSize;
+    float height;
+};
+void AddColumns(BoxWriter& boxes, const LocalFrame& frame, const ColumnLayout& layout, const Look& stone);
+
+// Lamps hanging from the ceiling of the room on a grid, glowing after dark. They hang above head height,
+// so people walk under them.
+void AddHangingLamps(BoxWriter& boxes, const LocalFrame& frame, const RoomSpec& room, float spacing);
 
 // A stone altar table with two candles, standing at (u, 0) and facing the front of the landmark.
 void AddAltar(BoxWriter& boxes, const LocalFrame& frame, float u, const Look& stone);
