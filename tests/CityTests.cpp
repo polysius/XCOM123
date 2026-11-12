@@ -1151,7 +1151,8 @@ void TestLiftedDistrict(uint32_t seed, const city::Placement& placement) {
            "a building planted in a street of the lifted district was not found");
 }
 
-void TestSeed(uint32_t seed, bool checkDeterminism, bool districtOnly = false, int satellites = 0) {
+void TestSeed(uint32_t seed, bool checkDeterminism, bool districtOnly = false, int satellites = 0,
+              bool terraces = true) {
     std::printf("seed %u%s", seed, districtOnly ? " (district only)" : "");
     if (satellites > 0) {
         std::printf(" with %d satellites", satellites);
@@ -1161,6 +1162,7 @@ void TestSeed(uint32_t seed, bool checkDeterminism, bool districtOnly = false, i
     settings.seed = seed;
     settings.districtOnly = districtOnly;
     settings.satelliteCount = satellites;
+    settings.terraces = terraces;
     if (districtOnly) {
         settings.citySize = 600.0f;
     }
@@ -1281,7 +1283,7 @@ int main(int argc, char** argv) {
         // Every seed in the range, with the same contract checks: CityTests --sweep 1 60 [--satellites N]
         const int satellites = options.mapSatellites >= 0 ? options.mapSatellites : CitySettings{}.satelliteCount;
         for (int seed = options.sweepFirst; seed <= options.sweepLast; ++seed) {
-            TestSeed(static_cast<uint32_t>(seed), false, false, satellites);
+            TestSeed(static_cast<uint32_t>(seed), false, false, satellites, options.mapTerraces);
         }
         if (totalFailures == 0) {
             std::printf("all city checks passed\n");

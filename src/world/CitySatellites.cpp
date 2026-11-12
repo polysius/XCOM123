@@ -47,13 +47,13 @@ constexpr float kMinCrossingSine = 0.64f;    // sine of the smallest angle betwe
 constexpr float kMaxCrossingBend = 55.0f * kDegree;  // the first bend may be sharper when the street heads for the river
 constexpr float kFarBank = 70.0f;            // the second bend lies this far past the levee on the far bank
 constexpr float kBridgeApproach = 12.0f;     // a bridge reaches this far past the levee, along the street's perpendicular
-constexpr float kLandBeforeBridge = 30.0f;
+constexpr float kLandBeforeBridge = 30.0f;   // the street keeps this much land between a bend and the bridge
 
 // A district on a terrace is reached by a stair up the last stretch of its street. The steps are
 // low and deep enough to walk comfortably, and the stair needs some street left before it.
 constexpr float kMaxStairRise = 0.17f;
 constexpr float kStairTread = 0.4f;
-constexpr float kStairClearance = 10.0f;  // street kept between the bend and the foot of the stair   // the street keeps this much land between a bend and the bridge
+constexpr float kStairClearance = 10.0f;  // street kept between the bend and the foot of the stair
 constexpr size_t kConnectorBoxAllowance = 1000;  // room kept for the street that joins a district
 
 // A T junction of a ring road, where a joining street can be attached without moving any edge.

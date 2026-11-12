@@ -25,10 +25,10 @@ constexpr float kLeveeOverlap = 6.0f;      // a levee starts this far back over 
 constexpr float kSillTop = -0.02f;         // the sill a bridge crosses stands a hair below the grass, which hides its edges
 constexpr float kSillMargin = 2.0f;        // the sill reaches this far past the ends of a bridge
 constexpr float kSillCutMargin = 1.5f;     // and this far past the stretch of levee the street crosses
-constexpr float kLeveeCapRise = 0.10f;
+constexpr float kLeveeCapRise = 0.10f;     // a levee capstone stands this far above the quay wall caps, so they never fight
 constexpr float kPlinthFoot = -1.0f;       // the plinth and the steps start at the underside of the grass
 constexpr float kStairCheek = 0.5f;        // the walls beside a stair are this thick
-constexpr float kStairParapet = 0.9f;      // and stand this far above the step beside them     // a levee capstone stands this far above the quay wall caps, so they never fight
+constexpr float kStairParapet = 0.9f;      // and stand this far above the step beside them
 
 const glm::vec3 kQuayStone{0.55f, 0.51f, 0.45f};
 const glm::vec3 kBridgeStone{0.62f, 0.58f, 0.51f};
