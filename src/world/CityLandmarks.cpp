@@ -127,6 +127,7 @@ void BuildCathedral(BoxWriter& boxes, CityLayout& city, const Rect& land, Random
     const Look door{kDoorWood, SurfaceMaterial::Plain, 0.7f, 0.0f};
     const Look louvres{kDarkOpening, SurfaceMaterial::Plain, 0.9f, 0.0f};
     const Look lead{kLead, SurfaceMaterial::Metal, 0.45f, 0.0f};
+    const Look floorStone = StoneLook(kTrimStone * 0.9f);  // no random draw, so the rest of the cathedral is unchanged
 
     const float halfWidth = frame.width * 0.5f;
     const float parvis = std::clamp(frame.length * 0.22f, 24.0f, 40.0f);
@@ -159,17 +160,38 @@ void BuildCathedral(BoxWriter& boxes, CityLayout& city, const Rect& land, Random
         SteppedSpire(boxes, tower, 4.4f, 55.4f, 15.0f, 4, lead);
         Block(boxes, frame, front - 0.06f, front + 0.1f, side * 8.0f, side * 12.0f, 0.15f, 6.0f, door);
     }
-    Block(boxes, frame, front, naveStart, -4.0f, 4.0f, 0.0f, 33.0f, stone);
+    // Between the towers the west front is hollow: a narthex behind the porch, open to the nave.
+    const RoomSpec narthex{front, naveStart, -4.0f, 4.0f, 33.0f, 0.8f, Doorway{2.2f, 8.0f}, Doorway{2.7f, 10.0f}};
+    BuildRoomWalls(boxes, frame, narthex, stone);
+    BuildRoomFloor(boxes, frame, narthex, floorStone);
+    BuildRoomCeiling(boxes, frame, narthex, Look{kTrimStone, SurfaceMaterial::Plain, 0.9f, 0.0f});
     Block(boxes, frame, front, front + 2.0f, -3.0f, 3.0f, 33.0f, 36.0f, stone);
     Block(boxes, frame, front, front + 2.0f, -1.5f, 1.5f, 36.0f, 38.5f, stone);
     Block(boxes, frame, front - 0.08f, front + 0.1f, -3.2f, 3.2f, 20.0f, 26.4f, glass);  // the rose window
     Block(boxes, frame, front - 0.4f, front + 0.4f, -16.0f, 16.0f, 14.0f, 15.0f, trim);  // the gallery
-    Block(boxes, frame, front - 1.2f, front, -3.4f, 3.4f, 0.0f, 9.6f, stone);           // the porch
+    for (float side : {-1.0f, 1.0f}) {
+        Block(boxes, frame, front - 1.2f, front, side * 2.4f, side * 3.4f, 0.0f, 9.6f, stone);  // the cheeks of the porch
+    }
     Block(boxes, frame, front - 1.2f, front, -2.4f, 2.4f, 9.6f, 11.4f, stone);
-    Block(boxes, frame, front - 1.28f, front - 1.1f, -2.2f, 2.2f, 0.15f, 8.0f, door);
 
     // Nave, aisles and transept, each under a stepped lead roof.
-    Block(boxes, frame, naveStart, naveEnd, -kNaveHalf, kNaveHalf, 0.0f, kNaveHeight, stone);
+    // The nave west of the crossing is a hall people can enter. The rest of the church stays solid.
+    const float hallEnd = crossing - 8.0f;
+    const RoomSpec hall{naveStart, hallEnd, -kNaveHalf, kNaveHalf, kNaveHeight, 0.8f, Doorway{2.7f, 10.0f}, std::nullopt};
+    BuildRoomWalls(boxes, frame, hall, stone);
+    BuildRoomFloor(boxes, frame, hall, floorStone);
+    BuildRoomCeiling(boxes, frame, hall, Look{kTrimStone, SurfaceMaterial::Plain, 0.9f, 0.0f});
+    AddPews(boxes, frame, hall, PewLayout{naveStart + 5.0f, hallEnd - 10.0f, 3.0f, 1.3f, 6}, Look{kDoorWood, SurfaceMaterial::Plain, 0.6f, 0.0f});
+    AddAltar(boxes, frame, hallEnd - 4.0f, floorStone);
+    AddHangingLamps(boxes, frame, hall, 7.0f);
+    Block(boxes, frame, crossing + 8.0f, naveEnd, -kNaveHalf, kNaveHalf, 0.0f, kNaveHeight, stone);
+    Interior nave{LandmarkKind::Cathedral, OrientedRect(RoomFloor(frame, hall)), frame.Point(naveStart + 0.4f, 0.0f)};
+    // Down the axis from the parvis square, through the porch, the narthex and the nave doorway to the aisle.
+    nave.hasPassage = true;
+    nave.passage = OrientedRect(frame.Area(front - 4.0f, naveStart + 4.0f, -1.0f, 1.0f));
+    nave.outsideSpot = frame.Point(front - 4.0f, 0.0f);
+    nave.insideSpot = frame.Point(naveStart + 4.0f, 0.0f);
+    city.interiors.push_back(nave);
     SteppedRoof(boxes, frame, naveStart, naveEnd, -kNaveHalf, kNaveHalf, kNaveHeight, 9.0f, 4, true, roof);
     for (float side : {-1.0f, 1.0f}) {
         Block(boxes, frame, naveStart, naveEnd, side * kNaveHalf, side * kAisleHalf, 0.0f, kAisleHeight, stone);
@@ -295,7 +317,20 @@ void BuildPalace(BoxWriter& boxes, CityLayout& city, const Rect& land, Random& r
     const float pavilionTop = WallHeight(4);
     const Look pavilionWalls{kPalaceStone, SurfaceMaterial::Facade, 0.85f, PatternSeed(design.facadeFlags, random.Unit())};
     const Look trim{kTrimStone, SurfaceMaterial::Plain, 0.75f, 0.0f};
-    Block(boxes, frame, pavilionFront, pavilionBack, -kPavilionHalf, kPavilionHalf, 0.0f, pavilionTop, pavilionWalls);
+    // The central pavilion is a hall behind the portico: columns in two rows, lamps hanging from the ceiling.
+    const RoomSpec hall{pavilionFront, pavilionBack, -kPavilionHalf, kPavilionHalf, pavilionTop, 1.0f, Doorway{3.5f, 8.0f}, std::nullopt};
+    BuildRoomWalls(boxes, frame, hall, pavilionWalls);
+    BuildRoomFloor(boxes, frame, hall, StoneLook(kTrimStone * 0.9f));
+    BuildRoomCeiling(boxes, frame, hall, Look{kTrimStone, SurfaceMaterial::Plain, 0.9f, 0.0f});
+    AddColumns(boxes, frame, ColumnLayout{pavilionFront + 5.0f, pavilionBack - 5.0f, 6.0f, {-5.0f, 5.0f}, 0.5f, pavilionTop - 0.35f}, stone);
+    AddHangingLamps(boxes, frame, hall, 6.0f);
+    Interior palaceHall{LandmarkKind::Palace, OrientedRect(RoomFloor(frame, hall)), frame.Point(pavilionFront + 0.5f, 0.0f)};
+    // Straight in from the court, between the two middle columns of the portico.
+    palaceHall.hasPassage = true;
+    palaceHall.passage = OrientedRect(frame.Area(court - 8.0f, pavilionFront + 8.0f, -1.0f, 1.0f));
+    palaceHall.outsideSpot = frame.Point(court - 8.0f, 0.0f);
+    palaceHall.insideSpot = frame.Point(pavilionFront + 8.0f, 0.0f);
+    city.interiors.push_back(palaceHall);
     Block(boxes, frame, pavilionFront - 0.5f, pavilionBack + 0.5f, -kPavilionHalf - 0.5f, kPavilionHalf + 0.5f,
           pavilionTop - 0.4f, pavilionTop + 0.1f, trim);
     const glm::vec2 domeCenter = frame.Point((pavilionFront + pavilionBack) * 0.5f, 0.0f);
@@ -311,6 +346,9 @@ void BuildPalace(BoxWriter& boxes, CityLayout& city, const Rect& land, Random& r
     SquareBox(boxes, domeCenter, 1.7f, domeBase + 2.2f, domeBase + 2.6f, dome);
     SquareBox(boxes, domeCenter, 0.25f, domeBase + 2.6f, domeBase + 5.0f, dome);
     for (float v = -7.5f; v <= 7.51f; v += 3.0f) {
+        if (std::abs(v) < 3.0f) {
+            continue;  // the doorway is between the middle columns
+        }
         SquareBox(boxes, frame.Point(pavilionFront - 1.6f, v), 0.55f, 0.0f, 11.0f, stone);
     }
     Block(boxes, frame, pavilionFront - 2.4f, pavilionFront, -8.3f, 8.3f, 11.0f, 12.6f, trim);
@@ -473,6 +511,7 @@ void BuildParishChurch(BoxWriter& boxes, CityLayout& city, const Rect& land, Dis
     }
     AddPews(boxes, frame, nave, PewLayout{naveStart + 4.0f, naveEnd - 6.0f, 2.4f, 1.2f, 5}, wood);
     AddAltar(boxes, frame, naveEnd + 4.5f, floorStone);
+    AddHangingLamps(boxes, frame, nave, 6.0f);
     // People walk in from the forecourt along the axis of the church, through the west door, the
     // vestibule and the nave doorway, to the central aisle. The strip is narrower than every doorway.
     constexpr float kPassageStart = 13.0f;  // inside the forecourt square, which reaches at least this far
