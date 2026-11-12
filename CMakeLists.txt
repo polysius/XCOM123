@@ -153,6 +153,17 @@ if(MSVC)
 endif()
 add_test(NAME unit_tests COMMAND unit_tests)
 
+# physics_tests checks the rigid body physics: falling, resting, stacking, bouncing, friction, sleeping.
+file(GLOB PHYSICS_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/physics/*.cpp)
+add_executable(physics_tests tests/PhysicsTests.cpp ${PHYSICS_SOURCES})
+target_include_directories(physics_tests PRIVATE src)
+target_link_libraries(physics_tests PRIVATE glm::glm)
+target_compile_definitions(physics_tests PRIVATE GLM_FORCE_RADIANS GLM_FORCE_DEPTH_ZERO_TO_ONE)
+if(MSVC)
+    target_compile_options(physics_tests PRIVATE /W4 /permissive- /MP)
+endif()
+add_test(NAME physics_tests COMMAND physics_tests)
+
 # ---------------------------------------------------------------------------
 # City generator tests
 # ---------------------------------------------------------------------------
