@@ -22,6 +22,7 @@
 #include "world/CityComposition.h"
 #include "world/CityGenerator.h"
 #include "world/CityPlan.h"
+#include "world/CityStreets.h"
 #include "world/TerrainField.h"
 
 namespace {
@@ -611,6 +612,17 @@ void PrintSummary(const CityLayout& city, double milliseconds) {
     std::printf(" (%zu with houses)\n", buildingBlocks);
 
     std::printf("  river crossings: %zu\n", city.riverCrossings.size());
+    std::printf("  terraces:");
+    size_t stairCount = 0;
+    for (const TerrainZone& zone : city.terrain) {
+        if (zone.rise > 0.0f) {
+            ++stairCount;
+        } else {
+            std::printf(" %.1f m at (%.0f, %.0f),", double(zone.startLift), double(zone.area.Center().x),
+                        double(zone.area.Center().y));
+        }
+    }
+    std::printf(" and %zu stairs\n", stairCount);
 
     static const char* kLandmarkNames[] = {"cathedral", "palace", "market hall", "clock tower", "parish church"};
     std::printf("  landmarks:");
@@ -731,6 +743,7 @@ struct Options {
     std::string mapPath;
     uint32_t mapSeed = CitySettings{}.seed;
     int mapSatellites = -1;  // negative keeps the generator's default
+    bool mapTerraces = true;
     int sweepFirst = -1;     // with --sweep, the seeds sweepFirst to sweepLast are checked instead of the fixed list
     int sweepLast = -1;
     bool hasWindow = false;
@@ -751,6 +764,8 @@ Options ParseOptions(int argc, char** argv) {
             options.sweepFirst = std::atoi(argv[i + 1]);
             options.sweepLast = std::atoi(argv[i + 2]);
             i += 2;
+        } else if (argument == "--terraces" && hasValue) {
+            options.mapTerraces = std::atoi(argv[++i]) != 0;
         } else if (argument == "--satellites" && hasValue) {
             options.mapSatellites = std::atoi(argv[++i]);
             if (options.mapSatellites < 0 || options.mapSatellites > kMaxSatellites) {
@@ -941,10 +956,90 @@ void CheckRiverBanks(const CityLayout& city) {
     }
 }
 
+// Terrain: a point has one height, so no two zones may overlap (a stair only touches the terrace it
+// climbs to); a stair must be walkable and join the ground below and the terrace above exactly; and
+// under every terrace and stair there is stone from the ground up, with no void.
+void CheckTerrain(const CityLayout& city) {
+    if (city.terrain.empty()) {
+        return;
+    }
+    const TerrainField field(city.terrain);
+    for (size_t i = 0; i < city.terrain.size(); ++i) {
+        for (size_t j = i + 1; j < city.terrain.size(); ++j) {
+            Expect(!OverlapsBeyondTolerance(city.terrain[i].area, city.terrain[j].area), "terrain",
+                   "two terrain zones overlap, so a point would have two heights");
+        }
+    }
+
+    Rect area = city.bounds.Expanded(50.0f);
+    BoxGrid grid(area, 16.0f);
+    for (uint32_t i = 0; i < city.boxes.size(); ++i) {
+        if (city.boxParts[i] == CityPart::Terrace || city.boxParts[i] == CityPart::Stair) {
+            grid.Insert(i, FootprintOf(city.boxes[i]));
+        }
+    }
+    // Stone under `point`, from the ground up to a surface `lift` above the level of the city.
+    auto solidUnder = [&](glm::vec2 point, float lift, CityPart part) {
+        bool found = false;
+        grid.Visit({point, point}, [&](uint32_t i) {
+            found = found || (city.boxParts[i] == part && BottomOf(city.boxes[i]) <= 0.0f &&
+                              TopOf(city.boxes[i]) >= lift - kTolerance && FootprintOf(city.boxes[i]).Contains(point));
+        });
+        return found;
+    };
+
+    constexpr float kMostRise = 0.18f;
+    constexpr float kLeastTread = 0.35f;
+    for (const TerrainZone& zone : city.terrain) {
+        const OrientedRect& rect = zone.area;
+        if (zone.rise <= 0.0f) {
+            // A terrace: sample the whole of it for stone below.
+            const glm::vec2 low = rect.area.min;
+            const glm::vec2 high = rect.area.max;
+            for (float x = low.x + 2.0f; x < high.x; x += 25.0f) {
+                for (float z = low.y + 2.0f; z < high.y; z += 25.0f) {
+                    const glm::vec2 point = rect.FromFrame({x, z});
+                    if (!solidUnder(point, zone.startLift, CityPart::Terrace)) {
+                        Fail("terrain", Format("no stone under the terrace at (%.1f, %.1f)", point.x, point.y));
+                    }
+                }
+            }
+            continue;
+        }
+
+        Expect(zone.rise <= kMostRise + 1e-4f, "terrain", Format("a stair rises %.3f m a step", zone.rise));
+        Expect(zone.tread >= kLeastTread - 1e-4f, "terrain", Format("a stair has a tread of only %.3f m", zone.tread));
+        const float width = rect.area.max.x - rect.area.min.x;
+        const float steps = std::ceil(width / zone.tread - 0.01f);
+        const float topLift = zone.startLift + steps * zone.rise;
+        // The ground just past each end, on the stair's axis: level at the foot, the terrace at the top.
+        const float axis = (rect.area.min.y + rect.area.max.y) * 0.5f;
+        const float foot = field.LiftAt(rect.FromFrame({rect.area.min.x - 0.5f, axis}));
+        const float top = field.LiftAt(rect.FromFrame({rect.area.max.x + 0.5f, axis}));
+        Expect(std::abs(foot - zone.startLift) < 0.01f, "terrain", Format("the foot of a stair is %.2f m off the ground", foot - zone.startLift));
+        Expect(std::abs(top - topLift) < 0.01f, "terrain", Format("a stair ends %.2f m from the terrace it climbs to", top - topLift));
+        // Stone from the ground up under every step, and the step's top at the height the crowd stands.
+        for (float along = zone.tread * 0.5f; along < width; along += zone.tread) {
+            const glm::vec2 point = rect.FromFrame({rect.area.min.x + along, axis});
+            const float lift = field.LiftAt(point);
+            if (!solidUnder(point, city.walkHeight + lift, CityPart::Stair)) {
+                Fail("terrain", Format("no step under (%.1f, %.1f)", point.x, point.y));
+            }
+        }
+    }
+}
+
 // A street's carriageway must be level with the road along its whole length: no pavement may lie
 // across it, or the street would end at a kerb. This looks along every centre line.
 void CheckRoadsStayClear(const CityLayout& city, const CityIndex& index) {
     const float roadHalf = city.roadWidth * 0.5f;
+    // The steps of a stair stand in the road, and are meant to: nowhere else may a surface do that.
+    std::vector<const OrientedRect*> stairs;
+    for (const TerrainZone& zone : city.terrain) {
+        if (zone.rise > 0.0f) {
+            stairs.push_back(&zone.area);
+        }
+    }
     for (uint32_t e = 0; e < city.streets.edges.size(); ++e) {
         const StreetGraph::Edge& edge = city.streets.edges[e];
         const glm::vec2 a = city.streets.nodes[edge.from];
@@ -954,7 +1049,11 @@ void CheckRoadsStayClear(const CityLayout& city, const CityIndex& index) {
             // The middle of the road and a point near each kerb.
             for (float across : {0.0f, -roadHalf * 0.8f, roadHalf * 0.8f}) {
                 const glm::vec2 point = a + direction * along + side * across;
-                if (IsOnPavement(city, index, point)) {
+                bool onStair = false;
+                for (const OrientedRect* stair : stairs) {
+                    onStair = onStair || stair->Contains(point, kTolerance);
+                }
+                if (!onStair && IsOnPavement(city, index, point)) {
                     Fail("road clear", Format("pavement lies across the road at (%.1f, %.1f) on edge %.0f", point.x, point.y, e));
                 }
             }
@@ -992,6 +1091,7 @@ void RunContractChecks(const CityLayout& city, bool expectRiver) {
     CheckStreetGraph(city);
     CheckJunctionAngles(city);
     CheckRoadsStayClear(city, index);
+    CheckTerrain(city);
     CheckRiverBanks(city);
     CheckPavements(city, index);
     CheckBuildingsKeepClear(city);
@@ -1018,9 +1118,12 @@ void TestLiftedDistrict(uint32_t seed, const city::Placement& placement) {
     city.walkHeight = district.walkHeight;
     city.waterLevel = district.waterLevel;
     city::AppendPart(city, district, placement);
-    city.terrain.push_back(MakePlateau(placement.Apply(OrientedRect(district.bounds)), placement.lift));
+    const OrientedRect square = placement.Apply(OrientedRect(district.bounds));
+    city.terrain.push_back(MakePlateau(square, placement.lift));
+    city::BoxWriter writer(city);
+    city::BuildPlinth(square, placement.lift, writer);
 
-    bool everyBoxLifted = city.boxes.size() == district.boxes.size();
+    bool everyBoxLifted = city.boxes.size() == district.boxes.size() + 1;  // and the plinth
     for (size_t i = 0; everyBoxLifted && i < district.boxes.size(); ++i) {
         everyBoxLifted = city.boxes[i].center.y == district.boxes[i].center.y + placement.lift;
     }
@@ -1070,6 +1173,13 @@ void TestSeed(uint32_t seed, bool checkDeterminism, bool districtOnly = false, i
     RunContractChecks(city, !districtOnly);
     if (!districtOnly && satellites > 0 && seed == CitySettings{}.seed) {
         Expect(!city.riverCrossings.empty(), "bridges", "the default city has no bridge over the bent river");
+        bool hasTerrace = false;
+        bool hasStair = false;
+        for (const TerrainZone& zone : city.terrain) {
+            hasTerrace = hasTerrace || zone.rise <= 0.0f;
+            hasStair = hasStair || zone.rise > 0.0f;
+        }
+        Expect(hasTerrace && hasStair, "terrain", "the default city has no raised district with a stair");
     }
     if (checkDeterminism) {
         CheckDeterminism(settings, city);
@@ -1160,6 +1270,7 @@ int main(int argc, char** argv) {
         if (options.mapSatellites >= 0) {
             settings.satelliteCount = options.mapSatellites;
         }
+        settings.terraces = options.mapTerraces;
         const CityLayout city = GenerateCity(settings);
         const Rect window = options.hasWindow ? options.window : city.bounds.Expanded(20.0f);
         return WriteMaps(city, options.mapPath, window, options.pixelsPerMetre) ? 0 : 1;

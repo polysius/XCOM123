@@ -164,6 +164,10 @@ struct CitySettings {
     // Smaller districts built on their own, turned to their own angles and placed in the open land
     // around the city, each joined to it by a street. Fewer are made when there is no room.
     int satelliteCount = 4;
+
+    // Whether a satellite district may stand on a terrace, three to six metres above the open land,
+    // reached by a stair on the street that joins it to the city. Switching it off keeps them level.
+    bool terraces = true;
 };
 
 // Every box is tagged with what it belongs to, so tools and tests can tell a building from a lamp.
@@ -182,6 +186,8 @@ enum class CityPart : uint8_t {
     Bench,
     Fountain,    // fountains and statues
     MarketStall,
+    Terrace,     // the stone plinth under a raised district
+    Stair,       // the steps and cheek walls of a stair up to a raised district
     Count,
 };
 

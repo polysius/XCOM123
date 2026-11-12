@@ -6,6 +6,7 @@
 
 #include "world/CityComposition.h"
 #include "world/CityStreets.h"
+#include "world/TerrainField.h"
 
 namespace city {
 namespace {
@@ -46,7 +47,13 @@ constexpr float kMinCrossingSine = 0.64f;    // sine of the smallest angle betwe
 constexpr float kMaxCrossingBend = 55.0f * kDegree;  // the first bend may be sharper when the street heads for the river
 constexpr float kFarBank = 70.0f;            // the second bend lies this far past the levee on the far bank
 constexpr float kBridgeApproach = 12.0f;     // a bridge reaches this far past the levee, along the street's perpendicular
-constexpr float kLandBeforeBridge = 30.0f;   // the street keeps this much land between a bend and the bridge
+constexpr float kLandBeforeBridge = 30.0f;
+
+// A district on a terrace is reached by a stair up the last stretch of its street. The steps are
+// low and deep enough to walk comfortably, and the stair needs some street left before it.
+constexpr float kMaxStairRise = 0.17f;
+constexpr float kStairTread = 0.4f;
+constexpr float kStairClearance = 10.0f;  // street kept between the bend and the foot of the stair   // the street keeps this much land between a bend and the bridge
 constexpr size_t kConnectorBoxAllowance = 1000;  // room kept for the street that joins a district
 
 // A T junction of a ring road, where a joining street can be attached without moving any edge.
@@ -149,6 +156,31 @@ void OpenPavementAt(CityLayout& city, glm::vec2 junction, glm::vec2 outward, flo
         }
         return;
     }
+}
+
+// The steps of the stair up to a terrace `lift` metres high.
+struct StairPlan {
+    int steps = 0;  // none when there is no terrace, or the street is too short for a stair
+    float rise = 0.0f;
+    float tread = kStairTread;
+    float length = 0.0f;  // along the street
+};
+
+StairPlan PlanStair(float lift, float lastStub, float streetHalfWidth) {
+    StairPlan stair;
+    if (lift <= 0.0f) {
+        return stair;
+    }
+    const int steps = static_cast<int>(std::ceil(lift / kMaxStairRise));
+    const float length = static_cast<float>(steps) * kStairTread;
+    // The stair ends at the retaining wall, a street's half width before the ring road's middle.
+    if (lastStub < streetHalfWidth + length + kStairClearance) {
+        return stair;
+    }
+    stair.steps = steps;
+    stair.rise = lift / static_cast<float>(steps);
+    stair.length = length;
+    return stair;
 }
 
 class SatelliteBuilder {
@@ -292,7 +324,21 @@ private:
             return false;
         }
         const glm::vec2 entryAt = secondBendAt + intoDistrict * lastStub;
-        const Placement placement{entryAt - turnOnly.Turn(entry->position), turn};
+
+        // Whether the district stands on a terrace. The lift comes from a stream of its own, so nothing
+        // else changes when terraces are switched off. The district across the river stays level, and so
+        // does one whose street is too short for a stair.
+        float lift = 0.0f;
+        if (settings.terraces && !acrossRiver) {
+            Random liftRandom(MixSeed(districtSeed, 0x4C494654u));
+            const float lifts[] = {0.0f, 3.0f, 4.5f, 6.0f};
+            lift = liftRandom.Pick(lifts);
+        }
+        const StairPlan stair = PlanStair(lift, lastStub, plan.streetHalfWidth);
+        if (stair.steps == 0) {
+            lift = 0.0f;
+        }
+        const Placement placement{entryAt - turnOnly.Turn(entry->position), turn, lift};
 
         const std::vector<glm::vec2> path = {coreJunction.position, firstBendAt, secondBendAt, entryAt};
         const OrientedRect square = placement.Apply(OrientedRect(district.bounds));
@@ -304,7 +350,8 @@ private:
             return false;
         }
 
-        Commit(district, placement, coreJunction, *entry, firstBendAt, secondBendAt, index, acrossRiver ? &crossing : nullptr);
+        Commit(district, placement, coreJunction, *entry, firstBendAt, secondBendAt, index, acrossRiver ? &crossing : nullptr,
+               stair);
         return true;
     }
 
@@ -483,7 +530,7 @@ private:
 
     void Commit(const CityLayout& district, const Placement& placement, const RingJunction& coreJunction,
                 const RingJunction& districtJunction, glm::vec2 firstBendAt, glm::vec2 secondBendAt, uint32_t index,
-                const Crossing* crossing) {
+                const Crossing* crossing, const StairPlan& stair) {
         const uint32_t districtNodeOffset = static_cast<uint32_t>(city.streets.nodes.size());
         AppendPart(city, district, placement);
         districts.push_back(placement.Apply(OrientedRect(district.bounds)));
@@ -518,7 +565,27 @@ private:
 
         BoxWriter boxes(city);
         Random random(MixSeed(settings.seed, 0x434F4E4Eu + index));
-        BuildConnectorStreet(path, plan.roadHalfWidth, plan.streetHalfWidth, random, boxes, city);
+        std::vector<glm::vec2> laidOut = path;
+        bool endsAtStair = false;
+        if (placement.lift > 0.0f) {
+            // A plinth under the district, and a stair up the last stretch of the street to the retaining
+            // wall, which stands at the outer edge of the district's pavements.
+            const OrientedRect square = placement.Apply(OrientedRect(district.bounds));
+            city.terrain.push_back(MakePlateau(square, placement.lift));
+            BuildPlinth(square, placement.lift, boxes);
+
+            const glm::vec2 direction = glm::normalize(entryAt - secondBendAt);
+            const glm::vec2 wall = entryAt - direction * plan.streetHalfWidth;
+            const glm::vec2 foot = wall - direction * stair.length;
+            BuildStair(foot, direction, stair.steps, stair.rise, stair.tread, plan.streetHalfWidth, boxes);
+            const glm::vec2 middle = foot + direction * (stair.length * 0.5f);
+            const glm::vec2 half(stair.length * 0.5f, plan.streetHalfWidth);
+            city.terrain.push_back({OrientedRect(Rect{middle - half, middle + half}, std::atan2(-direction.y, direction.x)),
+                                    0.0f, stair.rise, stair.tread});
+            laidOut = {coreJunction.position, firstBendAt, secondBendAt, foot};
+            endsAtStair = true;
+        }
+        BuildConnectorStreet(laidOut, plan.roadHalfWidth, plan.streetHalfWidth, random, boxes, city, endsAtStair);
         if (crossing != nullptr) {
             const glm::vec2 direction = glm::normalize(secondBendAt - firstBendAt);
             BuildRiverBridge(firstBendAt, direction, crossing->start, crossing->end, firstEdge + 1, plan.roadHalfWidth,

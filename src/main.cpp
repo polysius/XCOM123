@@ -365,6 +365,7 @@ int RunEngine(const Options& options, GLFWwindow* window) {
     if (options.satelliteCount) {
         citySettings.satelliteCount = *options.satelliteCount;
     }
+    citySettings.terraces = options.terraces;
     engine.city = GenerateCity(citySettings);
     engine.renderer->UploadStaticScene(engine.city.boxes);
     engine.crowd.Spawn(engine.city, {.agentCount = options.npcCount, .seed = options.seed * 7919u + 1u});
