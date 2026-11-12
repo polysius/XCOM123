@@ -123,8 +123,8 @@ struct AgentBehaviour {
     glm::vec2 avoidance{0.0f};     // steering from the last avoidance pass, reused by Mid
     uint32_t plaza = kNoIndex;     // square people: the square they stay in
     // Strollers on their way into or out of a room: the portal they use (kNoIndex when they are
-    // not on their way), and whether they are still walking to its near end (0) or along its
-    // passage (1).
+    // not on their way), and whether they are still walking to its near end (0), along its passage
+    // (1) or back along it to where they came from because the way ahead was jammed (2).
     uint32_t portal = kNoIndex;
     uint8_t portalStage = 0;
     AgentRole role = AgentRole::StreetWalker;

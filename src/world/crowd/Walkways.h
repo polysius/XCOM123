@@ -84,7 +84,8 @@ public:
     // Marks a disc as taken, for example by a conversation circle, so that people strolling in
     // squares do not walk through it. Street walkers ignore reservations.
     void Reserve(glm::vec2 center, float radius);
-    // True if a person can stand anywhere in the disc and none of it is reserved.
+    // True if a person can stand anywhere in the disc and none of it is reserved. A disc on a
+    // portal's passage is never free.
     bool IsDiscFree(glm::vec2 center, float radius) const;
     // True if a person can walk the straight line from a to b without touching an obstacle
     // or reserved space.

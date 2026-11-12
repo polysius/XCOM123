@@ -41,7 +41,7 @@ NpcInstance MakeNpcInstance(const AgentMotion& motion, const AgentLook& look, fl
     // where the simulation put it, which is never inside anything.
     glm::vec2 position = motion.position + motion.velocity * lagSeconds;
     float extraDistance = glm::length(motion.velocity) * lagSeconds;
-    if (walkways.IsInsideObstacle(position)) {
+    if (lagSeconds > 0.0f && walkways.IsInsideObstacle(position)) {
         position = motion.position;
         extraDistance = 0.0f;
     }

@@ -312,6 +312,12 @@ void Walkways::Reserve(glm::vec2 center, float radius) {
 }
 
 bool Walkways::IsDiscFree(glm::vec2 center, float radius) const {
+    // The way into a room is never given to a conversation: people would stop at its edge for good.
+    for (const Portal& portal : portals) {
+        if (portal.passage.Expanded(radius).Contains(center)) {
+            return false;
+        }
+    }
     const float reach = radius + gridCellSize * 0.5f;
     const glm::ivec2 low = CellOf(center - reach);
     const glm::ivec2 high = CellOf(center + reach);

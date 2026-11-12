@@ -257,6 +257,12 @@ Intent PortalIntent(const StepContext& context, AgentBehaviour& behaviour, glm::
         if (behaviour.portalStage == 0) {
             behaviour.portalStage = 1;
             behaviour.goal = leaving ? portal.outsideSpot : portal.insideSpot;
+        } else if (behaviour.portalStage == 2) {
+            // Back where they started: they stroll on in the same square.
+            behaviour.portal = kNoIndex;
+            behaviour.activity = Activity::Resting;
+            behaviour.activityTimer = RandomRange(behaviour.random, 0.5f, 2.0f);
+            return StandingIntent(GestureKind::None, 0.0f);
         } else {
             behaviour.plaza = leaving ? portal.outsidePlaza : portal.insidePlaza;
             behaviour.portal = kNoIndex;
@@ -268,6 +274,19 @@ Intent PortalIntent(const StepContext& context, AgentBehaviour& behaviour, glm::
     Intent intent;
     intent.velocity = SafeNormalize(behaviour.goal - position) * behaviour.preferredSpeed;
     return intent;
+}
+
+// Sends someone in a passage back the way they came, or on again if they were already turned back.
+void TurnRoundInPassage(const StepContext& context, AgentBehaviour& behaviour) {
+    const Walkways::Portal& portal = context.walkways.Portals()[behaviour.portal];
+    const bool leaving = behaviour.plaza == portal.insidePlaza;
+    const bool headingForOtherSide = behaviour.portalStage == 1;
+    // Stage 1 walks to the far end (the other square) and stage 2 to the near end (their own).
+    const glm::vec2 farSpot = leaving ? portal.outsideSpot : portal.insideSpot;
+    const glm::vec2 nearSpot = leaving ? portal.insideSpot : portal.outsideSpot;
+    behaviour.portalStage = headingForOtherSide ? 2 : 1;
+    behaviour.goal = headingForOtherSide ? nearSpot : farSpot;
+    behaviour.stuckTimer = 0.0f;
 }
 
 Intent PlazaWandererIntent(const StepContext& context, CrowdState& state, uint32_t agent) {
@@ -402,9 +421,11 @@ glm::vec2 KeepOnWalkway(const StepContext& context, const CrowdState& state, uin
     const Walkways& walkways = context.walkways;
     const AgentBehaviour& behaviour = state.behaviour[agent];
     const bool walksStreets = behaviour.role == AgentRole::StreetWalker || behaviour.role == AgentRole::GroupFollower;
-    const bool inPassage = !walksStreets && behaviour.portal != kNoIndex && behaviour.portalStage == 1;
+    const bool inPassage = !walksStreets && behaviour.portal != kNoIndex && behaviour.portalStage >= 1;
     // Strollers keep out of conversation circles, unless they somehow ended up in one.
-    const bool respectReserved = behaviour.role == AgentRole::PlazaWanderer && walkways.CanStandAtUnreserved(previous);
+    // Someone on their way through a portal ignores them: a circle beside the passage must not stop them.
+    const bool respectReserved = behaviour.role == AgentRole::PlazaWanderer && behaviour.portal == kNoIndex &&
+                                 walkways.CanStandAtUnreserved(previous);
 
     const glm::vec2 candidates[] = {next, {next.x, previous.y}, {previous.x, next.y}};
     for (glm::vec2 candidate : candidates) {
@@ -468,13 +489,16 @@ void UpdateStuckTimer(const StepContext& context, CrowdState& state, uint32_t ag
 
     if (behaviour.role == AgentRole::PlazaWanderer) {
         if (behaviour.stuckTimer > kStrollerStuckSeconds) {
-            // Someone stuck on the way to a portal gives up and strolls instead. In the passage there
-            // is no square to stroll in, so they keep trying to get through.
+            // Someone stuck on the way to a portal gives up and strolls instead. Someone stuck in the
+            // passage, where two people walking head on can jam each other, turns round, and turns
+            // round again if that is jammed too, so the passage never keeps anyone for good.
             if (behaviour.portal != kNoIndex && behaviour.portalStage == 0) {
                 behaviour.portal = kNoIndex;
             }
             if (behaviour.portal == kNoIndex) {
                 StartStroll(context, behaviour, state.motion[agent].position);
+            } else {
+                TurnRoundInPassage(context, behaviour);
             }
         }
         return;
