@@ -70,6 +70,15 @@ struct NpcInstance {
 };
 static_assert(sizeof(NpcInstance) == 48, "NpcInstance must match the shader instance layout");
 
+// Something that stands in people's way and may move from one frame to the next, such as a crate: a box seen from
+// above, between two heights. People keep clear of it while it stands where they walk.
+struct MovableObstacle {
+    glm::vec2 min;  // world X and Z of the corner with the smallest values
+    glm::vec2 max;
+    float bottom;   // height of the underside, in the world
+    float top;
+};
+
 // The simulated surface of the river near one place: for every cell of a grid, how far the water is above its
 // still level, or -1000 where the cell has no water. Cell (0, 0) has its corner at `origin` (world X and Z), and
 // the cells run along X first.

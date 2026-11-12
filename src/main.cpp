@@ -100,6 +100,7 @@ double UpdateCrowd(Engine& engine, float deltaSeconds, FrameInput& frame) {
     const Clock::time_point start = Clock::now();
     // The crowd simulates people near this point in the most detail.
     engine.crowd.SetFocusPoint(frame.cameraPosition);
+    engine.crowd.SetMovableObstacles(engine.props.Obstacles());  // where the crates are, as of the last frame
     engine.crowd.Update(deltaSeconds);
     engine.crowd.CollectVisible(Frustum(frame.projection * frame.view), engine.visibleNpcs);
     frame.npcs = engine.visibleNpcs;

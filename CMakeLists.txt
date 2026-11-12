@@ -118,9 +118,13 @@ endif()
 # crowd_bench times the crowd simulation without a window or a GPU. It builds the world
 # code (city and crowd) and the job system, nothing that needs Vulkan or GLFW.
 file(GLOB_RECURSE CROWD_BENCH_WORLD_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/world/*.cpp)
+file(GLOB PHYSICS_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/physics/*.cpp)
+file(GLOB FLUID_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/fluid/*.cpp)
 add_executable(crowd_bench
     tools/crowd_bench/main.cpp
     ${CROWD_BENCH_WORLD_SOURCES}
+    ${PHYSICS_SOURCES}
+    ${FLUID_SOURCES}
     src/core/JobSystem.cpp)
 target_include_directories(crowd_bench PRIVATE src)
 target_link_libraries(crowd_bench PRIVATE glm::glm)
@@ -137,8 +141,6 @@ endif()
 enable_testing()
 # The unit tests also drive the crowd on small cities made by hand, so they build all of it.
 file(GLOB UNIT_TEST_CROWD_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/world/crowd/*.cpp)
-file(GLOB PHYSICS_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/physics/*.cpp)
-file(GLOB FLUID_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/fluid/*.cpp)
 add_executable(unit_tests
     tests/unit_tests.cpp
     src/core/CommandLine.cpp

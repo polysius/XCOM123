@@ -315,6 +315,14 @@ void PropField::RefreshInstances() {
     };
     refresh(boxBodies, boxInstances);
     refresh(sphereBodies, sphereInstances);
+
+    obstacles.clear();
+    for (const std::vector<uint32_t>* bodies : {&boxBodies, &sphereBodies}) {
+        for (uint32_t index : *bodies) {
+            const Body& body = world.GetBody(index);
+            obstacles.push_back({{body.boundsMin.x, body.boundsMin.z}, {body.boundsMax.x, body.boundsMax.z}, body.boundsMin.y, body.boundsMax.y});
+        }
+    }
 }
 
 }  // namespace physics

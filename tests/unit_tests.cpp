@@ -707,6 +707,78 @@ void WalkHeightFollowsTheTerrain() {
     Check(walkways.WalkHeightAt({100.0f, 0.0f}) == walkways.WalkHeight(), "and at the level of the city elsewhere");
 }
 
+// A level city with nothing in it, for the crates that people go round.
+crowd::Walkways EmptyWalkways() {
+    CityLayout city;
+    city.bounds = {{-30.0f, -30.0f}, {30.0f, 30.0f}};
+    crowd::Walkways walkways;
+    walkways.Build(city);
+    return walkways;
+}
+
+// A crate 1 m wide standing on the ground at the origin, or, with `bottom` raised, held in the air.
+MovableObstacle CrateAtTheOrigin(float bottom) {
+    return {.min = {-0.5f, -0.5f}, .max = {0.5f, 0.5f}, .bottom = bottom, .top = bottom + 1.0f};
+}
+
+void PeopleKeepABodyRadiusAwayFromACrate() {
+    crowd::Walkways walkways = EmptyWalkways();
+    const MovableObstacle crate = CrateAtTheOrigin(walkways.WalkHeight());
+    walkways.SetMovableObstacles(std::span(&crate, 1));
+    Check(!walkways.CanStandAt({0.0f, 0.0f}), "nobody stands inside a crate");
+    Check(!walkways.CanStandAt({0.4f, 0.4f}), "nor near its corner");
+    Check(walkways.CanStandAt({2.0f, 0.0f}), "but a metre and a half from its side they can");
+    Check(walkways.CanStandAt({5.0f, 5.0f}), "and anywhere else");
+}
+
+void ACrateThatIsRemovedOpensThePlaceAgain() {
+    crowd::Walkways walkways = EmptyWalkways();
+    const MovableObstacle crate = CrateAtTheOrigin(walkways.WalkHeight());
+    walkways.SetMovableObstacles(std::span(&crate, 1));
+    walkways.SetMovableObstacles({});
+    Check(walkways.CanStandAt({0.0f, 0.0f}), "the place is open when the crate is gone");
+    Check(!walkways.IsNearMovableObstacle({0.0f, 0.0f}), "and nobody counts as being near it");
+}
+
+void ACrateThatMovedClosesItsNewPlaceAndOpensTheOld() {
+    crowd::Walkways walkways = EmptyWalkways();
+    MovableObstacle crate = CrateAtTheOrigin(walkways.WalkHeight());
+    walkways.SetMovableObstacles(std::span(&crate, 1));
+    crate.min += glm::vec2(10.0f, 0.0f);
+    crate.max += glm::vec2(10.0f, 0.0f);
+    walkways.SetMovableObstacles(std::span(&crate, 1));
+    Check(walkways.CanStandAt({0.0f, 0.0f}), "the old place is open");
+    Check(!walkways.CanStandAt({10.0f, 0.0f}), "the new place is closed");
+}
+
+void ACrateInTheAirOrFarBelowIsNoObstacle() {
+    crowd::Walkways walkways = EmptyWalkways();
+    const float ground = walkways.WalkHeight();
+    const MovableObstacle overhead = CrateAtTheOrigin(ground + 2.5f);  // people walk under it
+    walkways.SetMovableObstacles(std::span(&overhead, 1));
+    Check(walkways.CanStandAt({0.0f, 0.0f}), "people walk under a crate held high");
+    const MovableObstacle sunk = CrateAtTheOrigin(ground - 3.0f);  // it ends well below their feet
+    walkways.SetMovableObstacles(std::span(&sunk, 1));
+    Check(walkways.CanStandAt({0.0f, 0.0f}), "and over one that is down in the river bed");
+}
+
+void ANonFiniteCrateIsIgnored() {
+    crowd::Walkways walkways = EmptyWalkways();
+    const float notANumber = std::numeric_limits<float>::quiet_NaN();
+    const MovableObstacle broken = {.min = {notANumber, 0.0f}, .max = {1.0f, 1.0f}, .bottom = 0.0f, .top = 1.0f};
+    walkways.SetMovableObstacles(std::span(&broken, 1));
+    Check(walkways.CanStandAt({0.0f, 0.0f}), "a crate with no position closes nothing");
+}
+
+void SomeoneBesideACrateKnowsItAndBuildingsStillHoldThem() {
+    crowd::Walkways walkways = EmptyWalkways();
+    const MovableObstacle crate = CrateAtTheOrigin(walkways.WalkHeight());
+    walkways.SetMovableObstacles(std::span(&crate, 1));
+    Check(walkways.IsNearMovableObstacle({0.0f, 0.0f}), "a person in a crate is near it");
+    Check(walkways.CanStandAtIgnoringMovables({0.0f, 0.0f}), "and may step where only the crate was in the way");
+    Check(!walkways.IsNearMovableObstacle({5.0f, 5.0f}), "far from it nobody is near");
+}
+
 struct Test {
     const char* name;
     std::function<void()> run;
@@ -744,6 +816,12 @@ int main() {
         {"ObstacleOnATerraceIsAnObstacle", ObstacleOnATerraceIsAnObstacle},
         {"CameraOnATerraceSeesThePeopleOnItAsNear", CameraOnATerraceSeesThePeopleOnItAsNear},
         {"WalkHeightFollowsTheTerrain", WalkHeightFollowsTheTerrain},
+        {"PeopleKeepABodyRadiusAwayFromACrate", PeopleKeepABodyRadiusAwayFromACrate},
+        {"ACrateThatIsRemovedOpensThePlaceAgain", ACrateThatIsRemovedOpensThePlaceAgain},
+        {"ACrateThatMovedClosesItsNewPlaceAndOpensTheOld", ACrateThatMovedClosesItsNewPlaceAndOpensTheOld},
+        {"ACrateInTheAirOrFarBelowIsNoObstacle", ACrateInTheAirOrFarBelowIsNoObstacle},
+        {"ANonFiniteCrateIsIgnored", ANonFiniteCrateIsIgnored},
+        {"SomeoneBesideACrateKnowsItAndBuildingsStillHoldThem", SomeoneBesideACrateKnowsItAndBuildingsStillHoldThem},
         {"ObstacleStaysAxisAlignedAtYawZero", ObstacleStaysAxisAlignedAtYawZero},
         {"ObstacleFollowsAQuarterTurn", ObstacleFollowsAQuarterTurn},
         {"ObstacleFollowsADiagonalTurn", ObstacleFollowsADiagonalTurn},

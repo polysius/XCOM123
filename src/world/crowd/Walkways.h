@@ -1,10 +1,12 @@
 #pragma once
 
 #include <cstdint>
+#include <span>
 #include <vector>
 
 #include <glm/glm.hpp>
 
+#include "scene/SceneTypes.h"
 #include "world/CityGenerator.h"
 #include "world/TerrainField.h"
 
@@ -76,11 +78,20 @@ public:
     bool IsInsideObstacle(glm::vec2 point) const { return (CellFlags(point) & kObstacleFlag) != 0; }
     // True if a person can stand with its centre at `point` without its body touching an
     // obstacle.
-    bool CanStandAt(glm::vec2 point) const { return (CellFlags(point) & kNoStandingFlag) == 0; }
+    bool CanStandAt(glm::vec2 point) const { return (CellFlags(point) & (kNoStandingFlag | kMovableFlag)) == 0; }
+    // As CanStandAt, but the movable obstacles (see SetMovableObstacles) are not counted.
+    bool CanStandAtIgnoringMovables(glm::vec2 point) const { return (CellFlags(point) & kNoStandingFlag) == 0; }
+    // True if `point` is within a body radius of a movable obstacle: someone standing there when a crate lands has to be able
+    // to walk out of it, since every step they could take is into a place they cannot stand.
+    bool IsNearMovableObstacle(glm::vec2 point) const { return (CellFlags(point) & kMovableFlag) != 0; }
     // As CanStandAt, and the space is not reserved either (see Reserve).
     bool CanStandAtUnreserved(glm::vec2 point) const {
-        return (CellFlags(point) & (kNoStandingFlag | kReservedFlag)) == 0;
+        return (CellFlags(point) & (kNoStandingFlag | kReservedFlag | kMovableFlag)) == 0;
     }
+    // Replaces the movable obstacles, such as crates that stand where people walk, by `obstacles`. Each one is closed to
+    // people as far as a body radius round it, if it stands between knee and head height above the ground there. Call it
+    // between steps, never while the crowd is being updated.
+    void SetMovableObstacles(std::span<const MovableObstacle> obstacles);
     // Marks a disc as taken, for example by a conversation circle, so that people strolling in
     // squares do not walk through it. Street walkers ignore reservations.
     void Reserve(glm::vec2 center, float radius);
@@ -129,6 +140,7 @@ private:
     static constexpr uint8_t kObstacleFlag = 1;    // inside an obstacle's footprint
     static constexpr uint8_t kNoStandingFlag = 2;  // within a body radius of an obstacle
     static constexpr uint8_t kReservedFlag = 4;
+    static constexpr uint8_t kMovableFlag = 8;     // within a body radius of an obstacle that can move
 
     void BuildArms();
     void BuildCrosswalks();
@@ -169,6 +181,7 @@ private:
     int gridColumns = 0;
     int gridRows = 0;
     std::vector<uint8_t> gridFlags;
+    std::vector<uint32_t> movableCells;  // the cells that carry kMovableFlag, so that they can be cleared quickly
 };
 
 }  // namespace crowd

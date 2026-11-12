@@ -298,6 +298,40 @@ uint8_t Walkways::CellFlags(glm::vec2 point) const {
     return gridFlags[static_cast<size_t>(cell.y) * static_cast<size_t>(gridColumns) + static_cast<size_t>(cell.x)];
 }
 
+void Walkways::SetMovableObstacles(std::span<const MovableObstacle> obstacles) {
+    for (uint32_t cell : movableCells) {
+        gridFlags[cell] = static_cast<uint8_t>(gridFlags[cell] & ~kMovableFlag);
+    }
+    movableCells.clear();
+    for (const MovableObstacle& obstacle : obstacles) {
+        const glm::vec2 middle = 0.5f * (obstacle.min + obstacle.max);
+        if (!std::isfinite(middle.x) || !std::isfinite(middle.y)) {
+            continue;
+        }
+        // Whether it is in people's way depends on how high it stands above the ground under it, as for the boxes of the city.
+        const float ground = WalkHeightAt(middle);
+        if (!(obstacle.bottom < ground + kObstacleHighest && obstacle.top > ground + kObstacleLowest)) {
+            continue;
+        }
+        const glm::ivec2 low = CellOf(obstacle.min - kBodyRadius);
+        const glm::ivec2 high = CellOf(obstacle.max + kBodyRadius);
+        for (int y = std::max(low.y, 0); y <= std::min(high.y, gridRows - 1); ++y) {
+            for (int x = std::max(low.x, 0); x <= std::min(high.x, gridColumns - 1); ++x) {
+                const glm::vec2 cellCenter = gridOrigin + (glm::vec2(x, y) + 0.5f) * gridCellSize;
+                // As the footprints of the boxes of the city: a cell counts when its centre is within a body radius of the box.
+                if (cellCenter.x >= obstacle.min.x - kBodyRadius + kObstacleShrink && cellCenter.x <= obstacle.max.x + kBodyRadius - kObstacleShrink &&
+                    cellCenter.y >= obstacle.min.y - kBodyRadius + kObstacleShrink && cellCenter.y <= obstacle.max.y + kBodyRadius - kObstacleShrink) {
+                    const size_t cell = static_cast<size_t>(y) * static_cast<size_t>(gridColumns) + static_cast<size_t>(x);
+                    if ((gridFlags[cell] & kMovableFlag) == 0) {
+                        gridFlags[cell] = static_cast<uint8_t>(gridFlags[cell] | kMovableFlag);
+                        movableCells.push_back(static_cast<uint32_t>(cell));
+                    }
+                }
+            }
+        }
+    }
+}
+
 void Walkways::Reserve(glm::vec2 center, float radius) {
     const glm::ivec2 low = CellOf(center - radius);
     const glm::ivec2 high = CellOf(center + radius);

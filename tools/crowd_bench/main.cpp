@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <iomanip>
 #include <iostream>
+#include <span>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -26,6 +27,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+#include "physics/PropField.h"
 #include "scene/Frustum.h"
 #include "scene/SceneTypes.h"
 #include "world/CityGenerator.h"
@@ -58,6 +60,7 @@ struct BenchOptions {
     uint32_t seed = 1789;
     int satellites = -1;  // satellite districts around the city; negative keeps the generator's default
     bool terraces = true;  // whether satellite districts may stand on terraces (--terraces 0 for level ones)
+    uint32_t props = 0;    // crates, barrels and balls dropped into the largest square, which people go round
 };
 
 std::vector<uint32_t> ParseCountList(const std::string& text) {
@@ -81,6 +84,8 @@ BenchOptions ParseOptions(int argc, char** argv) {
             options.steps = static_cast<uint32_t>(std::stoul(value));
         } else if (name == "--seed") {
             options.seed = static_cast<uint32_t>(std::stoul(value));
+        } else if (name == "--props") {
+            options.props = static_cast<uint32_t>(std::stoul(value));
         } else if (name == "--terraces") {
             options.terraces = std::stoi(value) != 0;
         } else if (name == "--satellites") {
@@ -391,6 +396,8 @@ struct SanityReport {
     size_t obstacleDisagreements = 0; // of those, the ones the crowd would let a person stand on
     size_t pavementsChecked = 0;      // points on the pavements, which the layout says people may stand on
     size_t pavementDisagreements = 0; // of those, the ones the crowd will not let a person stand on
+    size_t inProps = 0;               // people standing inside the footprint of a prop, which they should have gone round
+    size_t inPropsByRole[4] = {};     // of those, street walkers, group followers, strollers and talkers
     size_t indoors = 0;               // people standing on the floor of a room inside a landmark
     size_t inDoorways = 0;            // people on the way in or out, on a passage but not on a floor
 };
@@ -414,7 +421,8 @@ size_t CountOverlappingPairs(std::vector<glm::vec2> points) {
     return pairs;
 }
 
-SanityReport CheckCrowd(const Crowd& crowd, const CityLayout& city, glm::vec3 camera) {
+SanityReport CheckCrowd(const Crowd& crowd, const CityLayout& city, glm::vec3 camera,
+                        std::span<const MovableObstacle> props) {
     std::vector<NpcInstance> everyone;
     crowd.CollectVisible(Frustum(WholeCityViewProjection(StreetBounds(city))), everyone);
 
@@ -462,6 +470,21 @@ SanityReport CheckCrowd(const Crowd& crowd, const CityLayout& city, glm::vec3 ca
             nearPoints.push_back(point);
         }
     }
+    // Everyone, not only those in view: who stands inside the footprint of a prop that is at the height of a person's legs or
+    // body, worked out straight from the layout of the props and not from the crowd's own idea of them.
+    const crowd::CrowdState& everyoneState = crowd.State();
+    for (size_t i = 0; i < everyoneState.AgentCount() && !props.empty(); ++i) {
+        const glm::vec2 at = everyoneState.motion[i].position;
+        const float feet = city.walkHeight + terrain.LiftAt(at);
+        for (const MovableObstacle& prop : props) {
+            if (at.x > prop.min.x && at.x < prop.max.x && at.y > prop.min.y && at.y < prop.max.y && prop.bottom < feet + 1.6f &&
+                prop.top > feet + 0.25f) {
+                ++report.inProps;
+                ++report.inPropsByRole[static_cast<size_t>(everyoneState.behaviour[i].role)];
+                break;
+            }
+        }
+    }
     report.nearAgents = nearPoints.size();
     report.overlappingPairs = CountOverlappingPairs(std::move(nearPoints));
     return report;
@@ -476,6 +499,10 @@ void PrintTiming(const char* label, const TimingSummary& timing) {
 
 void RunBenchmark(const CityLayout& city, uint32_t agentCount, const BenchOptions& options) {
     Crowd crowd;
+    physics::PropField props;
+    if (options.props > 0) {
+        props.Spawn(city, {.count = options.props, .seed = options.seed});
+    }
     const Clock::time_point spawnStart = Clock::now();
     crowd.Spawn(city, {.agentCount = agentCount, .seed = options.seed * 7919u + 1u});
     const double spawnMs = MillisecondsBetween(spawnStart, Clock::now());
@@ -492,6 +519,12 @@ void RunBenchmark(const CityLayout& city, uint32_t agentCount, const BenchOption
         camera = CameraOnPath(city, bounds, static_cast<float>(step) * kStepSeconds);
         const Clock::time_point start = Clock::now();
         SetFocusIfSupported(crowd, camera.position);
+        if (options.props > 0) {
+            props.Update(kStepSeconds);
+            if constexpr (requires { crowd.SetMovableObstacles(props.Obstacles()); }) {
+                crowd.SetMovableObstacles(props.Obstacles());
+            }
+        }
         crowd.Update(kStepSeconds);
         const Clock::time_point updated = Clock::now();
         crowd.CollectVisible(Frustum(ViewProjectionOf(camera)), visible);
@@ -521,7 +554,7 @@ void RunBenchmark(const CityLayout& city, uint32_t agentCount, const BenchOption
               << std::setprecision(1);
     PrintLevelOfDetailIfSupported(crowd);
 
-    const SanityReport sanity = CheckCrowd(crowd, city, camera.position);
+    const SanityReport sanity = CheckCrowd(crowd, city, camera.position, props.Obstacles());
     std::cout << "  sanity: read back " << sanity.readBack << ", non-finite " << sanity.nonFinite
               << ", inside obstacles " << sanity.insideObstacle << ", on road away from crossings " << sanity.onRoad
               << ", outside walkways " << sanity.outsideWalkways << "\n"
@@ -530,6 +563,9 @@ void RunBenchmark(const CityLayout& city, uint32_t agentCount, const BenchOption
               << "  heights and obstacles: " << sanity.wrongHeight << " people at the wrong height, the crowd disagrees on "
               << sanity.obstacleDisagreements << " of " << sanity.obstaclesChecked << " obstacles and "
               << sanity.pavementDisagreements << " of " << sanity.pavementsChecked << " pavement points\n"
+              << "  in the way of props: " << sanity.inProps << " people are standing inside the footprint of a prop (street walkers "
+              << sanity.inPropsByRole[0] << ", group followers " << sanity.inPropsByRole[1] << ", strollers " << sanity.inPropsByRole[2]
+              << ", talkers " << sanity.inPropsByRole[3] << ")\n"
               << "  indoors: " << sanity.indoors << " of " << sanity.readBack << " people are inside the "
               << city.interiors.size() << " rooms of the landmarks, " << crowd.WalkableSpace().Portals().size()
               << " of them with a way in; " << sanity.inDoorways << " people are on their way through a passage\n";
