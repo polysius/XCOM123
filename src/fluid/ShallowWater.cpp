@@ -9,6 +9,12 @@ namespace {
 // More small steps than this in one call would mean something is wrong: the water is deeper or faster
 // than any river, or the frame is far too long. The call then simulates less time than asked for.
 constexpr int kMaxSmallSteps = 64;
+// Time that a call could not run is kept for the next calls, but no more than this much: a game that is
+// seconds behind is better off skipping ahead than running the water at full speed for a long time.
+constexpr float kMaxPendingSeconds = 2.0f;
+// A source reaches at least this many cells, so that a point anywhere in a cell is within reach of the
+// centre of one: the furthest a point can be from the nearest centre is 0.71 of a cell.
+constexpr float kMinReachInCells = 0.75f;
 
 }  // namespace
 
@@ -55,9 +61,12 @@ void ShallowWater::FillToLevel(float level) {
 }
 
 float ShallowWater::AddVolume(glm::vec2 point, float radius, float volume) {
+    if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(radius) || !std::isfinite(volume)) {
+        return 0.0f;
+    }
     const float cellArea = settings.cellSize * settings.cellSize;
     const glm::vec2 inGrid = (point - settings.origin) / settings.cellSize;
-    const float reach = std::max(radius / settings.cellSize, 0.5f);
+    const float reach = std::max(radius / settings.cellSize, kMinReachInCells);
     const int i0 = std::max(static_cast<int>(std::floor(inGrid.x - reach)), 0);
     const int i1 = std::min(static_cast<int>(std::ceil(inGrid.x + reach)), settings.width - 1);
     const int j0 = std::max(static_cast<int>(std::floor(inGrid.y - reach)), 0);
@@ -84,7 +93,28 @@ float ShallowWater::AddVolume(glm::vec2 point, float radius, float volume) {
         }
     }
     if (shares.empty() || totalWeight <= 0.0f) {
-        return 0.0f;
+        // Nothing within reach but a wall, or a point at the very edge of the grid: the nearest cell that is
+        // not a wall takes it all, if it is inside the grid.
+        if (inGrid.x < 0.0f || inGrid.y < 0.0f || inGrid.x >= static_cast<float>(settings.width) ||
+            inGrid.y >= static_cast<float>(settings.height)) {
+            return 0.0f;
+        }
+        float nearest = 1e9f;
+        size_t nearestCell = 0;
+        for (int j = j0; j <= j1; ++j) {
+            for (int i = i0; i <= i1; ++i) {
+                const float distance = glm::length(glm::vec2(static_cast<float>(i) + 0.5f, static_cast<float>(j) + 0.5f) - inGrid);
+                if (solid[Index(i, j)] == 0 && distance < nearest) {
+                    nearest = distance;
+                    nearestCell = Index(i, j);
+                }
+            }
+        }
+        if (nearest > 1e8f) {
+            return 0.0f;
+        }
+        shares.push_back({nearestCell, 1.0f});
+        totalWeight = 1.0f;
     }
     float done = 0.0f;
     for (const Share& share : shares) {
@@ -102,22 +132,31 @@ float ShallowWater::AddVolume(glm::vec2 point, float radius, float volume) {
 }
 
 void ShallowWater::AddVelocity(glm::vec2 point, float radius, glm::vec2 velocity) {
+    if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(radius) || !std::isfinite(velocity.x) ||
+        !std::isfinite(velocity.y)) {
+        return;
+    }
     const glm::vec2 inGrid = (point - settings.origin) / settings.cellSize;
-    const float reach = std::max(radius / settings.cellSize, 0.5f);
+    const float reach = std::max(radius / settings.cellSize, kMinReachInCells);
     const auto weightAt = [&](float x, float z) {
         const float distance = glm::length(glm::vec2(x, z) - inGrid) / reach;
         return distance < 1.0f ? 1.0f - distance * distance : 0.0f;
     };
-    for (int j = 0; j < settings.height; ++j) {
-        for (int i = 1; i < settings.width; ++i) {
+    // Only the sides within reach of the point are looked at.
+    const int i0 = std::max(static_cast<int>(std::floor(inGrid.x - reach)), 0);
+    const int i1 = std::min(static_cast<int>(std::ceil(inGrid.x + reach)), settings.width);
+    const int j0 = std::max(static_cast<int>(std::floor(inGrid.y - reach)), 0);
+    const int j1 = std::min(static_cast<int>(std::ceil(inGrid.y + reach)), settings.height);
+    for (int j = j0; j < j1; ++j) {
+        for (int i = std::max(i0, 1); i < std::min(i1 + 1, settings.width); ++i) {
             const float weight = weightAt(static_cast<float>(i), static_cast<float>(j) + 0.5f);
             if (weight > 0.0f && !solid[Index(i - 1, j)] && !solid[Index(i, j)] && (IsWet(i - 1, j) || IsWet(i, j))) {
                 flowU[SideU(i, j)] += weight * (velocity.x - flowU[SideU(i, j)]);
             }
         }
     }
-    for (int j = 1; j < settings.height; ++j) {
-        for (int i = 0; i < settings.width; ++i) {
+    for (int j = std::max(j0, 1); j < std::min(j1 + 1, settings.height); ++j) {
+        for (int i = i0; i < i1; ++i) {
             const float weight = weightAt(static_cast<float>(i) + 0.5f, static_cast<float>(j));
             if (weight > 0.0f && !solid[Index(i, j - 1)] && !solid[Index(i, j)] && (IsWet(i, j - 1) || IsWet(i, j))) {
                 flowV[SideV(i, j)] += weight * (velocity.y - flowV[SideV(i, j)]);
@@ -150,14 +189,20 @@ float ShallowWater::FastestWave() const {
 }
 
 void ShallowWater::Step(float seconds) {
-    if (seconds <= 0.0f) {
-        return;
+    if (!(seconds > 0.0f) || !std::isfinite(seconds)) {
+        return;  // nothing, a negative time, or a number that is not one
     }
+    pendingSeconds = std::min(pendingSeconds + seconds, kMaxPendingSeconds);
     const float longestStep = settings.courant * settings.cellSize / std::max(FastestWave(), 1e-3f);
-    const int steps = std::clamp(static_cast<int>(std::ceil(seconds / longestStep)), 1, kMaxSmallSteps);
-    const float step = std::min(seconds / static_cast<float>(steps), longestStep * 1.5f);
+    // Counted in floating point first: a very long time would overflow an int.
+    const int steps = static_cast<int>(std::clamp(std::ceil(pendingSeconds / longestStep), 1.0f, static_cast<float>(kMaxSmallSteps)));
+    const float step = std::min(pendingSeconds / static_cast<float>(steps), longestStep);
     for (int i = 0; i < steps; ++i) {
         SmallStep(step);
+    }
+    pendingSeconds = std::max(pendingSeconds - step * static_cast<float>(steps), 0.0f);
+    if (pendingSeconds < 1e-6f) {
+        pendingSeconds = 0.0f;
     }
 }
 
@@ -205,6 +250,9 @@ void ShallowWater::AccelerateByTheSurfaceSlope(float dt) {
 
 // The flow along X at a point given in grid units, blended between the sides around it.
 float ShallowWater::SampleU(float x, float z) const {
+    if (!std::isfinite(x) || !std::isfinite(z)) {
+        return 0.0f;
+    }
     const float fx = std::clamp(x, 0.0f, static_cast<float>(settings.width));
     const float fz = std::clamp(z - 0.5f, 0.0f, static_cast<float>(settings.height - 1));
     const int i = std::min(static_cast<int>(fx), settings.width - 1);
@@ -217,6 +265,9 @@ float ShallowWater::SampleU(float x, float z) const {
 }
 
 float ShallowWater::SampleV(float x, float z) const {
+    if (!std::isfinite(x) || !std::isfinite(z)) {
+        return 0.0f;
+    }
     const float fx = std::clamp(x - 0.5f, 0.0f, static_cast<float>(settings.width - 1));
     const float fz = std::clamp(z, 0.0f, static_cast<float>(settings.height));
     const int i = std::min(static_cast<int>(fx), settings.width - 2);
@@ -260,7 +311,8 @@ void ShallowWater::Advect(float dt) {
             scratchV[side] = SampleV(x - u * dt * cellsPerMetre, z - v * dt * cellsPerMetre);
         }
     }
-    // Sides that were still stay still: advection must not start a flow where the slope did not.
+    // The new speeds replace the old ones. A side that was still was skipped above, so advection never
+    // starts a flow where the slope did not.
     for (int j = 0; j < settings.height; ++j) {
         for (int i = 1; i < settings.width; ++i) {
             flowU[SideU(i, j)] = scratchU[SideU(i, j)];
@@ -349,6 +401,9 @@ glm::vec2 ShallowWater::VelocityAt(glm::vec2 point) const {
 }
 
 float ShallowWater::SurfaceHeightAt(glm::vec2 point, float fallback) const {
+    if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
+        return fallback;
+    }
     const glm::vec2 inGrid = (point - settings.origin) / settings.cellSize - 0.5f;
     if (inGrid.x < -0.5f || inGrid.y < -0.5f || inGrid.x > static_cast<float>(settings.width) - 0.5f ||
         inGrid.y > static_cast<float>(settings.height) - 0.5f) {
@@ -374,6 +429,9 @@ float ShallowWater::SurfaceHeightAt(glm::vec2 point, float fallback) const {
 }
 
 bool ShallowWater::IsWetAt(glm::vec2 point) const {
+    if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
+        return false;
+    }
     const glm::vec2 inGrid = (point - settings.origin) / settings.cellSize;
     const int i = static_cast<int>(std::floor(inGrid.x));
     const int j = static_cast<int>(std::floor(inGrid.y));

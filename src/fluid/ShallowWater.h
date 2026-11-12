@@ -43,7 +43,8 @@ public:
 
     // Raises or lowers the bed of a cell. The depth of water there is kept.
     void SetBed(int i, int j, float bedHeight);
-    // Makes a cell a wall, which no water enters, or an ordinary cell again.
+    // Makes a cell a wall, which no water enters, or an ordinary cell again. A cell that becomes a wall loses
+    // its water.
     void SetSolid(int i, int j, bool solid);
     // Puts water of the given depth in a cell, or none.
     void SetDepth(int i, int j, float waterDepth);
@@ -59,13 +60,19 @@ public:
     // the cells have no water to give.
     float AddVolume(glm::vec2 point, float radius, float volume);
     // Pushes the water within `radius` of a world point, more at its centre, so that it flows with `velocity`
-    // (metres per second along X and Z), as the hull of a boat or a leg in the river does.
+    // (metres per second along X and Z), as the hull of a boat or a leg in the river does. A point or a
+    // velocity that is not a finite number is ignored.
     void AddVelocity(glm::vec2 point, float radius, glm::vec2 velocity);
 
     // Time -------------------------------------------------------------------------------------
 
-    // Advances the water by `seconds`, in as many small steps as its waves need.
+    // Advances the water by `seconds`, in as many small steps as its waves need. A call never runs more than
+    // 64 small steps; the time it could not fit is kept and run by the next calls, up to two seconds of it, so
+    // that a slow frame does not make the water run slow. Seconds that are not a finite number above zero are
+    // ignored.
     void Step(float seconds);
+    // The seconds asked for that have not been simulated yet.
+    float PendingSeconds() const { return pendingSeconds; }
 
     // What the water looks like ----------------------------------------------------------------
 
@@ -112,6 +119,7 @@ private:
     std::vector<float> scratchU;
     std::vector<float> scratchV;
     std::vector<float> outflowScale;  // per cell, how much of its outgoing flux it can really give
+    float pendingSeconds = 0.0f;
 };
 
 }  // namespace fluid
