@@ -33,10 +33,11 @@ struct PhysicsSettings {
     int positionIterations = 4;       // passes of the overlap removal
     float penetrationSlop = 0.005f;   // overlap that is left alone, so resting contacts do not jitter
     float correctionRate = 0.2f;      // the share of an overlap removed per pass
-    float maxCorrectionPerStep = 0.05f;  // metres a body is moved to undo an overlap in one step
+    float maxCorrectionPerStep = 0.05f;  // the furthest, in metres, that a body is moved to undo overlaps in one step
     float touchTolerance = 0.002f;    // bodies this close count as touching, and bounce if they hit fast
     float restitutionThreshold = 1.0f;   // slower impacts do not bounce
     float angularDamping = 0.1f;      // share of the spin lost per second
+    float boxRollingShare = 0.3f;     // the share of the rolling resistance that boxes have
     float sleepLinearSpeed = 0.05f;   // metres per second under which a body counts as still
     float sleepAngularSpeed = 0.1f;   // radians per second
     float sleepSeconds = 0.5f;        // how long a whole group must be still before it sleeps

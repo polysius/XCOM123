@@ -795,6 +795,122 @@ void AHeavyBoxOnLightOnesDoesNotScatterThem() {
     Check(drift < 0.15f, "a box ten times heavier on top of three light ones keeps the stack, drift " + std::to_string(drift));
 }
 
+// What the second review found -------------------------------------------------------------------
+
+void ATenHighStackFallsAsleep() {
+    PhysicsWorld world;
+    AddGround(world);
+    std::vector<uint32_t> stack;
+    for (int i = 0; i < 10; ++i) {
+        stack.push_back(AddBox(world, {0.0f, 0.5f + static_cast<float>(i), 0.0f}));
+    }
+    Simulate(world, 20.0f);
+    Check(world.AwakeBodyCount() == 0, "a stack of ten boxes comes to rest, awake " + std::to_string(world.AwakeBodyCount()));
+    Check(Near(world.GetBody(stack.back()).position.y, 9.5f, 0.1f), "and stands at its height");
+}
+
+void ADenseHeapOfThreeHundredBodiesSettles() {
+    PhysicsWorld world;
+    AddGround(world);
+    uint32_t state = 777u;
+    const auto next = [&state]() {
+        state = state * 1664525u + 1013904223u;
+        return static_cast<float>(state >> 8) / 16777216.0f;
+    };
+    for (int i = 0; i < 300; ++i) {
+        const glm::vec3 position(static_cast<float>(i % 6) * 1.1f - 2.75f + next() * 0.2f,
+                                 0.6f + static_cast<float>(i / 36) * 1.1f, static_cast<float>((i / 6) % 6) * 1.1f - 2.75f + next() * 0.2f);
+        if (i % 4 == 0) {
+            AddSphere(world, position, 0.35f);
+        } else {
+            BodyDescription box;
+            box.shape = Shape::Box({0.4f, 0.3f, 0.4f});
+            box.position = position;
+            box.orientation = glm::angleAxis(next() * 3.0f, glm::normalize(glm::vec3(next() + 0.1f, next(), next())));
+            world.AddBody(box);
+        }
+    }
+    Simulate(world, 25.0f);
+    Check(world.AwakeBodyCount() < 30, "a heap of three hundred bodies mostly comes to rest, awake " + std::to_string(world.AwakeBodyCount()));
+}
+
+void AnElasticBoxDroppedAtAnyTiltNeverGainsEnergy() {
+    for (float degrees : {0.0f, 20.0f, 40.0f}) {
+        PhysicsWorld world;
+        AddGround(world, 0.6f, 1.0f);
+        BodyDescription description;
+        description.shape = Shape::Box({0.5f, 0.5f, 0.5f});
+        description.position = {0.0f, 3.0f, 0.0f};
+        description.orientation = glm::angleAxis(glm::radians(degrees), glm::normalize(glm::vec3(1.0f, 0.0f, 0.5f)));
+        description.material = {0.6f, 1.0f, 0.0f};
+        const uint32_t box = world.AddBody(description);
+        const float mass = 1.0f / world.GetBody(box).inverseMass;
+        const float initial = 9.81f * mass * 3.0f;
+        float worst = 0.0f;
+        for (int i = 0; i < 600; ++i) {
+            world.Step();
+            worst = std::max(worst, 9.81f * mass * world.GetBody(box).position.y + world.KineticEnergy() - initial);
+        }
+        // Several points bounce at once, and a sequential impulse solver satisfies their targets only
+        // approximately: a tilted perfectly elastic box may come back up to a few percent too high.
+        Check(worst < 0.05f * initial, "an elastic box dropped at " + std::to_string(degrees) +
+                                           " degrees keeps its energy, excess " + std::to_string(worst / initial));
+    }
+}
+
+void ABoxWellAboveAPlateStillMakesAFaceContact() {
+    Body plate;
+    plate.shape = Shape::Box({5.0f, 0.1f, 5.0f});
+    Body box;
+    box.shape = Shape::Box({0.1f, 0.1f, 0.1f});
+    box.position = {0.1f, 0.2f + 0.25f, 0.1f};  // a quarter of a metre above the plate
+    physics::Manifold manifold;
+    Check(physics::Collide(plate, box, manifold, 0.4f), "the box is within the margin");
+    Check(manifold.count == 4 && manifold.normal.y > 0.99f,
+          "and the contact is the face below it, not an edge, got " + std::to_string(manifold.count) + " contacts");
+    for (int i = 0; i < manifold.count; ++i) {
+        Check(std::abs(manifold.points[i].position.z) < 1.0f, "with every point under the box");
+    }
+}
+
+void TwoFastBallsMeetingHeadOnDoNotPassThroughEachOther() {
+    int passed = 0;
+    for (int phase = 0; phase < 24; ++phase) {
+        PhysicsSettings settings;
+        settings.gravity = glm::vec3(0.0f);
+        PhysicsWorld world(settings);
+        BodyDescription left;
+        left.shape = Shape::Sphere(0.05f);
+        left.position = {-2.0f + 0.01f * static_cast<float>(phase), 0.0f, 0.0f};
+        left.linearVelocity = {60.0f, 0.0f, 0.0f};
+        left.material = {0.0f, 1.0f, 0.0f};
+        BodyDescription right = left;
+        right.position = {2.0f, 0.0f, 0.0f};
+        right.linearVelocity = {-60.0f, 0.0f, 0.0f};
+        const uint32_t a = world.AddBody(left);
+        const uint32_t b = world.AddBody(right);
+        Simulate(world, 0.2f);
+        passed += world.GetBody(a).position.x > world.GetBody(b).position.x ? 1 : 0;
+    }
+    Check(passed == 0, "balls meeting at 120 m/s together never swap sides, swapped " + std::to_string(passed));
+}
+
+void AnImpossiblyHeavyFastBodyDoesNotCorruptTheGround() {
+    PhysicsWorld world;
+    const uint32_t ground = AddGround(world);
+    const uint32_t far = AddBox(world, {20.0f, 0.5f, 0.0f});
+    BodyDescription ball;
+    ball.shape = Shape::Sphere(0.5f);
+    ball.density = 1e30f;
+    ball.position = {0.0f, 0.5f, 0.0f};
+    ball.linearVelocity = {0.0f, -3e37f, 0.0f};
+    world.AddBody(ball);
+    Simulate(world, 1.0f);
+    const Body& body = world.GetBody(ground);
+    Check(IsFinite(body) && body.linearVelocity == glm::vec3(0.0f), "the ground is never touched by the solver");
+    Check(IsFinite(world.GetBody(far)) && Near(world.GetBody(far).position.y, 0.5f, 0.02f), "and neither is a box far away");
+}
+
 }  // namespace
 
 int main() {
@@ -842,6 +958,12 @@ int main() {
         {"CrossedEdgesAreFoundAsAnEdgeContact", CrossedEdgesAreFoundAsAnEdgeContact},
         {"ContactsOfAnOverhangingBoxStayOnTheFaceBelow", ContactsOfAnOverhangingBoxStayOnTheFaceBelow},
         {"AHeavyBoxOnLightOnesDoesNotScatterThem", AHeavyBoxOnLightOnesDoesNotScatterThem},
+        {"ATenHighStackFallsAsleep", ATenHighStackFallsAsleep},
+        {"ADenseHeapOfThreeHundredBodiesSettles", ADenseHeapOfThreeHundredBodiesSettles},
+        {"AnElasticBoxDroppedAtAnyTiltNeverGainsEnergy", AnElasticBoxDroppedAtAnyTiltNeverGainsEnergy},
+        {"ABoxWellAboveAPlateStillMakesAFaceContact", ABoxWellAboveAPlateStillMakesAFaceContact},
+        {"TwoFastBallsMeetingHeadOnDoNotPassThroughEachOther", TwoFastBallsMeetingHeadOnDoNotPassThroughEachOther},
+        {"AnImpossiblyHeavyFastBodyDoesNotCorruptTheGround", AnImpossiblyHeavyFastBodyDoesNotCorruptTheGround},
     };
     for (const Test& test : tests) {
         const int failuresBefore = failureCount;

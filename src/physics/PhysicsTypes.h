@@ -76,6 +76,11 @@ struct ContactPoint {
     float normalImpulse = 0.0f;
     float tangentImpulse[2] = {0.0f, 0.0f};
     glm::vec3 rollingImpulse{0.0f};  // angular impulse that resists rolling
+    // How fast the bodies were closing in at this point, along the normal, while they were still apart
+    // (zero if they were not, or closing slowly). When the solver stops them at the surface they bounce
+    // from this speed, which the next step reads as carriedImpactSpeed.
+    float impactSpeed = 0.0f;
+    float carriedImpactSpeed = 0.0f;
 };
 
 constexpr int kMaxContactsPerPair = 4;
@@ -87,10 +92,6 @@ struct Manifold {
     glm::vec3 normal{0.0f, 1.0f, 0.0f};
     int count = 0;
     ContactPoint points[kMaxContactsPerPair];
-    // How fast the bodies were closing in, along the normal, while they were still apart (zero if they were
-    // not, or closing slowly): when the solver stops them at the surface, they bounce from this speed.
-    float impactSpeed = 0.0f;
-    float carriedImpactSpeed = 0.0f;  // the same, from the last step, when the contact is first touching
 };
 
 }  // namespace physics

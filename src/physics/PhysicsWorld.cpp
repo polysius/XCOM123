@@ -369,11 +369,15 @@ void PhysicsWorld::WakeSleepersTouchedByMovingBodies() {
 }
 
 // Lists the pairs of bodies whose bounds overlap and where at least one is awake, each once, with the
-// lower index first and in order of index.
+// lower index first and in order of index. A body counts as reaching as far as it moves in a step, so
+// two bodies that meet head on are found when the gap is the sum of their reaches.
 void PhysicsWorld::FindPairs(std::vector<std::pair<uint32_t, uint32_t>>& pairs) {
     if (staticGridIsStale) {
         RebuildStaticGrid();
     }
+    const auto reachOf = [this](const Body& body) {
+        return glm::min(glm::abs(body.linearVelocity) * settings.fixedStep, glm::vec3(settings.maxLookAhead)) + kContactMargin;
+    };
     std::vector<uint32_t> candidates;
     for (uint32_t index = 0; index < static_cast<uint32_t>(bodies.size()); ++index) {
         const Body& body = bodies[index];
@@ -381,8 +385,7 @@ void PhysicsWorld::FindPairs(std::vector<std::pair<uint32_t, uint32_t>>& pairs) 
             continue;
         }
         // A body that is moving fast looks ahead by the distance it covers in a step, up to a limit.
-        const glm::vec3 reach =
-            glm::min(glm::abs(body.linearVelocity) * settings.fixedStep, glm::vec3(settings.maxLookAhead)) + kContactMargin;
+        const glm::vec3 reach = reachOf(body);
         const glm::vec3 low = body.boundsMin - reach;
         const glm::vec3 high = body.boundsMax + reach;
 
@@ -407,7 +410,8 @@ void PhysicsWorld::FindPairs(std::vector<std::pair<uint32_t, uint32_t>>& pairs) 
                 }
             }
         }
-        CollectMovingCandidates(low, high, candidates);
+        // A partner that is itself moving fast may come from beyond this body's reach.
+        CollectMovingCandidates(low - settings.maxLookAhead, high + settings.maxLookAhead, candidates);
 
         std::sort(candidates.begin(), candidates.end());
         candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
@@ -416,7 +420,8 @@ void PhysicsWorld::FindPairs(std::vector<std::pair<uint32_t, uint32_t>>& pairs) 
                 continue;
             }
             const Body& partner = bodies[other];
-            if (BoundsOverlap(low, high, partner.boundsMin - kContactMargin, partner.boundsMax + kContactMargin)) {
+            const glm::vec3 partnerReach = partner.isStatic ? glm::vec3(kContactMargin) : reachOf(partner);
+            if (BoundsOverlap(low, high, partner.boundsMin - partnerReach, partner.boundsMax + partnerReach)) {
                 pairs.emplace_back(std::min(index, other), std::max(index, other));
             }
         }
@@ -464,8 +469,20 @@ void PhysicsWorld::BuildManifolds(const std::vector<std::pair<uint32_t, uint32_t
                 }
             }
         }
+        // The bounce of a point comes from the speed of the nearest point of the last step, which may have
+        // moved as far as the bodies closed in.
         if (previous != previousManifolds.end()) {
-            manifold.carriedImpactSpeed = previous->second.impactSpeed;
+            const float radius = kWarmStartDistance + closing * 1.5f;
+            for (int i = 0; i < manifold.count; ++i) {
+                float nearestDistance = radius;
+                for (int j = 0; j < previous->second.count; ++j) {
+                    const float distance = glm::distance(manifold.points[i].position, previous->second.points[j].position);
+                    if (distance < nearestDistance) {
+                        nearestDistance = distance;
+                        manifold.points[i].carriedImpactSpeed = previous->second.points[j].impactSpeed;
+                    }
+                }
+            }
         }
         manifolds.push_back(manifold);
     }
@@ -481,10 +498,11 @@ void PhysicsWorld::Solve() {
         Body& bodyB = bodies[manifold.b];
         const float friction = std::sqrt(bodyA.material.friction * bodyB.material.friction);
         const float restitution = std::max(bodyA.material.restitution, bodyB.material.restitution);
-        // Boxes tip over an edge as they should; only a ball is slowed in rolling.
+        // A ball is slowed in rolling by the full resistance. A box gets a small share of it, enough to calm a
+        // tall stack but not to hold a box on an edge it should tip over.
         const bool involvesSphere = bodyA.shape.type == ShapeType::Sphere || bodyB.shape.type == ShapeType::Sphere;
-        const float rolling =
-            involvesSphere ? std::sqrt(bodyA.material.rollingResistance * bodyB.material.rollingResistance) : 0.0f;
+        const float rolling = std::sqrt(bodyA.material.rollingResistance * bodyB.material.rollingResistance) *
+                              (involvesSphere ? 1.0f : settings.boxRollingShare);
         const bool movesA = !bodyA.isStatic && !bodyA.isAsleep;
         const bool movesB = !bodyB.isStatic && !bodyB.isAsleep;
         glm::vec3 tangents[2];
@@ -541,12 +559,12 @@ void PhysicsWorld::Solve() {
                 // memory ends as soon as the bodies stop closing in, so that a body hovering a few millimetres
                 // above a surface does not bounce from an old impact each time it touches.
                 if (impactApproach < -settings.restitutionThreshold) {
-                    manifold.impactSpeed = std::min(manifold.carriedImpactSpeed, impactApproach);
+                    point.impactSpeed = std::min(point.carriedImpactSpeed, impactApproach);
                 } else if (impactApproach <= 0.0f) {
-                    manifold.impactSpeed = manifold.carriedImpactSpeed;
+                    point.impactSpeed = point.carriedImpactSpeed;
                 }
             } else {
-                const float impact = std::min(impactApproach, manifold.carriedImpactSpeed);
+                const float impact = std::min(impactApproach, point.carriedImpactSpeed);
                 if (impact < -settings.restitutionThreshold) {
                     target = restitution * -impact;
                 }
@@ -662,7 +680,9 @@ void PhysicsWorld::RemoveOverlaps() {
     }
     for (size_t i = 0; i < bodies.size(); ++i) {
         if (!bodies[i].isStatic && !bodies[i].isAsleep) {
-            bodies[i].position += shift[i];
+            const float length = glm::length(shift[i]);
+            const float scale = length > settings.maxCorrectionPerStep ? settings.maxCorrectionPerStep / length : 1.0f;
+            bodies[i].position += shift[i] * scale;
         }
     }
 }

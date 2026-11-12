@@ -307,9 +307,10 @@ bool BoxBox(const Body& bodyA, const Body& bodyB, Manifold& manifold, float marg
     }
 
     // A face wins unless an edge pair is clearly better: that keeps a box lying flat on another from
-    // flickering between face and edge contacts.
+    // flickering between face and edge contacts. "Better" is further apart, by a centimetre and a twentieth
+    // of the separation, whether the boxes overlap (negative) or are still apart (positive).
     constexpr float kEdgePreference = 0.01f;
-    if (bestEdgeSeparation > 0.95f * bestFaceSeparation + kEdgePreference) {
+    if (bestEdgeSeparation > bestFaceSeparation + kEdgePreference + 0.05f * std::abs(bestFaceSeparation)) {
         const glm::vec3 normal = glm::dot(edgeAxis, offset) < 0.0f ? -edgeAxis : edgeAxis;
         EdgeContact(a, edgeOfA, b, edgeOfB, normal, bestEdgeSeparation, manifold);
         return true;
