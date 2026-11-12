@@ -79,11 +79,14 @@ public:
     // True if a person can stand with its centre at `point` without its body touching an
     // obstacle.
     bool CanStandAt(glm::vec2 point) const { return (CellFlags(point) & (kNoStandingFlag | kMovableFlag)) == 0; }
-    // As CanStandAt, but the movable obstacles (see SetMovableObstacles) are not counted.
-    bool CanStandAtIgnoringMovables(glm::vec2 point) const { return (CellFlags(point) & kNoStandingFlag) == 0; }
-    // True if `point` is within a body radius of a movable obstacle: someone standing there when a crate lands has to be able
-    // to walk out of it, since every step they could take is into a place they cannot stand.
-    bool IsNearMovableObstacle(glm::vec2 point) const { return (CellFlags(point) & kMovableFlag) != 0; }
+    // True if someone at `from` may step to `to` although a movable obstacle (see SetMovableObstacles) closes it. A crate can
+    // land on a person, who then has to be able to walk out of it. So the step must not be into a wall, and must not take
+    // them deeper into the obstacle than they are: they may follow the level of a crate, or go towards its edge, and from
+    // outside they may not enter it.
+    bool CanStepOutOfMovableObstacle(glm::vec2 from, glm::vec2 to) const {
+        const int depthHere = MovableDepthAt(from);
+        return (CellFlags(to) & kNoStandingFlag) == 0 && depthHere > 0 && MovableDepthAt(to) <= depthHere;
+    }
     // As CanStandAt, and the space is not reserved either (see Reserve).
     bool CanStandAtUnreserved(glm::vec2 point) const {
         return (CellFlags(point) & (kNoStandingFlag | kReservedFlag | kMovableFlag)) == 0;
@@ -141,6 +144,8 @@ private:
     static constexpr uint8_t kNoStandingFlag = 2;  // within a body radius of an obstacle
     static constexpr uint8_t kReservedFlag = 4;
     static constexpr uint8_t kMovableFlag = 8;     // within a body radius of an obstacle that can move
+    // 0 outside every movable obstacle, 1 in the margin round one, and inside one 2 plus the number of cells to its edge.
+    int MovableDepthAt(glm::vec2 point) const;
 
     void BuildArms();
     void BuildCrosswalks();
@@ -181,7 +186,8 @@ private:
     int gridColumns = 0;
     int gridRows = 0;
     std::vector<uint8_t> gridFlags;
-    std::vector<uint32_t> movableCells;  // the cells that carry kMovableFlag, so that they can be cleared quickly
+    std::vector<uint32_t> movableCells;  // the cells that carry a movable flag, so that they can be cleared quickly
+    std::vector<uint8_t> movableDepth;   // see MovableDepthAt, for every cell of the grid
 };
 
 }  // namespace crowd

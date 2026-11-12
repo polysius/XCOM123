@@ -517,13 +517,14 @@ void RunBenchmark(const CityLayout& city, uint32_t agentCount, const BenchOption
     CameraPose camera{};
     for (uint32_t step = 0; step < kWarmupSteps + options.steps; ++step) {
         camera = CameraOnPath(city, bounds, static_cast<float>(step) * kStepSeconds);
+        // The physics of the props is not the crowd's cost, so it stays outside the timed part.
+        if (options.props > 0) {
+            props.Update(kStepSeconds);
+        }
         const Clock::time_point start = Clock::now();
         SetFocusIfSupported(crowd, camera.position);
         if (options.props > 0) {
-            props.Update(kStepSeconds);
-            if constexpr (requires { crowd.SetMovableObstacles(props.Obstacles()); }) {
-                crowd.SetMovableObstacles(props.Obstacles());
-            }
+            crowd.SetMovableObstacles(props.Obstacles());
         }
         crowd.Update(kStepSeconds);
         const Clock::time_point updated = Clock::now();

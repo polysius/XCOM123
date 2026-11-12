@@ -318,6 +318,7 @@ void PreRollWorld(Engine& engine, float seconds) {
     const bool coupled = engine.river.IsBuilt() && engine.props.Count() > 0;
     while (seconds > 0.0f) {
         const float step = std::min(seconds, kPreRollTimeStep);
+        engine.crowd.SetMovableObstacles(engine.props.Obstacles());
         engine.crowd.Update(step);
         if (coupled) {
             // The props and the water act on each other, so they run together, in pieces of a frame, and only for the

@@ -737,7 +737,7 @@ void ACrateThatIsRemovedOpensThePlaceAgain() {
     walkways.SetMovableObstacles(std::span(&crate, 1));
     walkways.SetMovableObstacles({});
     Check(walkways.CanStandAt({0.0f, 0.0f}), "the place is open when the crate is gone");
-    Check(!walkways.IsNearMovableObstacle({0.0f, 0.0f}), "and nobody counts as being near it");
+    Check(!walkways.CanStepOutOfMovableObstacle({0.0f, 0.0f}, {0.0f, 0.0f}), "and nobody needs to step out of it");
 }
 
 void ACrateThatMovedClosesItsNewPlaceAndOpensTheOld() {
@@ -770,13 +770,55 @@ void ANonFiniteCrateIsIgnored() {
     Check(walkways.CanStandAt({0.0f, 0.0f}), "a crate with no position closes nothing");
 }
 
-void SomeoneBesideACrateKnowsItAndBuildingsStillHoldThem() {
+// A crate 1 m wide whose middle is `shift` metres east of the origin. The grid of the walkways has cells of half a metre,
+// so where the margin of a crate falls between their centres depends on where the crate stands.
+MovableObstacle CrateShiftedEast(float ground, float shift) {
+    MovableObstacle crate = CrateAtTheOrigin(ground);
+    crate.min.x += shift;
+    crate.max.x += shift;
+    return crate;
+}
+
+void ACrateHasAMarginOfOneBodyRadius() {
     crowd::Walkways walkways = EmptyWalkways();
+    bool marginIsClosed = false;
+    for (float shift = 0.0f; shift < 0.5f; shift += 0.1f) {
+        const MovableObstacle crate = CrateShiftedEast(walkways.WalkHeight(), shift);
+        walkways.SetMovableObstacles(std::span(&crate, 1));
+        for (float x = crate.max.x; x < crate.max.x + 0.3f; x += 0.05f) {
+            marginIsClosed = marginIsClosed || !walkways.CanStandAt({x, 0.0f});
+        }
+        Check(walkways.CanStandAt({crate.max.x + 1.0f, 0.0f}), "and not much more than it");
+    }
+    Check(marginIsClosed, "the margin round the crate is closed to people");
     const MovableObstacle crate = CrateAtTheOrigin(walkways.WalkHeight());
     walkways.SetMovableObstacles(std::span(&crate, 1));
-    Check(walkways.IsNearMovableObstacle({0.0f, 0.0f}), "a person in a crate is near it");
-    Check(walkways.CanStandAtIgnoringMovables({0.0f, 0.0f}), "and may step where only the crate was in the way");
-    Check(!walkways.IsNearMovableObstacle({5.0f, 5.0f}), "far from it nobody is near");
+    Check(!walkways.CanStandAtUnreserved({0.0f, 0.0f}), "a crate closes places for those who keep out of conversations too");
+}
+
+void SomeoneInACrateMayWalkOutButNotDeeperAndNotThroughWalls() {
+    CityLayout city;
+    city.bounds = {{-30.0f, -30.0f}, {30.0f, 30.0f}};
+    city.boxes.push_back({.center = {0.0f, 1.0f, 4.0f}, .halfSize = {6.0f, 1.0f, 1.0f}});  // a wall of a building to the north
+    crowd::Walkways walkways;
+    walkways.Build(city);
+    const glm::vec2 farOutside(-5.0f, 0.0f);
+    bool foundMarginPlace = false;
+    for (float shift = 0.0f; shift < 0.5f; shift += 0.1f) {
+        const MovableObstacle crate = CrateShiftedEast(walkways.WalkHeight(), shift);
+        walkways.SetMovableObstacles(std::span(&crate, 1));
+        const glm::vec2 middle = 0.5f * (crate.min + crate.max);
+        Check(walkways.CanStepOutOfMovableObstacle(middle, middle + glm::vec2(0.0f, 0.1f)), "from inside a crate one may step on inside it");
+        Check(!walkways.CanStepOutOfMovableObstacle(farOutside, middle), "from outside one may not walk into it");
+        Check(!walkways.CanStepOutOfMovableObstacle(middle, {middle.x, 4.0f}), "and nobody may step into a wall of a building");
+        for (float x = crate.max.x; x < crate.max.x + 0.3f; x += 0.05f) {
+            const glm::vec2 place(x, 0.0f);
+            // In the margin: closed to standing, yet a step in from there would be deeper.
+            foundMarginPlace = foundMarginPlace || (!walkways.CanStandAt(place) && walkways.CanStepOutOfMovableObstacle(place, place) &&
+                                                    !walkways.CanStepOutOfMovableObstacle(place, middle));
+        }
+    }
+    Check(foundMarginPlace, "from the margin the middle of the crate is a step too deep");
 }
 
 struct Test {
@@ -821,7 +863,8 @@ int main() {
         {"ACrateThatMovedClosesItsNewPlaceAndOpensTheOld", ACrateThatMovedClosesItsNewPlaceAndOpensTheOld},
         {"ACrateInTheAirOrFarBelowIsNoObstacle", ACrateInTheAirOrFarBelowIsNoObstacle},
         {"ANonFiniteCrateIsIgnored", ANonFiniteCrateIsIgnored},
-        {"SomeoneBesideACrateKnowsItAndBuildingsStillHoldThem", SomeoneBesideACrateKnowsItAndBuildingsStillHoldThem},
+        {"ACrateHasAMarginOfOneBodyRadius", ACrateHasAMarginOfOneBodyRadius},
+        {"SomeoneInACrateMayWalkOutButNotDeeperAndNotThroughWalls", SomeoneInACrateMayWalkOutButNotDeeperAndNotThroughWalls},
         {"ObstacleStaysAxisAlignedAtYawZero", ObstacleStaysAxisAlignedAtYawZero},
         {"ObstacleFollowsAQuarterTurn", ObstacleFollowsAQuarterTurn},
         {"ObstacleFollowsADiagonalTurn", ObstacleFollowsADiagonalTurn},

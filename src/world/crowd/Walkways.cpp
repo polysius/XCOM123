@@ -227,6 +227,8 @@ void Walkways::BuildObstacleGrid(const CityLayout& city) {
     gridColumns = static_cast<int>(std::ceil((high.x - low.x + 2.0f * kGridMargin) / gridCellSize));
     gridRows = static_cast<int>(std::ceil((high.y - low.y + 2.0f * kGridMargin) / gridCellSize));
     gridFlags.assign(static_cast<size_t>(gridColumns) * static_cast<size_t>(gridRows), 0);
+    movableCells.clear();  // they pointed into the grid that was just replaced
+    movableDepth.assign(gridFlags.size(), 0);
 
     for (const BoxInstance& box : city.boxes) {
         const float bottom = box.center.y - box.halfSize.y;
@@ -298,9 +300,18 @@ uint8_t Walkways::CellFlags(glm::vec2 point) const {
     return gridFlags[static_cast<size_t>(cell.y) * static_cast<size_t>(gridColumns) + static_cast<size_t>(cell.x)];
 }
 
+int Walkways::MovableDepthAt(glm::vec2 point) const {
+    const glm::ivec2 cell = CellOf(point);
+    if (cell.x < 0 || cell.y < 0 || cell.x >= gridColumns || cell.y >= gridRows) {
+        return 0;
+    }
+    return movableDepth[static_cast<size_t>(cell.y) * static_cast<size_t>(gridColumns) + static_cast<size_t>(cell.x)];
+}
+
 void Walkways::SetMovableObstacles(std::span<const MovableObstacle> obstacles) {
     for (uint32_t cell : movableCells) {
         gridFlags[cell] = static_cast<uint8_t>(gridFlags[cell] & ~kMovableFlag);
+        movableDepth[cell] = 0;
     }
     movableCells.clear();
     for (const MovableObstacle& obstacle : obstacles) {
@@ -323,9 +334,14 @@ void Walkways::SetMovableObstacles(std::span<const MovableObstacle> obstacles) {
                     cellCenter.y >= obstacle.min.y - kBodyRadius + kObstacleShrink && cellCenter.y <= obstacle.max.y + kBodyRadius - kObstacleShrink) {
                     const size_t cell = static_cast<size_t>(y) * static_cast<size_t>(gridColumns) + static_cast<size_t>(x);
                     if ((gridFlags[cell] & kMovableFlag) == 0) {
-                        gridFlags[cell] = static_cast<uint8_t>(gridFlags[cell] | kMovableFlag);
                         movableCells.push_back(static_cast<uint32_t>(cell));
                     }
+                    gridFlags[cell] = static_cast<uint8_t>(gridFlags[cell] | kMovableFlag);
+                    // The distance to the nearest edge, if the centre is inside, in cells; negative if it is in the margin.
+                    const float toEdge = std::min(std::min(cellCenter.x - obstacle.min.x, obstacle.max.x - cellCenter.x),
+                                                  std::min(cellCenter.y - obstacle.min.y, obstacle.max.y - cellCenter.y));
+                    const int depth = toEdge < 0.0f ? 1 : 2 + std::min(static_cast<int>(toEdge / gridCellSize), 200);
+                    movableDepth[cell] = std::max(movableDepth[cell], static_cast<uint8_t>(depth));
                 }
             }
         }

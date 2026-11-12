@@ -438,10 +438,10 @@ glm::vec2 KeepOnWalkway(const StepContext& context, const CrowdState& state, uin
             candidate = KeepInPlaza(walkways.Plazas()[behaviour.plaza], previous, candidate);
         }
         bool free = respectReserved ? walkways.CanStandAtUnreserved(candidate) : walkways.CanStandAt(candidate);
-        // Someone a crate has landed beside or on can take any step that is not into a wall or a building, so that they walk
-        // out of the crate's reach and are not held in it for as long as it lies there.
-        if (!free && walkways.IsNearMovableObstacle(previous)) {
-            free = walkways.CanStandAtIgnoringMovables(candidate);
+        // Someone a crate has landed beside or on may take a step that does not go deeper into it, so that they walk out of
+        // its reach and are not held in it for as long as it lies there.
+        if (!free) {
+            free = walkways.CanStepOutOfMovableObstacle(previous, candidate);
         }
         if (free) {
             return candidate;
