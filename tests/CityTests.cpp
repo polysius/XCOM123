@@ -1124,9 +1124,68 @@ void CheckArchitecture(const CityLayout& city) {
     }
 }
 
+// True when a box of a landmark stands in people's way at `point`.
+bool LandmarkObstacleAt(const CityLayout& city, glm::vec2 point) {
+    constexpr float kLowest = 0.4f;   // as in the crowd's obstacle rule, measured from the pavement
+    constexpr float kHighest = 1.7f;
+    for (size_t i = 0; i < city.boxes.size(); ++i) {
+        const BoxInstance& box = city.boxes[i];
+        if (city.boxParts[i] != CityPart::Landmark || box.center.y - box.halfSize.y > kHighest ||
+            box.center.y + box.halfSize.y < kLowest) {
+            continue;
+        }
+        if (std::abs(point.x - box.center.x) <= box.halfSize.x && std::abs(point.y - box.center.z) <= box.halfSize.z) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// A room people walk in must be closed: walls all round it except for its doorways, and a doorway
+// that nothing blocks. Only churches have walls; the market hall stands on open piers.
+void CheckInteriors(const CityLayout& city) {
+    constexpr float kOutside = 0.4f;      // how far beyond the floor the wall is sampled
+    constexpr float kStep = 0.5f;
+    constexpr float kCornerInset = 0.1f;  // the corners are shared by two walls, so they are judged by neither
+    constexpr float kDoorwayReach = 4.0f; // end walls are not sampled this close to their middle
+    for (const Interior& interior : city.interiors) {
+        const Rect floor = interior.floor.Bounds();
+        Expect(floor.Area() > 50.0f, "interiors", "a room has hardly any floor");
+        if (interior.kind != LandmarkKind::ParishChurch) {
+            continue;
+        }
+        Expect(!LandmarkObstacleAt(city, interior.door), "interiors", "something blocks the doorway of a church");
+        const glm::vec2 size = floor.Size();
+        const bool longAlongX = size.x >= size.y;
+        for (int side = 0; side < 4; ++side) {
+            const bool alongX = side < 2;  // sides 0 and 1 run along X, at the low and high Z
+            const bool high = (side % 2) == 1;
+            const bool isEnd = alongX != longAlongX;
+            const float fixed = alongX ? (high ? floor.max.y + kOutside : floor.min.y - kOutside)
+                                       : (high ? floor.max.x + kOutside : floor.min.x - kOutside);
+            const float first = alongX ? floor.min.x : floor.min.y;
+            const float last = alongX ? floor.max.x : floor.max.y;
+            const float middle = (first + last) * 0.5f;
+            for (float along = first + kCornerInset; along <= last - kCornerInset; along += kStep) {
+                if (isEnd && std::abs(along - middle) < kDoorwayReach) {
+                    continue;
+                }
+                const glm::vec2 point = alongX ? glm::vec2(along, fixed) : glm::vec2(fixed, along);
+                if (!LandmarkObstacleAt(city, point)) {
+                    Fail("interiors", Format("a church has a gap in its wall at (%.1f, %.1f), floor from (%.1f, %.1f)", point.x,
+                                             point.y, floor.min.x, floor.min.y) +
+                                          Format(" to (%.1f, %.1f)", floor.max.x, floor.max.y));
+                    break;
+                }
+            }
+        }
+    }
+}
+
 void RunContractChecks(const CityLayout& city, bool expectRiver) {
     const CityIndex index = BuildIndex(city);
     CheckArchitecture(city);
+    CheckInteriors(city);
     CheckBoxes(city);
     CheckStreetGraph(city);
     CheckJunctionAngles(city);
@@ -1243,6 +1302,24 @@ void TestSeed(uint32_t seed, bool checkDeterminism, bool districtOnly = false, i
         }
         Expect(hasArches && hasStucco, "architecture", "the default city has no arched or stuccoed buildings");
         Expect(spires > 0, "architecture", "the default city has no belvedere with a copper spire");
+        Expect(!city.interiors.empty(), "interiors", "the default city has no room to walk in");
+        // A wall knocked out of a church must be noticed.
+        CityLayout breached = city;
+        for (const Interior& interior : city.interiors) {
+            if (interior.kind != LandmarkKind::ParishChurch) {
+                continue;
+            }
+            const Rect floor = interior.floor.Bounds();
+            for (size_t i = 0; i < breached.boxes.size(); ++i) {
+                const glm::vec2 at(breached.boxes[i].center.x, breached.boxes[i].center.z);
+                if (breached.boxParts[i] == CityPart::Landmark && at.x > floor.min.x - 1.0f && at.x < floor.max.x + 1.0f &&
+                    at.y > floor.min.y - 1.0f && at.y < floor.max.y + 1.0f && breached.boxes[i].halfSize.y > 4.0f) {
+                    breached.boxes[i].center.y += 100.0f;  // lift the wall piece out of the way
+                }
+            }
+        }
+        Expect(CountFailuresOf([&] { CheckInteriors(breached); }) > 0, "interiors",
+               "the check did not notice walls missing from a church");
         Expect(CountFailuresOf([&] { CheckArchitecture(planted); }) > 0, "architecture",
                "the check did not notice a landmark with arched windows");
     }

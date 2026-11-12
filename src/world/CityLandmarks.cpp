@@ -4,6 +4,8 @@
 #include <cmath>
 
 #include "world/CityBuildings.h"
+#include "world/CityFrame.h"
+#include "world/CityInteriors.h"
 #include "world/CityNature.h"
 
 namespace city {
@@ -22,40 +24,6 @@ const glm::vec3 kClearGlass{0.10f, 0.12f, 0.13f};
 const glm::vec3 kDarkOpening{0.03f, 0.03f, 0.035f};
 const glm::vec3 kClockFace{0.90f, 0.86f, 0.74f};
 const glm::vec3 kIron{0.05f, 0.05f, 0.055f};
-
-// A rectangle described from its front: u runs from the front edge (0) to the back (length),
-// v across it from -width/2 to +width/2. Landmarks are designed in these coordinates so the same
-// code can face any of the four directions.
-struct LocalFrame {
-    glm::vec2 origin;   // the middle of the front edge
-    glm::vec2 forward;  // from the front towards the back
-    glm::vec2 right;
-    float length;
-    float width;
-
-    glm::vec2 Point(float u, float v) const { return origin + forward * u + right * v; }
-    Rect Area(float u0, float u1, float v0, float v1) const {
-        const glm::vec2 a = Point(u0, v0);
-        const glm::vec2 b = Point(u1, v1);
-        return {glm::min(a, b), glm::max(a, b)};
-    }
-};
-
-LocalFrame FrameFacing(const Rect& land, Side front) {
-    const glm::vec2 center = land.Center();
-    const glm::vec2 size = land.Size();
-    switch (front) {
-    case kSideSouth:
-        return {{center.x, land.min.y}, {0.0f, 1.0f}, {1.0f, 0.0f}, size.y, size.x};
-    case kSideNorth:
-        return {{center.x, land.max.y}, {0.0f, -1.0f}, {-1.0f, 0.0f}, size.y, size.x};
-    case kSideWest:
-        return {{land.min.x, center.y}, {1.0f, 0.0f}, {0.0f, -1.0f}, size.x, size.y};
-    case kSideEast:
-    default:
-        return {{land.max.x, center.y}, {-1.0f, 0.0f}, {0.0f, 1.0f}, size.x, size.y};
-    }
-}
 
 // Picks a front at random among the two long sides, or the two short sides, of `land`.
 Side ChooseFront(const Rect& land, bool onLongSide, Random& random) {
@@ -424,6 +392,8 @@ void BuildMarketHall(BoxWriter& boxes, CityLayout& city, const Rect& land, Rando
         }
     }
     const LocalFrame frame = FrameFacing(land, alongX ? kSideSouth : kSideWest);
+    // People shop between the piers; the stalls are obstacles on the floor.
+    city.interiors.push_back({LandmarkKind::MarketHall, OrientedRect(hall.Expanded(-1.5f)), frame.Point(border + 1.6f, 0.0f)});
     RecordLandmark(city, LandmarkKind::MarketHall, hall.Expanded(1.2f), frame, border - 1.2f);
 }
 
@@ -472,26 +442,45 @@ void BuildParishChurch(BoxWriter& boxes, CityLayout& city, const Rect& land, Dis
     const Look spire{kLead, SurfaceMaterial::Metal, 0.45f, 0.0f};
     const Look glass = StainedGlass(random);
     const Look louvres{kDarkOpening, SurfaceMaterial::Plain, 0.9f, 0.0f};
+    const Look floorStone = StoneLook(kTrimStone * 0.9f);  // no random draw, so the rest of the churchyard is unchanged
     const float towerFront = kForecourt + 2.0f;
     const float naveStart = towerFront + 9.0f;
     const float naveEnd = frame.length - 14.0f;
 
     // A west tower with a belfry and spire, then the nave and a small apse.
     const glm::vec2 tower = frame.Point(towerFront + 4.5f, 0.0f);
-    SquareBox(boxes, tower, 4.5f, 0.0f, 28.0f, stone);
+    // The tower is hollow at its foot: a vestibule behind the west door, open to the nave.
+    constexpr float kVestibuleCeiling = 5.6f;  // above the top of the doorway into the nave
+    const RoomSpec vestibule{towerFront, towerFront + 9.0f, -4.5f, 4.5f, 28.0f, 0.9f, Doorway{1.6f, 4.6f}, Doorway{2.0f, 5.5f}};
+    BuildRoomWalls(boxes, frame, vestibule, stone);
+    BuildRoomFloor(boxes, frame, vestibule, floorStone);
+    boxes.Footprint(RoomFloor(frame, vestibule), kVestibuleCeiling, 28.0f, stone);  // solid above the ceiling
     TowerOpenings(boxes, tower, 4.5f, 1.4f, 21.0f, 26.0f, louvres);
     SquareBox(boxes, tower, 4.9f, 28.0f, 28.7f, Look{kTrimStone, SurfaceMaterial::Plain, 0.75f, 0.0f});
     SteppedSpire(boxes, tower, 4.0f, 28.7f, 17.0f, 5, spire);
-    Block(boxes, frame, towerFront - 0.08f, towerFront + 0.05f, -1.6f, 1.6f, 0.15f, 4.6f,
-          Look{kDoorWood, SurfaceMaterial::Plain, 0.7f, 0.0f});
-    Block(boxes, frame, naveStart, naveEnd, -7.0f, 7.0f, 0.0f, 15.0f, stone);
+
+    // The nave and the apse are hollow rooms: the nave has pews on either side of a central aisle and
+    // opens through a wide chancel arch into the apse, where the altar stands.
+    constexpr float kChancelArch = 3.5f;
+    const RoomSpec nave{naveStart, naveEnd, -7.0f, 7.0f, 15.0f, 0.8f, Doorway{2.0f, 5.5f}, Doorway{kChancelArch, 9.0f}};
+    const RoomSpec apse{naveEnd, naveEnd + 7.0f, -5.0f, 5.0f, 12.0f, 0.8f, Doorway{kChancelArch, 9.0f}, std::nullopt};
+    const Look ceiling{kTrimStone, SurfaceMaterial::Plain, 0.9f, 0.0f};
+    const Look wood{kDoorWood, SurfaceMaterial::Plain, 0.6f, 0.0f};
+    for (const RoomSpec* room : {&nave, &apse}) {
+        BuildRoomWalls(boxes, frame, *room, stone);
+        BuildRoomFloor(boxes, frame, *room, floorStone);
+        BuildRoomCeiling(boxes, frame, *room, ceiling);
+    }
+    AddPews(boxes, frame, nave, PewLayout{naveStart + 4.0f, naveEnd - 6.0f, 2.4f, 1.2f, 5}, wood);
+    AddAltar(boxes, frame, naveEnd + 4.5f, floorStone);
+    city.interiors.push_back({LandmarkKind::ParishChurch, OrientedRect(RoomFloor(frame, nave)), frame.Point(naveStart + 0.4f, 0.0f)});
     SteppedRoof(boxes, frame, naveStart, naveEnd, -7.0f, 7.0f, 15.0f, 6.0f, 3, true, roof);
-    Block(boxes, frame, naveEnd, naveEnd + 7.0f, -5.0f, 5.0f, 0.0f, 12.0f, stone);
     SteppedRoof(boxes, frame, naveEnd, naveEnd + 7.0f, -5.0f, 5.0f, 12.0f, 4.0f, 2, true, roof);
     for (float u = naveStart + 3.0f; u + 3.0f <= naveEnd; u += 6.0f) {
         const float buttress = u + 3.0f;
         for (float side : {-1.0f, 1.0f}) {
             Block(boxes, frame, u - 1.1f, u + 1.1f, side * 6.92f, side * 7.08f, 4.0f, 11.5f, glass);
+            Block(boxes, frame, u - 1.1f, u + 1.1f, side * 6.1f, side * 6.2f, 4.0f, 11.5f, glass);  // seen from inside
             if (buttress < naveEnd - 1.0f) {
                 Block(boxes, frame, buttress - 0.6f, buttress + 0.6f, side * 7.0f, side * 8.4f, 0.0f, 10.0f, stone);
             }

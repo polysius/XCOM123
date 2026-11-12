@@ -221,6 +221,9 @@ public:
     enum class Place { Walkable, InsideObstacle, OnRoad, OutsideWalkways };
 
     explicit WalkableSpaceCheck(const CityLayout& city) : plazas(city.plazas) {
+        for (const Interior& interior : city.interiors) {
+            plazas.push_back(interior.floor);  // rooms inside landmarks are walked in like squares
+        }
         roadHalfWidth = city.sidewalkCenterOffset - city.sidewalkWidth * 0.5f;
         outerEdge = city.sidewalkCenterOffset + city.sidewalkWidth * 0.5f;
         // The road near a street's ends is the intersection and its crosswalks. This assumes
@@ -385,6 +388,7 @@ struct SanityReport {
     size_t obstacleDisagreements = 0; // of those, the ones the crowd would let a person stand on
     size_t pavementsChecked = 0;      // points on the pavements, which the layout says people may stand on
     size_t pavementDisagreements = 0; // of those, the ones the crowd will not let a person stand on
+    size_t indoors = 0;               // people standing on the floor of a room inside a landmark
 };
 
 bool IsFinite(const NpcInstance& npc) {
@@ -426,6 +430,12 @@ SanityReport CheckCrowd(const Crowd& crowd, const CityLayout& city, glm::vec3 ca
         // A person stands on the ground under them: the level of the city plus the lift of the terrain.
         if (std::abs(npc.position.y - (city.walkHeight + terrain.LiftAt(point))) > 0.01f) {
             ++report.wrongHeight;
+        }
+        for (const Interior& interior : city.interiors) {
+            if (interior.floor.Contains(point)) {
+                ++report.indoors;
+                break;
+            }
         }
         switch (walkable.Classify(point)) {
         case WalkableSpaceCheck::Place::Walkable:
@@ -511,7 +521,9 @@ void RunBenchmark(const CityLayout& city, uint32_t agentCount, const BenchOption
               << sanity.overlappingPairs << " pairs closer than " << kOverlapDistance << " m\n"
               << "  heights and obstacles: " << sanity.wrongHeight << " people at the wrong height, the crowd disagrees on "
               << sanity.obstacleDisagreements << " of " << sanity.obstaclesChecked << " obstacles and "
-              << sanity.pavementDisagreements << " of " << sanity.pavementsChecked << " pavement points\n";
+              << sanity.pavementDisagreements << " of " << sanity.pavementsChecked << " pavement points\n"
+              << "  indoors: " << sanity.indoors << " of " << sanity.readBack << " people are inside the "
+              << city.interiors.size() << " rooms of the landmarks\n";
 }
 
 }  // namespace

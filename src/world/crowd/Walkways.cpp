@@ -37,6 +37,11 @@ float SegmentDistance(glm::vec2 point, glm::vec2 start, glm::vec2 end) {
 void Walkways::Build(const CityLayout& city) {
     streets = city.streets;
     plazas = city.plazas;
+    // People walk about the rooms inside landmarks as they do in squares: the furniture is an
+    // obstacle, and the walls around them are boxes of the city like any other.
+    for (const Interior& interior : city.interiors) {
+        plazas.push_back(interior.floor);
+    }
     sidewalkWidth = city.sidewalkWidth;
     laneCenter = city.sidewalkCenterOffset;
     roadHalfWidth = city.sidewalkCenterOffset - city.sidewalkWidth * 0.5f;
