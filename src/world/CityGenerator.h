@@ -139,7 +139,7 @@ struct StreetGraph {
 
 // The most boxes a generated city may hold. The renderer draws every box in every frame, so this
 // bounds the cost of a city; satellite districts stop being added when it would be exceeded.
-inline constexpr size_t kMaxCityBoxes = 150000;
+inline constexpr size_t kMaxCityBoxes = 160000;
 
 // The most satellite districts that can be asked for. The box budget is reached before more would
 // be useful.

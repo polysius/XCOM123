@@ -49,6 +49,7 @@ const uint FACADE_STUCCO = 128u;
 const uint ROOF_DORMERS = 1u;
 const uint GLASS_STAINED = 1u;
 const uint METAL_RAILING = 1u;
+const uint METAL_VERDIGRIS = 2u;
 const uint GROUND_SLABS = 1u;
 const uint GROUND_COBBLES = 2u;
 const uint GROUND_GRAVEL = 3u;
@@ -520,7 +521,21 @@ Surface GlassSurface(Surface surface, Pattern pattern, uint flags, float seedRan
     return surface;
 }
 
-Surface MetalSurface(Surface surface, vec3 normal, Pattern pattern, uint flags) {
+// Copper that has weathered blue green: dull patina in patches and in rain streaks, with the
+// brighter colour of the metal left only where the weather has not reached it.
+Surface VerdigrisFinish(Surface surface, Pattern pattern, float seedRandom) {
+    float patches = ValueNoise(pattern.face * vec2(1.7, 0.9) + seedRandom * 37.0);
+    float streaks = ValueNoise(vec2(pattern.face.x * 4.0, pattern.face.y * 0.3 + seedRandom * 11.0));
+    float patina = smoothstep(0.25, 0.75, mix(patches, streaks, 0.4));
+    vec3 oxide = surface.albedo;  // the colour of the patina is set by the box
+    vec3 bareCopper = vec3(0.45, 0.28, 0.17);
+    surface.albedo = mix(bareCopper, oxide, mix(0.85, patina, pattern.detailFade)) * mix(0.8, 1.1, patches);
+    surface.metallic = mix(0.5, 0.1, patina);
+    surface.roughness = mix(0.4, 0.8, patina);
+    return surface;
+}
+
+Surface MetalSurface(Surface surface, vec3 normal, Pattern pattern, uint flags, float seedRandom) {
     surface.metallic = 0.6;
     bool vertical = abs(normal.y) < 0.5;
     if (vertical && (flags & METAL_RAILING) != 0u) {
@@ -544,6 +559,10 @@ Surface MetalSurface(Surface surface, vec3 normal, Pattern pattern, uint flags) 
         seam = mix(0.06, seam, PatternSharpness(vec2(seamsPerPixel)));
         float streaks = ValueNoise(pattern.face * vec2(1.0, 0.3));
         surface.albedo *= mix(1.0, 0.75, seam) * mix(0.8, 1.1, streaks);
+        if ((flags & METAL_VERDIGRIS) != 0u) {
+            surface = VerdigrisFinish(surface, pattern, seedRandom);
+            surface.albedo *= mix(1.0, 0.8, seam);
+        }
     }
     return surface;
 }
@@ -665,7 +684,7 @@ void main() {
     } else if (material == MATERIAL_GLASS) {
         surface = GlassSurface(surface, pattern, flags, seedRandom);
     } else if (material == MATERIAL_METAL) {
-        surface = MetalSurface(surface, N, pattern, flags);
+        surface = MetalSurface(surface, N, pattern, flags, seedRandom);
     } else if (material == MATERIAL_LAMP) {
         surface = LampSurface(surface);
     } else if (material == MATERIAL_PLAIN) {

@@ -31,6 +31,7 @@ struct BuildingDesign {
     bool balconies = false;
     bool awnings = false;
     bool attic = false;  // a set-back storey above the cornice
+    bool belvedere = false;  // a small tower turned 45 degrees, with a copper spire, on a mansard roof
 };
 
 // Height of the top of a building's walls.

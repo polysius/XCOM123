@@ -1092,17 +1092,21 @@ uint32_t PatternFlagsOf(const BoxInstance& box) {
     return static_cast<uint32_t>(box.seed);
 }
 
+bool IsMaterial(const CityLayout& city, size_t i, SurfaceMaterial material) {
+    return static_cast<uint32_t>(city.boxes[i].material) == static_cast<uint32_t>(material);
+}
+
 bool IsFacadeBox(const CityLayout& city, size_t i) {
-    return city.boxParts[i] == CityPart::Building && static_cast<uint32_t>(city.boxes[i].material) ==
-                                                         static_cast<uint32_t>(SurfaceMaterial::Facade);
+    return city.boxParts[i] == CityPart::Building && IsMaterial(city, i, SurfaceMaterial::Facade);
 }
 
 // Round-headed windows and troweled plaster belong to the old quarter, the market and the
 // residential blocks. The grand district and the landmarks keep their square-cut stone.
 void CheckArchitecture(const CityLayout& city) {
     for (size_t i = 0; i < city.boxes.size(); ++i) {
+        // The flags mean different things to other materials, so only walls are looked at.
         const uint32_t flags = PatternFlagsOf(city.boxes[i]);
-        if ((flags & kArchitectureFlags) == 0) {
+        if (!IsMaterial(city, i, SurfaceMaterial::Facade) || (flags & kArchitectureFlags) == 0) {
             continue;
         }
         if (city.boxParts[i] == CityPart::Landmark) {
@@ -1222,17 +1226,23 @@ void TestSeed(uint32_t seed, bool checkDeterminism, bool districtOnly = false, i
     if (!districtOnly && seed == CitySettings{}.seed) {
         bool hasArches = false;
         bool hasStucco = false;
+        int spires = 0;
         CityLayout planted = city;
         for (size_t i = 0; i < city.boxes.size(); ++i) {
+            if (city.boxParts[i] == CityPart::Building && IsMaterial(city, i, SurfaceMaterial::Metal) &&
+                (PatternFlagsOf(city.boxes[i]) & city::kMetalVerdigris) != 0) {
+                ++spires;
+            }
             if (IsFacadeBox(city, i)) {
                 hasArches = hasArches || (PatternFlagsOf(city.boxes[i]) & city::kFacadeArched) != 0;
                 hasStucco = hasStucco || (PatternFlagsOf(city.boxes[i]) & city::kFacadeStucco) != 0;
             }
-            if (city.boxParts[i] == CityPart::Landmark) {
+            if (city.boxParts[i] == CityPart::Landmark && IsMaterial(city, i, SurfaceMaterial::Facade)) {
                 planted.boxes[i].seed = static_cast<float>(city::kFacadeArched) + 0.5f;  // an arched cathedral
             }
         }
         Expect(hasArches && hasStucco, "architecture", "the default city has no arched or stuccoed buildings");
+        Expect(spires > 0, "architecture", "the default city has no belvedere with a copper spire");
         Expect(CountFailuresOf([&] { CheckArchitecture(planted); }) > 0, "architecture",
                "the check did not notice a landmark with arched windows");
     }

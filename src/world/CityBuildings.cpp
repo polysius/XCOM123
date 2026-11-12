@@ -55,6 +55,7 @@ const glm::vec3 kChimneyBrick{0.42f, 0.27f, 0.21f};
 constexpr float kLedgeBottom = kGroundFloorHeight - 0.05f;
 constexpr float kAtticHeight = kUpperFloorHeight;
 constexpr float kMinRoofWidth = 0.6f;  // narrowest top a stepped roof may shrink to
+constexpr float kMansardTopInset = 2.6f;  // how far the flat top of a mansard roof is set in from the walls
 constexpr float kMinCourtyard = 8.0f;
 constexpr float kRearJitter = 2.5f;    // how far the back wall of a house may step in from the courtyard edge
 
@@ -105,6 +106,27 @@ bool LotHasFeature(const Lot& lot, uint32_t salt, float chance) {
     const auto quantised = [](float metres) { return static_cast<uint32_t>(static_cast<int32_t>(std::lround(metres * 4.0f))); };
     const uint32_t hash = MixSeed(MixSeed(salt, quantised(lot.area.min.x)), quantised(lot.area.min.y));
     return static_cast<float>(hash & 0xFFFFu) / 65536.0f < chance;
+}
+
+// Whether a lot gets a belvedere. Only a house with a single street front and a mansard roof is
+// considered, since a corner lot has its chimney in the middle of the roof.
+bool WantsBelvedere(District district, const Lot& lot) {
+    constexpr uint32_t kBelvedereSalt = 0x42454C56u;
+    const bool corner = (lot.streetSides & (lot.streetSides - 1)) != 0;
+    if (lot.streetSides == 0 || corner) {
+        return false;
+    }
+    switch (district) {
+    case District::OldQuarter:
+        return LotHasFeature(lot, kBelvedereSalt, 0.12f);
+    case District::Residential:
+        return LotHasFeature(lot, kBelvedereSalt, 0.08f);
+    case District::Market:  // its roofs are pitched or flat, never mansard
+    case District::Grand:
+    case District::Parkland:
+    default:
+        return false;
+    }
 }
 
 // Round-headed openings and troweled plaster, the softer building language of the hill towns that
@@ -186,7 +208,7 @@ float AddRoof(BoxWriter& boxes, const Rect& footprint, uint8_t slopeSides, float
         // A steep lower slope carrying the dormers, then a shallow top behind it.
         const Look dormers{design.roofColor, SurfaceMaterial::RoofTile, 0.65f, PatternSeed(kRoofDormers, random.Unit())};
         boxes.Footprint(ShrinkClamped(footprint, slopeSides, 0.6f), base, base + 2.8f, dormers);
-        boxes.Footprint(ShrinkClamped(footprint, slopeSides, 2.6f), base + 2.8f, base + 3.9f, tiles);
+        boxes.Footprint(ShrinkClamped(footprint, slopeSides, kMansardTopInset), base + 2.8f, base + 3.9f, tiles);
         return base + 3.9f;
     }
     case RoofShape::Pitched: {
@@ -210,6 +232,45 @@ float AddRoof(BoxWriter& boxes, const Rect& footprint, uint8_t slopeSides, float
                         base + 2.8f, Look{design.wallColor * 0.9f, SurfaceMaterial::Plain, 0.85f, 0.0f});
         return base + 0.6f;
     }
+}
+
+// A small tower turned 45 degrees to the street, standing in the middle of a mansard roof, with a
+// stepped copper spire. `top` is the flat top of the roof. Nothing is built when the flat part is
+// too small for the tower to stand clear of the slopes, or when the lot is so narrow that the
+// chimneys along its party walls would reach into the tower.
+void AddBelvedere(BoxWriter& boxes, const Lot& lot, const Rect& top, float base, const BuildingDesign& design) {
+    constexpr float kHalfSide = 1.2f;
+    constexpr float kClearance = 0.3f;
+    constexpr float kDiagonalTurn = 0.78539816f;
+    constexpr float kChimneyReach = 0.7f;  // how far a chimney stack extends in from the wall of the lot
+    const float halfDiagonal = kHalfSide * 1.41421356f;
+    const glm::vec2 size = top.Size();
+    const glm::vec2 lotSize = lot.area.Size();
+    if (std::min(size.x, size.y) < 2.0f * (halfDiagonal + kClearance) ||
+        std::min(lotSize.x, lotSize.y) < 2.0f * (halfDiagonal + kChimneyReach + kClearance)) {
+        return;
+    }
+    const glm::vec2 middle = top.Center();
+    const uint32_t flags = kFacadeUpperOnly | kFacadeNoShops | kFacadeNarrowBays | kFacadeArched;
+    const Look walls{design.wallColor, SurfaceMaterial::Facade, 0.85f, PatternSeed(flags, 0.5f)};
+    const Look trim{design.trimColor, SurfaceMaterial::Plain, 0.8f, 0.0f};
+    const Look copper{{0.24f, 0.52f, 0.45f}, SurfaceMaterial::Metal, 0.55f, PatternSeed(kMetalVerdigris, 0.5f)};
+
+    constexpr float kShaftHeight = kUpperFloorHeight;
+    float height = base;
+    boxes.TurnedBox(AtHeight(middle, height + kShaftHeight * 0.5f), {kHalfSide, kShaftHeight * 0.5f, kHalfSide}, kDiagonalTurn, walls);
+    height += kShaftHeight;
+    boxes.TurnedBox(AtHeight(middle, height + 0.12f), {kHalfSide + 0.2f, 0.12f, kHalfSide + 0.2f}, kDiagonalTurn, trim);
+    height += 0.24f;
+    // Each step is turned back square to the street and narrower than the last, so the spire
+    // reads as eight sided from a distance.
+    const float halfSides[] = {1.35f, 0.95f, 0.6f, 0.28f};
+    for (float halfSide : halfSides) {
+        constexpr float kStepHeight = 0.7f;
+        boxes.TurnedBox(AtHeight(middle, height + kStepHeight * 0.5f), {halfSide, kStepHeight * 0.5f, halfSide}, 0.0f, copper);
+        height += kStepHeight;
+    }
+    boxes.TurnedBox(AtHeight(middle, height + 0.5f), {0.06f, 0.5f, 0.06f}, 0.0f, copper);  // the finial
 }
 
 void AddChimneys(BoxWriter& boxes, const Lot& lot, uint8_t slopeSides, float base, float roofTop, Random& random) {
@@ -306,6 +367,7 @@ BuildingDesign DesignBuilding(District district, const BlockTheme& theme, const 
         break;
     }
     design.facadeFlags |= ArchitectureFlags(district, lot);
+    design.belvedere = design.roof == RoofShape::Mansard && WantsBelvedere(district, lot);
     if (!facesStreet) {
         // Back buildings in courtyards have no shops and no balconies.
         design.facadeFlags |= kFacadeNoShops;
@@ -474,6 +536,9 @@ void AddBuilding(BoxWriter& boxes, const Lot& lot, const BuildingDesign& design,
     const uint8_t slopeSides = SlopeSides(lot);
     const float roofTop = AddRoof(boxes, roofFootprint, slopeSides, roofBase, design, random);
     AddChimneys(boxes, lot, slopeSides, roofBase, roofTop, random);
+    if (design.belvedere) {
+        AddBelvedere(boxes, lot, ShrinkClamped(roofFootprint, slopeSides, kMansardTopInset), roofTop, design);
+    }
 }
 
 void BuildBlockOfBuildings(BoxWriter& boxes, CityLayout& city, const Rect& land, District district, Random& random) {
