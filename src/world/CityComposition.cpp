@@ -79,6 +79,11 @@ void AppendPart(CityLayout& city, const CityLayout& part, const Placement& place
         landmark.entrance = placement.Apply(landmark.entrance);
         return landmark;
     });
+    AppendEach(city.interiors, part.interiors, [&](Interior interior) {
+        interior.floor = placement.Apply(interior.floor);
+        interior.door = placement.Apply(interior.door);
+        return interior;
+    });
     AppendEach(city.streetLights, part.streetLights, [&](glm::vec3 light) { return PlaceOnGround(placement, light); });
     AppendEach(city.trees, part.trees, [&](Tree tree) {
         tree.base = PlaceOnGround(placement, tree.base);

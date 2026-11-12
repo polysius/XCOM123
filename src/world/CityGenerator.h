@@ -231,6 +231,15 @@ struct Landmark {
     glm::vec2 entrance;      // where people would gather in front of it
 };
 
+// A room inside a landmark where people can walk: the floor between its walls. Its furniture is
+// made of ordinary boxes, so the crowd treats it like a square with obstacles in it. `door` is
+// the middle of the room's doorway.
+struct Interior {
+    LandmarkKind kind;
+    OrientedRect floor;
+    glm::vec2 door;
+};
+
 // A street edge that crosses water, and the deck that carries it.
 struct Bridge {
     uint32_t edge;   // index into StreetGraph::edges
@@ -283,6 +292,7 @@ struct CityLayout {
     std::vector<Bridge> bridges;
     std::vector<CityBlock> blocks;
     std::vector<Landmark> landmarks;
+    std::vector<Interior> interiors;     // rooms inside landmarks that people walk in
     std::vector<glm::vec3> streetLights;  // light positions of the street lamp lanterns
     std::vector<Tree> trees;
     std::vector<PointOfInterest> pointsOfInterest;
