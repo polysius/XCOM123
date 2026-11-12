@@ -58,6 +58,6 @@ private:
 // moved on along its velocity, so people updated every few steps still move smoothly.
 // See shaders/npc.vert for how unused0 and unused1 are read.
 NpcInstance MakeNpcInstance(const AgentMotion& motion, const AgentLook& look, float gaitLength, float lagSeconds,
-                            float walkHeight);
+                            const Walkways& walkways);
 
 }  // namespace crowd

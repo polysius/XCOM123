@@ -26,9 +26,13 @@ constexpr float kSillTop = -0.02f;         // the sill a bridge crosses stands a
 constexpr float kSillMargin = 2.0f;        // the sill reaches this far past the ends of a bridge
 constexpr float kSillCutMargin = 1.5f;     // and this far past the stretch of levee the street crosses
 constexpr float kLeveeCapRise = 0.10f;     // a levee capstone stands this far above the quay wall caps, so they never fight
+constexpr float kPlinthFoot = -1.0f;       // the plinth and the steps start at the underside of the grass
+constexpr float kStairCheek = 0.5f;        // the walls beside a stair are this thick
+constexpr float kStairParapet = 0.9f;      // and stand this far above the step beside them
 
 const glm::vec3 kQuayStone{0.55f, 0.51f, 0.45f};
 const glm::vec3 kBridgeStone{0.62f, 0.58f, 0.51f};
+const glm::vec3 kPlinthStone{0.50f, 0.47f, 0.42f};
 const glm::vec3 kLampIron{0.055f, 0.06f, 0.065f};
 const glm::vec3 kLanternGlass{0.95f, 0.78f, 0.52f};
 
@@ -629,6 +633,33 @@ void LowerLevees(CityLayout& city, const OrientedRect& strip) {
 
 }  // namespace
 
+void BuildPlinth(const OrientedRect& square, float lift, BoxWriter& boxes) {
+    PartScope scope(boxes, CityPart::Terrace);
+    const glm::vec2 center = square.Center();
+    const glm::vec2 half = square.Size() * 0.5f;
+    boxes.TurnedBox({center.x, (kPlinthFoot + lift) * 0.5f, center.y}, {half.x, (lift - kPlinthFoot) * 0.5f, half.y},
+                    square.yaw, StoneLook(kPlinthStone, 0.4f));
+}
+
+void BuildStair(glm::vec2 start, glm::vec2 direction, int steps, float rise, float tread, float streetHalfWidth,
+                BoxWriter& boxes) {
+    PartScope scope(boxes, CityPart::Stair);
+    const Look paving = PavingLook();
+    const Look stone = StoneLook(kPlinthStone, 0.4f);
+    for (int step = 0; step < steps; ++step) {
+        const float from = static_cast<float>(step) * tread;
+        const float to = from + tread;
+        // The top of the step is the walking surface, kPavementHeight above the ground that step stands for.
+        const float top = kPavementHeight + static_cast<float>(step + 1) * rise;
+        LegBox(boxes, start, direction, from, to, -streetHalfWidth, streetHalfWidth, kPlinthFoot, top, paving);
+        for (float side : {-1.0f, 1.0f}) {
+            const float low = side > 0.0f ? streetHalfWidth : -(streetHalfWidth + kStairCheek);
+            const float high = side > 0.0f ? streetHalfWidth + kStairCheek : -streetHalfWidth;
+            LegBox(boxes, start, direction, from, to, low, high, kPlinthFoot, top + kStairParapet, stone);
+        }
+    }
+}
+
 void BuildRiverBridge(glm::vec2 origin, glm::vec2 direction, float start, float end, uint32_t edge, float roadHalfWidth,
                       float streetHalfWidth, Random& random, BoxWriter& boxes, CityLayout& city) {
     const float outer = streetHalfWidth + kParapetWidth;
@@ -660,7 +691,7 @@ void BuildRiverBridge(glm::vec2 origin, glm::vec2 direction, float start, float 
 }
 
 void BuildConnectorStreet(const std::vector<glm::vec2>& path, float roadHalfWidth, float streetHalfWidth,
-                          Random& random, BoxWriter& boxes, CityLayout& city) {
+                          Random& random, BoxWriter& boxes, CityLayout& city, bool endsAtStair) {
     const size_t legCount = path.size() - 1;
     std::vector<glm::vec2> directions(legCount);
     std::vector<float> lengths(legCount);
@@ -701,7 +732,7 @@ void BuildConnectorStreet(const std::vector<glm::vec2>& path, float roadHalfWidt
             const bool insideAtEnd = side * endTurn > 0.0f;
             const float from = leg == 0 ? streetHalfWidth
                                         : (insideAtStart ? mitre(startTurn, roadHalfWidth) : -mitre(startTurn, streetHalfWidth));
-            const float to = endsAtStreet ? length - streetHalfWidth
+            const float to = endsAtStreet ? (endsAtStair ? length : length - streetHalfWidth)
                                           : (insideAtEnd ? length - mitre(endTurn, roadHalfWidth)
                                                          : length + mitre(endTurn, streetHalfWidth));
             if (to - from > 0.05f) {

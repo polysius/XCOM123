@@ -35,12 +35,14 @@ uint8_t BandOf(float distanceSquared) {
 }  // namespace
 
 NpcInstance MakeNpcInstance(const AgentMotion& motion, const AgentLook& look, float gaitLength, float lagSeconds,
-                            float walkHeight) {
+                            const Walkways& walkways) {
     const glm::vec2 position = motion.position + motion.velocity * lagSeconds;
     const float extraDistance = glm::length(motion.velocity) * lagSeconds;
 
     NpcInstance instance;
-    instance.position = glm::vec3(position.x, walkHeight, position.y);
+    // The height is that of the ground where the person is drawn, which is a little past the stored
+    // position: next to the edge of a step the two can stand a step apart.
+    instance.position = glm::vec3(position.x, walkways.WalkHeightAt(position), position.y);
     instance.heading = look.heading;
     instance.clothingColor = look.clothingColor;
     instance.heightScale = look.heightScale;
@@ -134,8 +136,7 @@ void CrowdVisibility::WriteChunk(size_t chunk, const CrowdState& state, const Wa
         const uint8_t band = agentBand[agent];
         if (band != kInvisible) {
             visible[slot[band]++] = MakeNpcInstance(state.motion[agent], state.looks[agent],
-                                                    state.behaviour[agent].gaitLength, state.lagSeconds[agent],
-                                                    walkways.WalkHeightAt(state.motion[agent].position));
+                                                    state.behaviour[agent].gaitLength, state.lagSeconds[agent], walkways);
         }
     }
 }

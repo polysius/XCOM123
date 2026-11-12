@@ -18,6 +18,7 @@ struct Options {
     uint32_t seed = 1789;
     uint32_t npcCount = 10000;
     std::optional<int> satelliteCount;  // satellite districts around the city; unset keeps the generator's default
+    bool terraces = true;               // whether satellite districts may stand on terraces
     bool vsync = true;
     bool showHelp = false;
 

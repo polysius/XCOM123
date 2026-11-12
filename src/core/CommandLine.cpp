@@ -109,6 +109,8 @@ Options ParseCommandLine(int argc, char** argv) {
                 throw std::invalid_argument(option + " must be at most " + std::to_string(kMaxSatellites));
             }
             options.satelliteCount = static_cast<int>(count);
+        } else if (option == "--no-terraces") {
+            options.terraces = false;
         } else if (option == "--novsync") {
             options.vsync = false;
         } else if (option == "--benchmark") {
@@ -153,6 +155,7 @@ void PrintUsage() {
         "  --seed N                 city and crowd seed (default 1789)\n"
         "  --npcs N                 number of people (default 10000)\n"
         "  --satellites N           districts turned to their own angles around the city (0 to 8)\n"
+        "  --no-terraces            keep the satellite districts level, with no terraces and stairs\n"
         "  --sun DEGREES            sun elevation above the horizon (default 24)\n"
         "  --time SECONDS           world clock of the screenshot (0 to 3600); the crowd is simulated\n"
         "                           up to it\n"

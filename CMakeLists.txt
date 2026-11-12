@@ -135,12 +135,16 @@ endif()
 # unit_tests covers the logic that needs no window or GPU. `ctest` runs it, and the
 # no-mistakes gate runs ctest through scripts\gate-check.cmd.
 enable_testing()
+# The unit tests also drive the crowd on small cities made by hand, so they build all of it.
+file(GLOB UNIT_TEST_CROWD_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/world/crowd/*.cpp)
 add_executable(unit_tests
     tests/unit_tests.cpp
     src/core/CommandLine.cpp
     src/core/FrameStatistics.cpp
+    src/core/JobSystem.cpp
+    src/world/Crowd.cpp
     src/world/TerrainField.cpp
-    src/world/crowd/Walkways.cpp)
+    ${UNIT_TEST_CROWD_SOURCES})
 target_include_directories(unit_tests PRIVATE src)
 target_link_libraries(unit_tests PRIVATE glm::glm)
 target_compile_definitions(unit_tests PRIVATE GLM_FORCE_RADIANS GLM_FORCE_DEPTH_ZERO_TO_ONE)

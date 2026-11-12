@@ -34,7 +34,9 @@ float TerrainField::LiftAt(glm::vec2 point) const {
         float here = entry.startLift;
         if (entry.rise > 0.0f) {
             // A point on the far edge belongs to the last step, not to one beyond it.
-            const float lastStep = std::ceil((entry.area.max.x - entry.area.min.x) / entry.tread - 1e-4f) - 1.0f;
+            // The width is a whole number of treads to within the float error of a point far from the
+            // origin, which is a hundredth of a step at 2.5 km.
+            const float lastStep = std::ceil((entry.area.max.x - entry.area.min.x) / entry.tread - 0.01f) - 1.0f;
             const float step = std::min(std::floor((local.x - entry.area.min.x) / entry.tread), lastStep);
             here += (step + 1.0f) * entry.rise;
         }

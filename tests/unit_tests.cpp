@@ -10,6 +10,7 @@
 
 #include "core/CommandLine.h"
 #include "core/FrameStatistics.h"
+#include "world/Crowd.h"
 #include "world/TerrainField.h"
 #include "world/crowd/Walkways.h"
 
@@ -92,6 +93,11 @@ void CommandLineRejectsConflictingModes() {
     Check(IsRejected({"--benchmark", "10", "--screenshot", "a.png"}), "benchmark with screenshot");
     Check(IsRejected({"--benchmark", "10", "--camera", "0,0,0,0,0"}), "benchmark with camera");
     Check(IsRejected({"--target-fps", "60"}), "target fps without benchmark");
+}
+
+void CommandLineCanSwitchTerracesOff() {
+    Check(Parse({}).terraces, "terraces are on by default");
+    Check(!Parse({"--no-terraces"}).terraces, "and --no-terraces turns them off");
 }
 
 void CommandLineReadsSatellites() {
@@ -250,6 +256,15 @@ void StairClimbsOneRisePerTread() {
     Check(terrain.LiftAt({-0.1f, 0.0f}) == 0.0f && terrain.LiftAt({10.1f, 0.0f}) == 0.0f, "level before and after");
 }
 
+void StairFarFromTheOriginHasTheRightNumberOfSteps() {
+    // 27 steps of 0.4 m. Far from the origin the width of the zone is off by about 1e-4 m, which must not
+    // count as a 28th step: the last step stands at the lift of the terrace above it.
+    const float rise = 4.5f / 27.0f;
+    const TerrainField terrain({TerrainZone{OrientedRect(Rect{{2400.0f, 1500.0f}, {2410.8f, 1507.0f}}), 0.0f, rise, 0.4f}});
+    Check(std::abs(terrain.LiftAt({2410.79f, 1503.0f}) - 4.5f) < 1e-3f, "the last step is level with the terrace");
+    Check(std::abs(terrain.LiftAt({2410.8f, 1503.0f}) - 4.5f) < 1e-3f, "and so is the far edge");
+}
+
 void StairWithoutATreadIsATerrace() {
     const TerrainField terrain({TerrainZone{OrientedRect(Rect{{0.0f, 0.0f}, {10.0f, 10.0f}}), 2.0f, 0.15f, 0.0f}});
     const float lift = terrain.LiftAt({5.0f, 5.0f});
@@ -283,6 +298,33 @@ void ObstacleOnATerraceIsAnObstacle() {
     Check(!WalkwaysWithBuildingOnATerrace(false).IsInsideObstacle({0.0f, 0.0f}), "the same box without a terrace is overhead");
 }
 
+// A single street 200 m long on a terrace 100 m above the level of the city, with 300 people on it.
+CityLayout StreetOnAHighTerrace() {
+    CityLayout city;
+    city.bounds = {{-300.0f, -300.0f}, {300.0f, 300.0f}};
+    city.roadWidth = 8.0f;
+    city.sidewalkWidth = 3.5f;
+    city.sidewalkCenterOffset = 5.75f;
+    city.walkHeight = 0.15f;
+    city.streets.nodes = {{0.0f, 0.0f}, {200.0f, 0.0f}};
+    city.streets.edges = {{0, 1, 200.0f}};
+    city.streets.edgesAtNode = {{0}, {0}};
+    city.terrain.push_back(MakePlateau(OrientedRect(Rect{{-300.0f, -300.0f}, {300.0f, 300.0f}}), 100.0f));
+    return city;
+}
+
+void CameraOnATerraceSeesThePeopleOnItAsNear() {
+    // People simulate in more detail the nearer the camera is, and the gap in height counts. The camera
+    // stands on the terrace, so the people on it are beside it. Measured from the level of the city they
+    // would look 100 m below, and every one would be simulated as far away.
+    const CityLayout city = StreetOnAHighTerrace();
+    Crowd crowd;
+    crowd.Spawn(city, {.agentCount = 300, .seed = 1});
+    crowd.SetFocusPoint({100.0f, 100.0f + city.walkHeight + 1.7f, 0.0f});
+    crowd.Update(1.0f / 60.0f);
+    Check(crowd.Stats().nearAgents > 0, "people on the camera's own terrace are near it");
+}
+
 void WalkHeightFollowsTheTerrain() {
     const crowd::Walkways walkways = WalkwaysWithBuildingOnATerrace(true);
     Check(walkways.WalkHeightAt({0.0f, 0.0f}) == walkways.WalkHeight() + 50.0f, "people stand on the terrace");
@@ -304,6 +346,7 @@ int main() {
         {"CommandLineRejectsNegativeUnsigned", CommandLineRejectsNegativeUnsigned},
         {"CommandLineRejectsBadInput", CommandLineRejectsBadInput},
         {"CommandLineRejectsConflictingModes", CommandLineRejectsConflictingModes},
+        {"CommandLineCanSwitchTerracesOff", CommandLineCanSwitchTerracesOff},
         {"CommandLineReadsSatellites", CommandLineReadsSatellites},
         {"BenchmarkAndScreenshotTurnVsyncOff", BenchmarkAndScreenshotTurnVsyncOff},
         {"FrameSummaryOfNothingIsEmpty", FrameSummaryOfNothingIsEmpty},
@@ -317,9 +360,11 @@ int main() {
         {"PlateauLiftsOnlyItsOwnArea", PlateauLiftsOnlyItsOwnArea},
         {"TurnedPlateauFollowsItsTurn", TurnedPlateauFollowsItsTurn},
         {"StairClimbsOneRisePerTread", StairClimbsOneRisePerTread},
+        {"StairFarFromTheOriginHasTheRightNumberOfSteps", StairFarFromTheOriginHasTheRightNumberOfSteps},
         {"StairWithoutATreadIsATerrace", StairWithoutATreadIsATerrace},
         {"HighestLiftCountsWhereZonesMeet", HighestLiftCountsWhereZonesMeet},
         {"ObstacleOnATerraceIsAnObstacle", ObstacleOnATerraceIsAnObstacle},
+        {"CameraOnATerraceSeesThePeopleOnItAsNear", CameraOnATerraceSeesThePeopleOnItAsNear},
         {"WalkHeightFollowsTheTerrain", WalkHeightFollowsTheTerrain},
         {"ObstacleStaysAxisAlignedAtYawZero", ObstacleStaysAxisAlignedAtYawZero},
         {"ObstacleFollowsAQuarterTurn", ObstacleFollowsAQuarterTurn},

@@ -9,7 +9,7 @@
 // It only uses the public Crowd API that the engine uses, so the same file also builds
 // against older versions of the crowd for comparisons.
 //
-// Usage: crowd_bench [--npcs 50000,100000,200000] [--steps 300] [--seed 1789] [--satellites 0]
+// Usage: crowd_bench [--npcs 50000,100000,200000] [--steps 300] [--seed 1789] [--satellites 0] [--terraces 0]
 
 #include <algorithm>
 #include <chrono>
@@ -57,6 +57,7 @@ struct BenchOptions {
     uint32_t steps = 300;
     uint32_t seed = 1789;
     int satellites = -1;  // satellite districts around the city; negative keeps the generator's default
+    bool terraces = true;  // whether satellite districts may stand on terraces (--terraces 0 for level ones)
 };
 
 std::vector<uint32_t> ParseCountList(const std::string& text) {
@@ -80,6 +81,8 @@ BenchOptions ParseOptions(int argc, char** argv) {
             options.steps = static_cast<uint32_t>(std::stoul(value));
         } else if (name == "--seed") {
             options.seed = static_cast<uint32_t>(std::stoul(value));
+        } else if (name == "--terraces") {
+            options.terraces = std::stoi(value) != 0;
         } else if (name == "--satellites") {
             options.satellites = std::stoi(value);
             if (options.satellites < 0 || options.satellites > kMaxSatellites) {
@@ -235,6 +238,41 @@ public:
         AddObstacles(city);
     }
 
+    // For every box that the layout puts in people's way, the crowd must not let a person stand at its
+    // middle. People keep clear of buildings anyway, so counting them inside one cannot show whether the
+    // crowd knows about a box; this asks it directly, whatever height the box stands at.
+    void CompareObstacles(const crowd::Walkways& crowdWalkways, size_t& checked, size_t& disagreements) const {
+        for (const OrientedRect& obstacle : obstacles) {
+            ++checked;
+            if (crowdWalkways.CanStandAt(obstacle.Center())) {
+                ++disagreements;
+            }
+        }
+    }
+
+    // The other way round: wherever the layout says a person may stand on a pavement, the crowd must let
+    // one. A crowd that thought something was in the way where nothing is, such as a whole terrace
+    // taken for an obstacle, would keep people off the streets there, and no sanity count shows that.
+    void ComparePavements(const crowd::Walkways& crowdWalkways, size_t& checked, size_t& disagreements) const {
+        constexpr float kSpacing = 4.0f;
+        const float laneOffset = (roadHalfWidth + outerEdge) * 0.5f;
+        for (const Street& street : streets) {
+            const glm::vec2 side(-street.direction.y, street.direction.x);
+            for (float along = outerEdge + 2.0f; along < street.length - outerEdge - 2.0f; along += kSpacing) {
+                for (float sign : {-1.0f, 1.0f}) {
+                    const glm::vec2 point = street.start + street.direction * along + side * (sign * laneOffset);
+                    if (Classify(point) != Place::Walkable) {
+                        continue;
+                    }
+                    ++checked;
+                    if (!crowdWalkways.CanStandAt(point)) {
+                        ++disagreements;
+                    }
+                }
+            }
+        }
+    }
+
     Place Classify(glm::vec2 point) const {
         if (IsInsideObstacle(point)) {
             return Place::InsideObstacle;
@@ -342,6 +380,11 @@ struct SanityReport {
     size_t outsideWalkways = 0;
     size_t nearAgents = 0;
     size_t overlappingPairs = 0;
+    size_t wrongHeight = 0;           // people standing at a height other than the ground under them
+    size_t obstaclesChecked = 0;      // boxes the layout puts in people's way
+    size_t obstacleDisagreements = 0; // of those, the ones the crowd would let a person stand on
+    size_t pavementsChecked = 0;      // points on the pavements, which the layout says people may stand on
+    size_t pavementDisagreements = 0; // of those, the ones the crowd will not let a person stand on
 };
 
 bool IsFinite(const NpcInstance& npc) {
@@ -370,6 +413,9 @@ SanityReport CheckCrowd(const Crowd& crowd, const CityLayout& city, glm::vec3 ca
     SanityReport report;
     report.readBack = everyone.size();
     const WalkableSpaceCheck walkable(city);
+    const TerrainField terrain(city.terrain);
+    walkable.CompareObstacles(crowd.WalkableSpace(), report.obstaclesChecked, report.obstacleDisagreements);
+    walkable.ComparePavements(crowd.WalkableSpace(), report.pavementsChecked, report.pavementDisagreements);
     std::vector<glm::vec2> nearPoints;
     for (const NpcInstance& npc : everyone) {
         if (!IsFinite(npc)) {
@@ -377,6 +423,10 @@ SanityReport CheckCrowd(const Crowd& crowd, const CityLayout& city, glm::vec3 ca
             continue;
         }
         const glm::vec2 point(npc.position.x, npc.position.z);
+        // A person stands on the ground under them: the level of the city plus the lift of the terrain.
+        if (std::abs(npc.position.y - (city.walkHeight + terrain.LiftAt(point))) > 0.01f) {
+            ++report.wrongHeight;
+        }
         switch (walkable.Classify(point)) {
         case WalkableSpaceCheck::Place::Walkable:
             break;
@@ -458,7 +508,10 @@ void RunBenchmark(const CityLayout& city, uint32_t agentCount, const BenchOption
               << ", inside obstacles " << sanity.insideObstacle << ", on road away from crossings " << sanity.onRoad
               << ", outside walkways " << sanity.outsideWalkways << "\n"
               << "          " << sanity.nearAgents << " people within " << kNearRadius << " m of the camera, "
-              << sanity.overlappingPairs << " pairs closer than " << kOverlapDistance << " m\n";
+              << sanity.overlappingPairs << " pairs closer than " << kOverlapDistance << " m\n"
+              << "  heights and obstacles: " << sanity.wrongHeight << " people at the wrong height, the crowd disagrees on "
+              << sanity.obstacleDisagreements << " of " << sanity.obstaclesChecked << " obstacles and "
+              << sanity.pavementDisagreements << " of " << sanity.pavementsChecked << " pavement points\n";
 }
 
 }  // namespace
@@ -477,6 +530,7 @@ int main(int argc, char** argv) {
     if (options.satellites >= 0) {
         citySettings.satelliteCount = options.satellites;
     }
+    citySettings.terraces = options.terraces;
     const CityLayout city = GenerateCity(citySettings);
     std::cout << "City (seed " << options.seed << "): " << city.boxes.size() << " boxes, " << city.streets.edges.size()
               << " street segments, " << city.plazas.size() << " squares\n";

@@ -122,6 +122,8 @@ const char* CityPartName(CityPart part) {
     case CityPart::Bench: return "bench";
     case CityPart::Fountain: return "fountain";
     case CityPart::MarketStall: return "market stall";
+    case CityPart::Terrace: return "terrace";
+    case CityPart::Stair: return "stair";
     default: return "unknown";
     }
 }
