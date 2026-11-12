@@ -7,6 +7,7 @@
 #include <glm/glm.hpp>
 
 #include "scene/SceneTypes.h"
+#include "world/crowd/Walkways.h"
 
 class Frustum;
 class JobSystem;
@@ -31,17 +32,18 @@ public:
     using BandCounts = std::array<uint32_t, kDistanceBandCount>;
 
     // Replaces `visible` with everyone inside `frustum`, grouped by band around `viewPoint`.
-    void Collect(JobSystem& jobs, const CrowdState& state, float walkHeight, const Frustum& frustum,
+    void Collect(JobSystem& jobs, const CrowdState& state, const Walkways& walkways, const Frustum& frustum,
                  glm::vec3 viewPoint, std::vector<NpcInstance>& visible);
 
     // How many people the last Collect put in each band.
     const BandCounts& LastBandCounts() const { return bandCounts; }
 
 private:
-    void ClassifyChunk(size_t chunk, const CrowdState& state, float walkHeight, const Frustum& frustum,
+    void ClassifyChunk(size_t chunk, const CrowdState& state, const Walkways& walkways, const Frustum& frustum,
                        glm::vec3 viewPoint);
     void ComputeChunkOffsets();
-    void WriteChunk(size_t chunk, const CrowdState& state, float walkHeight, std::vector<NpcInstance>& visible) const;
+    void WriteChunk(size_t chunk, const CrowdState& state, const Walkways& walkways,
+                    std::vector<NpcInstance>& visible) const;
 
     // Per person, its band, or kInvisible when it is outside the frustum.
     std::vector<uint8_t> agentBand;

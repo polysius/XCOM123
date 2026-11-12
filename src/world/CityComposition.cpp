@@ -17,7 +17,7 @@ void AppendEach(std::vector<T>& target, const std::vector<T>& source, Place&& pl
 
 glm::vec3 PlaceOnGround(const Placement& placement, glm::vec3 position) {
     const glm::vec2 moved = placement.Apply({position.x, position.z});
-    return {moved.x, position.y, moved.y};
+    return {moved.x, position.y + placement.lift, moved.y};
 }
 
 }  // namespace
@@ -88,6 +88,13 @@ void AppendPart(CityLayout& city, const CityLayout& part, const Placement& place
         point.position = PlaceOnGround(placement, point.position);
         point.facing = placement.Turn(point.facing);
         return point;
+    });
+
+    // The part's own terrain stands that much higher still.
+    AppendEach(city.terrain, part.terrain, [&](TerrainZone zone) {
+        zone.area = placement.Apply(zone.area);
+        zone.startLift += placement.lift;
+        return zone;
     });
 
     // The bounds hold the part's outer edge, which is a turned rectangle.

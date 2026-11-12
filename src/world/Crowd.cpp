@@ -164,7 +164,7 @@ void Crowd::StepUnits(float deltaSeconds) {
 }
 
 void Crowd::CollectVisible(const Frustum& frustum, std::vector<NpcInstance>& visible) const {
-    visibility.Collect(*jobs, state, walkways.WalkHeight(), frustum, focusPoint, visible);
+    visibility.Collect(*jobs, state, walkways, frustum, focusPoint, visible);
 }
 
 CrowdStats Crowd::Stats() const {

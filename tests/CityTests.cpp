@@ -22,6 +22,7 @@
 #include "world/CityComposition.h"
 #include "world/CityGenerator.h"
 #include "world/CityPlan.h"
+#include "world/TerrainField.h"
 
 namespace {
 
@@ -241,14 +242,17 @@ struct CityIndex {
 CityIndex BuildIndex(const CityLayout& city) {
     const Rect area = city.bounds.Expanded(50.0f);
     CityIndex index{BoxGrid(area, 8.0f), BoxGrid(area, 8.0f)};
+    const TerrainField terrain(city.terrain);
     for (uint32_t i = 0; i < city.boxes.size(); ++i) {
         const BoxInstance& box = city.boxes[i];
         const OrientedRect footprint = FootprintOf(box);
-        if (std::abs(TopOf(box) - city.walkHeight) < kTolerance) {
+        // The walking surface under the box: on a terrace everything stands higher by its lift.
+        const float walkHeight = city.walkHeight + terrain.LiftAt({box.center.x, box.center.z});
+        if (std::abs(TopOf(box) - walkHeight) < kTolerance) {
             index.pavements.Insert(i, footprint);
         }
-        const bool risesAbovePavement = TopOf(box) > city.walkHeight + 0.06f;
-        const bool reachesDown = BottomOf(box) < city.walkHeight + kWalkingClearance;
+        const bool risesAbovePavement = TopOf(box) > walkHeight + 0.06f;
+        const bool reachesDown = BottomOf(box) < walkHeight + kWalkingClearance;
         if (risesAbovePavement && reachesDown && footprint.Size().x < 600.0f && footprint.Size().y < 600.0f) {
             index.obstacles.Insert(i, footprint);
         }
@@ -382,6 +386,7 @@ void CheckPavements(const CityLayout& city, const CityIndex& index) {
 // project overhead with enough clearance.
 void CheckBuildingsKeepClear(const CityLayout& city) {
     const float streetHalf = city.roadWidth * 0.5f + city.sidewalkWidth;
+    const TerrainField terrain(city.terrain);
     BoxGrid streetBands(city.bounds.Expanded(50.0f), 16.0f);
     std::vector<OrientedRect> bands;
     for (const StreetGraph::Edge& edge : city.streets.edges) {
@@ -394,7 +399,7 @@ void CheckBuildingsKeepClear(const CityLayout& city) {
         }
         const BoxInstance& box = city.boxes[i];
         const OrientedRect footprint = FootprintOf(box);
-        const bool overhead = BottomOf(box) >= kOverhangClearance;
+        const bool overhead = BottomOf(box) - terrain.LiftAt({box.center.x, box.center.z}) >= kOverhangClearance;
         if (!overhead) {
             streetBands.Visit(footprint.Bounds(), [&](uint32_t band) {
                 if (OverlapsBeyondTolerance(footprint, bands[band])) {
@@ -454,6 +459,7 @@ void CheckSquares(const CityLayout& city, const CityIndex& index) {
 void CheckStreetLights(const CityLayout& city, const CityIndex& index) {
     Expect(!city.streetLights.empty(), "lamps", "the city has no street lamps");
     const float roadHalf = city.roadWidth * 0.5f;
+    const TerrainField terrain(city.terrain);
     // Each street's road and pavement strips, built once instead of once per lamp.
     std::vector<OrientedRect> pavements;
     std::vector<OrientedRect> roads;
@@ -465,7 +471,8 @@ void CheckStreetLights(const CityLayout& city, const CityIndex& index) {
         const glm::vec2 position{light.x, light.z};
         Expect(city.bounds.Contains(position), "lamps", Format("lamp at (%.1f, %.1f) is out of bounds", light.x, light.z));
         Expect(IsOnPavement(city, index, position), "lamps", Format("lamp at (%.1f, %.1f) is not on a pavement", light.x, light.z));
-        Expect(light.y > 3.0f && light.y < 8.0f, "lamps", Format("lamp at (%.1f, %.1f) hangs at %.1f m", light.x, light.z, light.y));
+        const float hangsAt = light.y - terrain.LiftAt(position);
+        Expect(hangsAt > 3.0f && hangsAt < 8.0f, "lamps", Format("lamp at (%.1f, %.1f) hangs at %.1f m", light.x, light.z, hangsAt));
         // The lamp must stand on the pavement of some street, not in its road.
         bool besideStreet = false;
         for (size_t edge = 0; edge < roads.size(); ++edge) {
@@ -993,6 +1000,54 @@ void RunContractChecks(const CityLayout& city, bool expectRiver) {
     CheckWaterAndBridges(city, expectRiver);
 }
 
+// A district raised by `lift` metres, with the terrain that says so. The whole contract must hold
+// for it: pavements, buildings, squares and lamps are all measured from the ground under them. The
+// same city without its terrain must fail, which proves that the checks look at the height.
+void TestLiftedDistrict(uint32_t seed, const city::Placement& placement) {
+    std::printf("district %u lifted %.0f m\n", seed, double(placement.lift));
+    CitySettings settings;
+    settings.seed = seed;
+    settings.districtOnly = true;
+    settings.citySize = 600.0f;
+    const CityLayout district = GenerateCity(settings);
+
+    CityLayout city;
+    city.roadWidth = district.roadWidth;
+    city.sidewalkWidth = district.sidewalkWidth;
+    city.sidewalkCenterOffset = district.sidewalkCenterOffset;
+    city.walkHeight = district.walkHeight;
+    city.waterLevel = district.waterLevel;
+    city::AppendPart(city, district, placement);
+    city.terrain.push_back(MakePlateau(placement.Apply(OrientedRect(district.bounds)), placement.lift));
+
+    bool everyBoxLifted = city.boxes.size() == district.boxes.size();
+    for (size_t i = 0; everyBoxLifted && i < district.boxes.size(); ++i) {
+        everyBoxLifted = city.boxes[i].center.y == district.boxes[i].center.y + placement.lift;
+    }
+    Expect(everyBoxLifted, "lift", "every box must be raised by the lift");
+    Expect(std::abs(city.streetLights.front().y - (district.streetLights.front().y + placement.lift)) < 1e-3f, "lift",
+           "every lamp must be raised by the lift");
+    RunContractChecks(city, false);
+
+    CityLayout withoutTerrain = city;
+    withoutTerrain.terrain.clear();
+    Expect(CountFailuresOf([&] { RunContractChecks(withoutTerrain, false); }) > 0, "lift",
+           "the checks did not notice a lifted district whose terrain is missing");
+
+    // A defect planted on the terrace must be found. A building standing in a street would be skipped
+    // as an overhang, hanging far above the ground, by a check that forgot to measure from the terrace.
+    CityLayout withBuilding = city;
+    const StreetGraph::Edge& edge = city.streets.edges.front();
+    const glm::vec2 middle = (city.streets.nodes[edge.from] + city.streets.nodes[edge.to]) * 0.5f;
+    BoxInstance building{};
+    building.center = {middle.x, placement.lift + 5.0f, middle.y};
+    building.halfSize = {3.0f, 5.0f, 3.0f};
+    withBuilding.boxes.push_back(building);
+    withBuilding.boxParts.push_back(CityPart::Building);
+    Expect(CountFailuresOf([&] { CheckBuildingsKeepClear(withBuilding); }) > 0, "lift",
+           "a building planted in a street of the lifted district was not found");
+}
+
 void TestSeed(uint32_t seed, bool checkDeterminism, bool districtOnly = false, int satellites = 0) {
     std::printf("seed %u%s", seed, districtOnly ? " (district only)" : "");
     if (satellites > 0) {
@@ -1142,6 +1197,8 @@ int main(int argc, char** argv) {
     TestPlacedDistrict(5u, {{1234.0f, -567.0f}, 0.6f});
     TestPlacedDistrict(99u, {{-900.0f, 700.0f}, -1.1f});
     TestPlacedDistrict(7u, {{300.0f, 2000.0f}, 2.4f});
+    TestLiftedDistrict(5u, {{0.0f, 0.0f}, 0.0f, 50.0f});
+    TestLiftedDistrict(99u, {{1234.0f, -567.0f}, 0.6f, 4.5f});
     if (totalFailures == 0) {
         std::printf("all city checks passed\n");
         return 0;

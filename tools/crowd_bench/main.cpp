@@ -30,6 +30,7 @@
 #include "scene/SceneTypes.h"
 #include "world/CityGenerator.h"
 #include "world/Crowd.h"
+#include "world/TerrainField.h"
 
 namespace {
 
@@ -272,10 +273,13 @@ private:
     // Boxes a person could walk into: they reach from below head height to above the ankles.
     // Footprints shrink by a few centimetres so that people brushing a wall do not count.
     void AddObstacles(const CityLayout& city) {
+        const TerrainField terrain(city.terrain);
         for (const BoxInstance& box : city.boxes) {
             const float bottom = box.center.y - box.halfSize.y;
             const float top = box.center.y + box.halfSize.y;
-            if (bottom > city.walkHeight + 1.6f || top < city.walkHeight + 0.25f) {
+            // A box is in the way by how high it stands above the ground under it.
+            const float walkHeight = city.walkHeight + terrain.LiftAt({box.center.x, box.center.z});
+            if (bottom > walkHeight + 1.6f || top < walkHeight + 0.25f) {
                 continue;
             }
             const glm::vec2 center(box.center.x, box.center.z);

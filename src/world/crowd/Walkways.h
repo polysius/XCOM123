@@ -6,6 +6,7 @@
 #include <glm/glm.hpp>
 
 #include "world/CityGenerator.h"
+#include "world/TerrainField.h"
 
 namespace crowd {
 
@@ -35,7 +36,10 @@ public:
     float LaneCenter() const { return laneCenter; }
     float OuterEdge() const { return outerEdge; }
     float SidewalkWidth() const { return sidewalkWidth; }
+    // The height of the pavement at the level of the city. People stand higher on a terrace or a stair.
     float WalkHeight() const { return walkHeight; }
+    // The height of the walking surface at `point`: WalkHeight, plus the lift of the terrain there.
+    float WalkHeightAt(glm::vec2 point) const { return walkHeight + terrain.LiftAt(point); }
 
     // Intersections ---------------------------------------------------------------------
 
@@ -126,6 +130,7 @@ private:
     float outerEdge = 0.0f;
     float sidewalkWidth = 0.0f;
     float walkHeight = 0.0f;
+    TerrainField terrain;
 
     // Arms of every node in counter-clockwise order, node n's in [armStart[n], armStart[n + 1]).
     std::vector<uint32_t> armStart;

@@ -139,6 +139,7 @@ add_executable(unit_tests
     tests/unit_tests.cpp
     src/core/CommandLine.cpp
     src/core/FrameStatistics.cpp
+    src/world/TerrainField.cpp
     src/world/crowd/Walkways.cpp)
 target_include_directories(unit_tests PRIVATE src)
 target_link_libraries(unit_tests PRIVATE glm::glm)
@@ -155,7 +156,7 @@ add_test(NAME unit_tests COMMAND unit_tests)
 # can draw a top-down map of it (CityTests --map city.png). It builds only the generator
 # sources (src/world/City*.cpp) and glm, so it runs without Vulkan or a window.
 file(GLOB CITY_GENERATOR_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/world/City*.cpp)
-add_executable(CityTests tests/CityTests.cpp tests/PngImage.cpp tests/PngImage.h ${CITY_GENERATOR_SOURCES})
+add_executable(CityTests tests/CityTests.cpp tests/PngImage.cpp tests/PngImage.h src/world/TerrainField.cpp ${CITY_GENERATOR_SOURCES})
 target_include_directories(CityTests PRIVATE src)
 target_link_libraries(CityTests PRIVATE glm::glm)
 target_compile_definitions(CityTests PRIVATE GLM_FORCE_RADIANS GLM_FORCE_DEPTH_ZERO_TO_ONE)

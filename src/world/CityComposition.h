@@ -11,10 +11,12 @@
 namespace city {
 
 // Where a part stands in the city: its origin moves to `offset` after the part is turned about
-// the origin by `yaw` (the sign convention of BoxInstance::yaw).
+// the origin by `yaw` (the sign convention of BoxInstance::yaw), and it is raised by `lift`
+// metres. A lift of zero changes no height.
 struct Placement {
     glm::vec2 offset{0.0f};
     float yaw = 0.0f;
+    float lift = 0.0f;
 
     // A direction after the turn; positions also move by `offset`.
     glm::vec2 Turn(glm::vec2 direction) const;
