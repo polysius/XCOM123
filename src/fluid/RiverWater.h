@@ -36,7 +36,7 @@ inline constexpr float kNoWater = -1000.0f;
 
 class RiverWater {
 public:
-    // Builds the window around the water of `city` that is nearest to `near`. Returns false when the city
+    // Builds the window around the middle of the water of `city` that is nearest to `near`. Returns false when the city
     // has no water, and then nothing else may be used.
     bool Build(const CityLayout& city, glm::vec2 near, const RiverWaterSettings& waterSettings);
 

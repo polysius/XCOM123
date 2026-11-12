@@ -425,17 +425,22 @@ int RunEngine(const Options& options, GLFWwindow* window) {
     // Reserve room for everyone up front, so the renderer never grows buffers mid-flight.
     engine.renderer->ReserveNpcCapacity(engine.crowd.AgentCount());
     engine.visibleNpcs.reserve(engine.crowd.AgentCount());
-    if (options.propCount > 0) {
-        engine.props.Spawn(engine.city, {.count = options.propCount, .seed = options.seed});
+    // The river nearest the middle of the city, if it is to be simulated, and then the props are dropped over it.
+    fluid::RiverWaterSettings riverSettings;
+    riverSettings.rainPerSecond = static_cast<float>(options.rainPerSecond);
+    riverSettings.seed = options.seed;
+    if (options.riverSimulation && !engine.river.Build(engine.city, glm::vec2(0.0f), riverSettings)) {
+        std::cerr << "The city has no water to simulate\n";
     }
-    if (options.riverSimulation) {
-        // The river near the props, or near the middle of the city.
-        const glm::vec2 near = engine.props.Count() > 0 ? engine.props.DropCentre() : glm::vec2(0.0f);
-        fluid::RiverWaterSettings river;
-        river.rainPerSecond = static_cast<float>(options.rainPerSecond);
-        river.seed = options.seed;
-        if (!engine.river.Build(engine.city, near, river)) {
-            std::cerr << "The city has no water to simulate\n";
+    if (options.propCount > 0) {
+        physics::PropSettings props{.count = options.propCount, .seed = options.seed};
+        if (engine.river.IsBuilt()) {
+            props.dropAt = engine.river.Centre();
+            props.riverBed = engine.river.RestLevel() - riverSettings.depth;
+        }
+        engine.props.Spawn(engine.city, props);
+        if (engine.river.IsBuilt()) {
+            engine.props.SetWater(&engine.river);
         }
     }
     PrintWorldSummary(options, engine);

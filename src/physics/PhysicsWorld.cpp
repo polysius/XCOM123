@@ -199,6 +199,15 @@ void PhysicsWorld::Wake(uint32_t index) {
     sleepingGroups.erase(group);
 }
 
+void PhysicsWorld::AddForce(uint32_t index, glm::vec3 force, glm::vec3 worldPoint) {
+    Body& body = bodies[index];
+    if (body.isStatic || body.isAsleep || !IsFinite(force) || !IsFinite(worldPoint)) {
+        return;
+    }
+    body.externalForce += force;
+    body.externalTorque += glm::cross(worldPoint - body.position, force);
+}
+
 void PhysicsWorld::Disable(uint32_t index) {
     Body& body = bodies[index];
     if (body.isStatic) {
@@ -270,8 +279,11 @@ void PhysicsWorld::RefreshBodies() {
         if (body.isStatic || body.isAsleep) {
             continue;
         }
-        body.linearVelocity += settings.gravity * settings.fixedStep;
         body.inverseInertiaWorld = InverseInertiaInWorld(body);
+        body.linearVelocity += (settings.gravity + body.externalForce * body.inverseMass) * settings.fixedStep;
+        body.angularVelocity += body.inverseInertiaWorld * body.externalTorque * settings.fixedStep;
+        body.externalForce = glm::vec3(0.0f);
+        body.externalTorque = glm::vec3(0.0f);
         UpdateBounds(body);
     }
 }

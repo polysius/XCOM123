@@ -62,6 +62,8 @@ struct Body {
     glm::mat3 inverseInertiaWorld{0.0f};       // refreshed every step
     glm::vec3 boundsMin{0.0f};                 // world axis aligned box around the shape
     glm::vec3 boundsMax{0.0f};
+    glm::vec3 externalForce{0.0f};             // forces added for the next step only (see PhysicsWorld::AddForce)
+    glm::vec3 externalTorque{0.0f};
     float quietSeconds = 0.0f;                 // how long the body has hardly moved
     uint32_t sleepGroup = kInvalidBody;        // while asleep, the group of bodies that sleeps and wakes together
     bool isStatic = false;

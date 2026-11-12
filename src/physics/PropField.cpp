@@ -13,11 +13,15 @@ constexpr int kMaxCellsAcross = 6;         // and in a heap no wider than this m
 constexpr float kOffCentre = 10.0f;        // the heap is this far from the middle of the square, clear of a fountain
 constexpr float kFirstLayerHeight = 3.0f;  // metres above the ground at which the lowest props start
 constexpr float kLayerSpacing = 2.0f;      // more than the widest prop, so that none starts inside another
+constexpr float kWaterDensity = 1000.0f;   // kilograms per cubic metre
+constexpr float kWaterDragRate = 2.0f;     // per second: how fast a prop in the water takes on the speed of the water round it
+constexpr int kSamplesPerAxis = 3;         // a prop feels the water at this many points along each of its axes
 constexpr float kHighestFloor = 12.0f;     // a box with its top higher than this is not a floor: a tree or a roof
 constexpr float kFallDepth = 80.0f;        // props this far below the ground under the heap have fallen out of the world
 
 const glm::vec3 kWoods[] = {{0.52f, 0.36f, 0.20f}, {0.45f, 0.30f, 0.16f}, {0.60f, 0.45f, 0.26f}, {0.38f, 0.26f, 0.15f}};
 const glm::vec3 kBarrelPaints[] = {{0.45f, 0.10f, 0.08f}, {0.10f, 0.22f, 0.40f}, {0.12f, 0.32f, 0.16f}, {0.30f, 0.30f, 0.32f}};
+const glm::vec3 kStone{0.45f, 0.45f, 0.47f};
 const glm::vec3 kBallColours[] = {{0.85f, 0.15f, 0.12f}, {0.95f, 0.75f, 0.10f}, {0.15f, 0.45f, 0.85f}, {0.90f, 0.90f, 0.85f}};
 
 float Unit(std::mt19937& random) {
@@ -81,7 +85,8 @@ void PropField::Spawn(const CityLayout& city, const PropSettings& settings) {
     boxInstances.clear();
     sphereInstances.clear();
 
-    const OrientedRect area = ChooseDropArea(city);
+    const OrientedRect area = settings.dropAt ? OrientedRect(Rect{*settings.dropAt - 8.0f, *settings.dropAt + 8.0f})
+                                              : ChooseDropArea(city);
     const glm::vec2 centre = area.Center();
 
     // The city near the drop area is solid ground for the props.
@@ -101,6 +106,16 @@ void PropField::Spawn(const CityLayout& city, const PropSettings& settings) {
         description.isStatic = true;
         description.material = {0.7f, 0.15f, 0.05f};
         world.AddBody(description);
+    }
+
+    if (settings.riverBed) {
+        // A floor under the river, wide enough to catch everything that is dropped.
+        BodyDescription floor;
+        floor.shape = Shape::Box({settings.colliderRadius, 0.5f, settings.colliderRadius});
+        floor.position = {centre.x, *settings.riverBed - 0.5f, centre.y};
+        floor.isStatic = true;
+        floor.material = {0.8f, 0.05f, 0.05f};
+        world.AddBody(floor);
     }
 
     // The props start in a heap: a grid of cells in the square, layer upon layer, so that none starts inside another.
@@ -139,11 +154,13 @@ void PropField::Spawn(const CityLayout& city, const PropSettings& settings) {
 
         const float seed = Unit(random);
         const uint32_t kind = i % 10;
-        if (kind < 6) {  // a crate
+        if (kind < 6) {  // a crate, and now and then a block of stone, which sinks
+            const bool stone = (i / 10) % 4 == 3 && kind < 3;
             description.shape = Shape::Box({0.25f + 0.3f * Unit(random), 0.25f + 0.25f * Unit(random), 0.25f + 0.3f * Unit(random)});
-            description.density = 450.0f;
+            description.density = stone ? 2400.0f : 450.0f;
             description.material = {0.6f, 0.1f, 0.05f};
-            boxInstances.push_back(MakeInstance(description.shape.halfExtents, kWoods[i % 4], SurfaceMaterial::Plain, 0.85f, seed));
+            boxInstances.push_back(MakeInstance(description.shape.halfExtents, stone ? kStone : kWoods[i % 4],
+                                                stone ? SurfaceMaterial::Stone : SurfaceMaterial::Plain, 0.85f, seed));
             boxBodies.push_back(world.AddBody(description));
         } else if (kind < 8) {  // a barrel, which is a box here, and hollow
             description.shape = Shape::Box({0.3f, 0.45f, 0.3f});
@@ -160,11 +177,27 @@ void PropField::Spawn(const CityLayout& city, const PropSettings& settings) {
             sphereBodies.push_back(world.AddBody(description));
         }
     }
+    submergedVolume.assign(boxBodies.size() + sphereBodies.size(), 0.0f);
+    pendingSeconds = 0.0f;
     RefreshInstances();
 }
 
 void PropField::Update(float seconds) {
-    world.Update(seconds);
+    if (water != nullptr && water->IsBuilt()) {
+        // The water acts on the props before every step of the physics, so the stepping is done here.
+        const float step = world.Settings().fixedStep;
+        pendingSeconds += seconds;
+        for (int steps = 0; pendingSeconds >= step && steps < world.Settings().maxStepsPerUpdate; ++steps) {
+            ApplyWater();
+            world.Step();
+            pendingSeconds -= step;
+        }
+        if (pendingSeconds >= step) {
+            pendingSeconds = 0.0f;  // behind for good, as PhysicsWorld::Update treats it
+        }
+    } else {
+        world.Update(seconds);
+    }
     // A prop that has gone through the river, which has no floor, would fall for ever and never sleep.
     for (const std::vector<uint32_t>* bodies : {&boxBodies, &sphereBodies}) {
         for (uint32_t index : *bodies) {
@@ -174,6 +207,71 @@ void PropField::Update(float seconds) {
         }
     }
     RefreshInstances();
+}
+
+// Lifts every prop by the weight of the water it pushes aside, drags it along with the water round it, and pushes
+// the water aside as the prop sinks or lets it back as the prop rises. A prop is felt at a grid of points inside it,
+// each standing for an equal part of its volume, and a point counts as under water by as much as the surface of the
+// water is above it, over the height of its part.
+void PropField::ApplyWater() {
+    const fluid::ShallowWater& surface = water->Water();
+    const float gravity = -world.Settings().gravity.y;
+    const float noWater = -1e9f;
+    size_t slot = 0;
+    for (const std::vector<uint32_t>* bodies : {&boxBodies, &sphereBodies}) {
+        for (uint32_t index : *bodies) {
+            const size_t number = slot++;
+            const Body& body = world.GetBody(index);
+            if (body.isAsleep) {
+                continue;
+            }
+            const bool isSphere = body.shape.type == ShapeType::Sphere;
+            const glm::vec3 reach = isSphere ? glm::vec3(0.8f * body.shape.radius) : body.shape.halfExtents;
+            const float volume = isSphere ? (4.0f / 3.0f) * 3.14159265f * body.shape.radius * body.shape.radius * body.shape.radius
+                                          : 8.0f * body.shape.halfExtents.x * body.shape.halfExtents.y * body.shape.halfExtents.z;
+            constexpr int count = kSamplesPerAxis * kSamplesPerAxis * kSamplesPerAxis;
+            const float partVolume = volume / static_cast<float>(count);
+            const float partHeight = 2.0f * reach.y / static_cast<float>(kSamplesPerAxis);
+            const glm::mat3 axes = glm::mat3_cast(body.orientation);
+
+            float submerged = 0.0f;
+            for (int i = 0; i < kSamplesPerAxis; ++i) {
+                for (int j = 0; j < kSamplesPerAxis; ++j) {
+                    for (int k = 0; k < kSamplesPerAxis; ++k) {
+                        const glm::vec3 local = (glm::vec3(static_cast<float>(i), static_cast<float>(j), static_cast<float>(k)) -
+                                                 0.5f * static_cast<float>(kSamplesPerAxis - 1)) *
+                                                (2.0f * reach / static_cast<float>(kSamplesPerAxis));
+                        const glm::vec3 offset = axes * local;
+                        const glm::vec3 point = body.position + offset;
+                        const float level = surface.SurfaceHeightAt({point.x, point.z}, noWater);
+                        const float fraction = std::clamp((level - (point.y - 0.5f * partHeight)) / partHeight, 0.0f, 1.0f);
+                        if (fraction <= 0.0f) {
+                            continue;
+                        }
+                        submerged += partVolume * fraction;
+                        const glm::vec2 current = surface.VelocityAt({point.x, point.z});
+                        const glm::vec3 pointVelocity = body.linearVelocity + glm::cross(body.angularVelocity, offset);
+                        const glm::vec3 lift(0.0f, kWaterDensity * gravity * partVolume * fraction, 0.0f);
+                        const glm::vec3 drag = (glm::vec3(current.x, 0.0f, current.y) - pointVelocity) *
+                                               (kWaterDragRate * kWaterDensity * partVolume * fraction);
+                        world.AddForce(index, lift + drag, point);
+                    }
+                }
+            }
+
+            // What sinks pushes water aside, and what rises lets it back.
+            const glm::vec2 where(body.position.x, body.position.z);
+            const float radius = 1.2f * std::max(reach.x, reach.z);
+            const float change = submerged - submergedVolume[number];
+            submergedVolume[number] = submerged;
+            if (std::abs(change) > 1e-6f) {
+                water->Splash(where, radius, -change);
+            }
+            if (submerged > 0.0f) {
+                water->Push(where, radius, 0.5f * glm::vec2(body.linearVelocity.x, body.linearVelocity.z));
+            }
+        }
+    }
 }
 
 void PropField::RefreshInstances() {
