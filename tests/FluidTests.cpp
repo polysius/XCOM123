@@ -558,8 +558,9 @@ void TheWindowIsCentredOnTheNearestWater() {
     city.water.push_back(OrientedRect(Rect{{400.0f, 400.0f}, {460.0f, 420.0f}}));  // a canal far away
     fluid::RiverWater near;
     near.Build(city, {430.0f, 395.0f}, SmallWindow());
-    Check(std::abs(near.Origin().x + 32.0f - 430.0f) < 1.0f && std::abs(near.Origin().y + 32.0f - 400.0f) < 1.0f,
-          "the window is on the water closest to the given place");
+    // The canal runs along X, 20 m wide, with its middle line at Z = 410.
+    Check(std::abs(near.Origin().x + 32.0f - 430.0f) < 1.0f && std::abs(near.Origin().y + 32.0f - 410.0f) < 1.0f,
+          "the window is on the middle of the water closest to the given place");
 }
 
 void AStillRiverStaysStill() {

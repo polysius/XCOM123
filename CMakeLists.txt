@@ -138,6 +138,7 @@ enable_testing()
 # The unit tests also drive the crowd on small cities made by hand, so they build all of it.
 file(GLOB UNIT_TEST_CROWD_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/world/crowd/*.cpp)
 file(GLOB PHYSICS_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/physics/*.cpp)
+file(GLOB FLUID_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/fluid/*.cpp)
 add_executable(unit_tests
     tests/unit_tests.cpp
     src/core/CommandLine.cpp
@@ -146,7 +147,8 @@ add_executable(unit_tests
     src/world/Crowd.cpp
     src/world/TerrainField.cpp
     ${UNIT_TEST_CROWD_SOURCES}
-    ${PHYSICS_SOURCES})
+    ${PHYSICS_SOURCES}
+    ${FLUID_SOURCES})
 target_include_directories(unit_tests PRIVATE src)
 target_link_libraries(unit_tests PRIVATE glm::glm)
 target_compile_definitions(unit_tests PRIVATE GLM_FORCE_RADIANS GLM_FORCE_DEPTH_ZERO_TO_ONE)
@@ -156,7 +158,7 @@ endif()
 add_test(NAME unit_tests COMMAND unit_tests)
 
 # physics_tests checks the rigid body physics: falling, resting, stacking, bouncing, friction, sleeping.
-add_executable(physics_tests tests/PhysicsTests.cpp ${PHYSICS_SOURCES})
+add_executable(physics_tests tests/PhysicsTests.cpp ${PHYSICS_SOURCES} ${FLUID_SOURCES})
 target_include_directories(physics_tests PRIVATE src)
 target_link_libraries(physics_tests PRIVATE glm::glm)
 target_compile_definitions(physics_tests PRIVATE GLM_FORCE_RADIANS GLM_FORCE_DEPTH_ZERO_TO_ONE)
@@ -166,7 +168,6 @@ endif()
 add_test(NAME physics_tests COMMAND physics_tests)
 
 # fluid_tests checks the shallow water simulation: still water, wave speed, volume, slopes, dry ground.
-file(GLOB FLUID_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/fluid/*.cpp)
 add_executable(fluid_tests tests/FluidTests.cpp ${FLUID_SOURCES})
 target_include_directories(fluid_tests PRIVATE src)
 target_link_libraries(fluid_tests PRIVATE glm::glm)

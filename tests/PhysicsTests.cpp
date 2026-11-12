@@ -939,6 +939,63 @@ void ADisabledBodyStaysWhereItIsAndCostsNothing() {
     Check(world.AwakeBodyCount() == 0, "and is not awake");
 }
 
+// Forces from outside ----------------------------------------------------------------------------
+
+void AForceAcceleratesABodyAsNewtonSays() {
+    PhysicsSettings settings;
+    settings.gravity = glm::vec3(0.0f);
+    PhysicsWorld world(settings);
+    const uint32_t box = AddBox(world, {0.0f, 0.0f, 0.0f});  // a tonne at 1000 kg per cubic metre and 1 m across
+    const float mass = 1.0f / world.GetBody(box).inverseMass;
+    for (int i = 0; i < 120; ++i) {
+        world.AddForce(box, {2000.0f, 0.0f, 0.0f}, world.GetBody(box).position);  // every step, for a second
+        world.Step();
+    }
+    Check(Near(world.GetBody(box).linearVelocity.x, 2000.0f / mass, 0.02f), "two thousand newtons on a tonne give two metres a second in a second");
+    Check(glm::length(world.GetBody(box).angularVelocity) < 1e-5f, "and no spin, since it pushes through the middle");
+}
+
+void AForceOffCentreSpinsTheBody() {
+    PhysicsSettings settings;
+    settings.gravity = glm::vec3(0.0f);
+    PhysicsWorld world(settings);
+    const uint32_t box = AddBox(world, {0.0f, 0.0f, 0.0f});
+    for (int i = 0; i < 60; ++i) {
+        world.AddForce(box, {0.0f, 0.0f, 1000.0f}, {0.5f, 0.0f, 0.0f});  // pushing the +X side towards +Z turns it about Y
+        world.Step();
+    }
+    Check(world.GetBody(box).angularVelocity.y < -0.1f || world.GetBody(box).angularVelocity.y > 0.1f, "a push at the side of a body turns it");
+    Check(world.GetBody(box).linearVelocity.z > 0.1f, "as well as moving it");
+}
+
+void AForceLastsOneStepOnly() {
+    PhysicsSettings settings;
+    settings.gravity = glm::vec3(0.0f);
+    PhysicsWorld world(settings);
+    const uint32_t box = AddBox(world, {0.0f, 0.0f, 0.0f});
+    world.AddForce(box, {60000.0f, 0.0f, 0.0f}, world.GetBody(box).position);  // enough to move it faster than it falls asleep at
+    world.Step();
+    const float afterOne = world.GetBody(box).linearVelocity.x;
+    for (int i = 0; i < 60; ++i) {
+        world.Step();
+    }
+    Check(afterOne > 0.0f && Near(world.GetBody(box).linearVelocity.x, afterOne, 1e-5f), "a force given once acts once, and the body goes on at the speed it was given");
+}
+
+void ForcesOnBodiesThatCannotMoveOrAreNotNumbersAreIgnored() {
+    PhysicsSettings settings;
+    settings.gravity = glm::vec3(0.0f);
+    PhysicsWorld world(settings);
+    const uint32_t ground = AddGround(world);
+    const uint32_t box = AddBox(world, {0.0f, 5.0f, 0.0f});
+    world.AddForce(ground, {1e6f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f});
+    world.AddForce(box, {std::nanf(""), 0.0f, 0.0f}, {0.0f, 5.0f, 0.0f});
+    world.AddForce(box, {1.0f, 0.0f, 0.0f}, {std::numeric_limits<float>::infinity(), 0.0f, 0.0f});
+    Simulate(world, 1.0f);
+    Check(world.GetBody(ground).position == glm::vec3(0.0f, -0.5f, 0.0f), "the ground is not pushed");
+    Check(IsFinite(world.GetBody(box)) && glm::length(world.GetBody(box).linearVelocity) < 1e-6f, "and a force that is not a number does nothing");
+}
+
 }  // namespace
 
 int main() {
@@ -994,6 +1051,10 @@ int main() {
         {"AnImpossiblyHeavyFastBodyDoesNotCorruptTheGround", AnImpossiblyHeavyFastBodyDoesNotCorruptTheGround},
         {"ALongUpdateStepIsNotSlowMotion", ALongUpdateStepIsNotSlowMotion},
         {"ADisabledBodyStaysWhereItIsAndCostsNothing", ADisabledBodyStaysWhereItIsAndCostsNothing},
+        {"AForceAcceleratesABodyAsNewtonSays", AForceAcceleratesABodyAsNewtonSays},
+        {"AForceOffCentreSpinsTheBody", AForceOffCentreSpinsTheBody},
+        {"AForceLastsOneStepOnly", AForceLastsOneStepOnly},
+        {"ForcesOnBodiesThatCannotMoveOrAreNotNumbersAreIgnored", ForcesOnBodiesThatCannotMoveOrAreNotNumbersAreIgnored},
     };
     for (const Test& test : tests) {
         const int failuresBefore = failureCount;

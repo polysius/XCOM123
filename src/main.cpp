@@ -38,6 +38,9 @@ constexpr float kFixedTimeStep = 1.0f / 60.0f;
 // the largest step the interactive loop ever takes, so the crowd behaves the same.
 constexpr float kPreRollTimeStep = 0.1f;
 constexpr float kRiverPreRollSeconds = 30.0f;
+// With props in the river both are run for this long before a screenshot, together, so that the props have not
+// settled against water that was never moving.
+constexpr float kCoupledPreRollSeconds = 60.0f;
 constexpr float kDefaultSunElevation = 24.0f;
 constexpr float kSunAzimuthDegrees = 230.0f;
 constexpr float kSunTurnSpeed = 10.0f;  // degrees per second while Z or X is held
@@ -309,21 +312,33 @@ int RunBenchmark(Engine& engine, const Options& options) {
     return passed && completed ? 0 : kBenchmarkFailedExitCode;
 }
 
-// Moves the crowd and the props forward to `seconds` without drawing anything.
+// Moves the crowd, the props and the river forward to `seconds` without drawing anything.
 void PreRollWorld(Engine& engine, float seconds) {
+    const bool coupled = engine.river.IsBuilt() && engine.props.Count() > 0;
     while (seconds > 0.0f) {
         const float step = std::min(seconds, kPreRollTimeStep);
         engine.crowd.Update(step);
-        if (engine.props.Count() > 0) {
-            // The physics catches up in pieces of a frame, so that none of the time is dropped.
-            for (float left = step; left > 0.0f; left -= kFixedTimeStep) {
-                engine.props.Update(std::min(left, kFixedTimeStep));
+        if (coupled) {
+            // The props and the water act on each other, so they run together, in pieces of a frame, and only for the
+            // last minute: whatever fell in before that has settled, and the heap starts to fall when the minute starts.
+            if (seconds <= kCoupledPreRollSeconds) {
+                for (float left = step; left > 0.0f; left -= kFixedTimeStep) {
+                    engine.props.Update(std::min(left, kFixedTimeStep));
+                    engine.river.Update(std::min(left, kFixedTimeStep));
+                }
             }
-        }
-        // The ripples of the river settle within half a minute, so only the last half minute of the time before
-        // a screenshot is simulated: running the water for ten minutes would take a minute of the user's time.
-        if (seconds <= kRiverPreRollSeconds) {
-            engine.river.Update(step);  // does nothing unless the river is simulated
+        } else {
+            if (engine.props.Count() > 0) {
+                // The physics catches up in pieces of a frame, so that none of the time is dropped.
+                for (float left = step; left > 0.0f; left -= kFixedTimeStep) {
+                    engine.props.Update(std::min(left, kFixedTimeStep));
+                }
+            }
+            // The ripples of the river settle within half a minute, so only the last half minute of the time before a
+            // screenshot is simulated: running the water for ten minutes would take a minute of the user's time.
+            if (seconds <= kRiverPreRollSeconds) {
+                engine.river.Update(step);  // does nothing unless the river is simulated
+            }
         }
         seconds -= step;
     }
@@ -383,8 +398,8 @@ void PrintWorldSummary(const Options& options, const Engine& engine) {
         std::cout << ", river simulated around (" << engine.river.Centre().x << ", " << engine.river.Centre().y << ")";
     }
     if (engine.props.Count() > 0) {
-        std::cout << ", " << engine.props.Count() << " props above the square at (" << engine.props.DropCentre().x << ", "
-                  << engine.props.DropCentre().y << ")";
+        std::cout << ", " << engine.props.Count() << " props above the " << (engine.river.IsBuilt() ? "river" : "square") << " at ("
+                  << engine.props.DropCentre().x << ", " << engine.props.DropCentre().y << ")";
     }
     std::cout << "\n";
     if (!options.IsBenchmark() && !options.IsScreenshot()) {
@@ -425,17 +440,22 @@ int RunEngine(const Options& options, GLFWwindow* window) {
     // Reserve room for everyone up front, so the renderer never grows buffers mid-flight.
     engine.renderer->ReserveNpcCapacity(engine.crowd.AgentCount());
     engine.visibleNpcs.reserve(engine.crowd.AgentCount());
-    if (options.propCount > 0) {
-        engine.props.Spawn(engine.city, {.count = options.propCount, .seed = options.seed});
+    // The river nearest the middle of the city, if it is to be simulated, and then the props are dropped over it.
+    fluid::RiverWaterSettings riverSettings;
+    riverSettings.rainPerSecond = static_cast<float>(options.rainPerSecond);
+    riverSettings.seed = options.seed;
+    if (options.riverSimulation && !engine.river.Build(engine.city, glm::vec2(0.0f), riverSettings)) {
+        std::cerr << "The city has no water to simulate\n";
     }
-    if (options.riverSimulation) {
-        // The river near the props, or near the middle of the city.
-        const glm::vec2 near = engine.props.Count() > 0 ? engine.props.DropCentre() : glm::vec2(0.0f);
-        fluid::RiverWaterSettings river;
-        river.rainPerSecond = static_cast<float>(options.rainPerSecond);
-        river.seed = options.seed;
-        if (!engine.river.Build(engine.city, near, river)) {
-            std::cerr << "The city has no water to simulate\n";
+    if (options.propCount > 0) {
+        physics::PropSettings props{.count = options.propCount, .seed = options.seed};
+        if (engine.river.IsBuilt()) {
+            props.dropAt = engine.river.Centre();
+            props.riverBed = engine.river.RestLevel() - riverSettings.depth;
+        }
+        engine.props.Spawn(engine.city, props);
+        if (engine.river.IsBuilt()) {
+            engine.props.SetWater(&engine.river);
         }
     }
     PrintWorldSummary(options, engine);

@@ -199,6 +199,15 @@ void PhysicsWorld::Wake(uint32_t index) {
     sleepingGroups.erase(group);
 }
 
+void PhysicsWorld::AddForce(uint32_t index, glm::vec3 force, glm::vec3 worldPoint) {
+    Body& body = bodies[index];
+    if (body.isStatic || body.isAsleep || !IsFinite(force) || !IsFinite(worldPoint)) {
+        return;
+    }
+    body.externalForce += force;
+    body.externalTorque += glm::cross(worldPoint - body.position, force);
+}
+
 void PhysicsWorld::Disable(uint32_t index) {
     Body& body = bodies[index];
     if (body.isStatic) {
@@ -270,8 +279,12 @@ void PhysicsWorld::RefreshBodies() {
         if (body.isStatic || body.isAsleep) {
             continue;
         }
-        body.linearVelocity += settings.gravity * settings.fixedStep;
         body.inverseInertiaWorld = InverseInertiaInWorld(body);
+        body.appliedVelocityStep = (settings.gravity + body.externalForce * body.inverseMass) * settings.fixedStep;
+        body.linearVelocity += body.appliedVelocityStep;
+        body.angularVelocity += body.inverseInertiaWorld * body.externalTorque * settings.fixedStep;
+        body.externalForce = glm::vec3(0.0f);
+        body.externalTorque = glm::vec3(0.0f);
         UpdateBounds(body);
     }
 }
@@ -361,11 +374,12 @@ void PhysicsWorld::WakeSleepersTouchedByMovingBodies() {
         if (body.isStatic || body.isAsleep || !HasUsableBounds(body)) {
             continue;
         }
-        // Gravity has been added to the speed of every awake body this step; a body at rest on the ground
-        // is still, and must not wake the bodies it rests among because of it.
-        Body asBeforeGravity = body;
-        asBeforeGravity.linearVelocity -= settings.gravity * settings.fixedStep;
-        if (IsStill(asBeforeGravity, settings)) {
+        // Gravity, and any forces from outside such as the lift of water, have changed the speed of every awake body
+        // this step. A body at rest on the ground, or floating, is still, and must not wake the bodies it rests
+        // among because of it.
+        Body asBeforeForces = body;
+        asBeforeForces.linearVelocity -= body.appliedVelocityStep;
+        if (IsStill(asBeforeForces, settings)) {
             continue;
         }
         const glm::vec3 reach =

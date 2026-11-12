@@ -180,6 +180,39 @@ void ShallowWater::AddVelocity(glm::vec2 point, float radius, glm::vec2 velocity
     }
 }
 
+void ShallowWater::AddVelocityChange(glm::vec2 point, float radius, glm::vec2 change) {
+    if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(radius) || !std::isfinite(change.x) ||
+        !std::isfinite(change.y)) {
+        return;
+    }
+    const glm::vec2 inGrid = (point - settings.origin) / settings.cellSize;
+    const float reach = std::max(radius / settings.cellSize, kMinReachInCells);
+    const auto weightAt = [&](float x, float z) {
+        const float distance = glm::length(glm::vec2(x, z) - inGrid) / reach;
+        return distance < 1.0f ? 1.0f - distance * distance : 0.0f;
+    };
+    const int i0 = ClampedWholeCell(std::floor(inGrid.x - reach), settings.width);
+    const int i1 = ClampedWholeCell(std::ceil(inGrid.x + reach), settings.width);
+    const int j0 = ClampedWholeCell(std::floor(inGrid.y - reach), settings.height);
+    const int j1 = ClampedWholeCell(std::ceil(inGrid.y + reach), settings.height);
+    for (int j = j0; j < j1; ++j) {
+        for (int i = std::max(i0, 1); i < std::min(i1 + 1, settings.width); ++i) {
+            const float weight = weightAt(static_cast<float>(i), static_cast<float>(j) + 0.5f);
+            if (weight > 0.0f && !solid[Index(i - 1, j)] && !solid[Index(i, j)] && (IsWet(i - 1, j) || IsWet(i, j))) {
+                flowU[SideU(i, j)] += weight * change.x;
+            }
+        }
+    }
+    for (int j = std::max(j0, 1); j < std::min(j1 + 1, settings.height); ++j) {
+        for (int i = i0; i < i1; ++i) {
+            const float weight = weightAt(static_cast<float>(i) + 0.5f, static_cast<float>(j));
+            if (weight > 0.0f && !solid[Index(i, j - 1)] && !solid[Index(i, j)] && (IsWet(i, j - 1) || IsWet(i, j))) {
+                flowV[SideV(i, j)] += weight * change.y;
+            }
+        }
+    }
+}
+
 double ShallowWater::TotalVolume() const {
     double total = 0.0;
     for (float d : depth) {

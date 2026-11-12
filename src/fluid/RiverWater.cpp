@@ -10,10 +10,17 @@ constexpr int kMaxCells = 2048;
 // The most drops that fall in one Update. It is a second of rain at the heaviest rate the command line allows.
 constexpr float kMaxDropsPerUpdate = 5000.0f;
 
-// The point of `rect` that is nearest to `point`.
-glm::vec2 NearestPointOf(const OrientedRect& rect, glm::vec2 point) {
-    const glm::vec2 local = rect.ToFrame(point);
-    return rect.FromFrame(glm::clamp(local, rect.area.min, rect.area.max));
+// The point on the middle line of `rect`, which is a strip of river, that is nearest to `point`: the middle of the
+// water, where a window of the simulation and a heap of props dropped into it belong, and not its bank.
+glm::vec2 NearestOnMiddleLineOf(const OrientedRect& rect, glm::vec2 point) {
+    const glm::vec2 centre = rect.area.Center();
+    glm::vec2 local = glm::clamp(rect.ToFrame(point), rect.area.min, rect.area.max);
+    if (rect.area.Size().x >= rect.area.Size().y) {
+        local.y = centre.y;  // a strip that runs along its X axis
+    } else {
+        local.x = centre.x;
+    }
+    return rect.FromFrame(local);
 }
 
 }  // namespace
@@ -30,14 +37,14 @@ bool RiverWater::Build(const CityLayout& city, glm::vec2 near, const RiverWaterS
     random.seed(settings.seed);
     rainCarry = 0.0f;
 
-    // The window is centred on the water nearest to the given place. A rectangle with no area is no water.
+    // The window is centred on the middle of the water nearest to the given place. A rectangle with no area is no water.
     bool found = false;
     glm::vec2 centre(0.0f);
     for (const OrientedRect& rect : city.water) {
         if (rect.IsEmpty()) {
             continue;
         }
-        const glm::vec2 candidate = NearestPointOf(rect, near);
+        const glm::vec2 candidate = NearestOnMiddleLineOf(rect, near);
         if (!found || glm::distance(candidate, near) < glm::distance(centre, near)) {
             centre = candidate;
             found = true;
@@ -119,6 +126,12 @@ void RiverWater::Splash(glm::vec2 point, float radius, float volume) {
 void RiverWater::Push(glm::vec2 point, float radius, glm::vec2 velocity) {
     if (built) {
         water.AddVelocity(point, radius, velocity);
+    }
+}
+
+void RiverWater::Nudge(glm::vec2 point, float radius, glm::vec2 change) {
+    if (built) {
+        water.AddVelocityChange(point, radius, change);
     }
 }
 

@@ -63,6 +63,10 @@ public:
     void SetVelocity(uint32_t index, glm::vec3 linear, glm::vec3 angular);
     // Wakes a body and the whole group that sleeps with it.
     void Wake(uint32_t index);
+    // Pushes a body with `force` newtons applied at a world point, in the next step only: call it again before
+    // every step for a force that lasts, as buoyancy and drag do. A body that is asleep or static, or a force that
+    // is not a finite number, is ignored.
+    void AddForce(uint32_t index, glm::vec3 force, glm::vec3 worldPoint);
     // Takes a body out of the simulation for good: it stays where it is, as an immovable body, and costs
     // almost nothing. For bodies that have fallen out of the world.
     void Disable(uint32_t index);
