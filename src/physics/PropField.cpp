@@ -15,6 +15,11 @@ constexpr float kFirstLayerHeight = 3.0f;  // metres above the ground at which t
 constexpr float kLayerSpacing = 2.0f;      // more than the widest prop, so that none starts inside another
 constexpr float kWaterDensity = 1000.0f;   // kilograms per cubic metre
 constexpr float kWaterDragRate = 2.0f;     // per second: how fast a prop in the water takes on the speed of the water round it
+constexpr float kWakeCurrent = 0.05f;      // a sleeping prop in water that flows faster than this (m/s) is woken
+constexpr float kWakeWave = 0.02f;         // or that is this far (m) from the still level
+constexpr float kSplashMinSpeed = 0.5f;        // m/s of vertical speed below which a prop makes no splash
+constexpr float kSplashFullSpeedRange = 2.5f;  // and above which, by this much more, it makes the whole of it
+constexpr float kMaxReaction = 0.3f;       // the most of the water's speed one prop's drag can take back in a step
 constexpr int kSamplesPerAxis = 3;         // a prop feels the water at this many points along each of its axes
 constexpr float kHighestFloor = 12.0f;     // a box with its top higher than this is not a floor: a tree or a roof
 constexpr float kFallDepth = 80.0f;        // props this far below the ground under the heap have fallen out of the world
@@ -155,7 +160,8 @@ void PropField::Spawn(const CityLayout& city, const PropSettings& settings) {
         const float seed = Unit(random);
         const uint32_t kind = i % 10;
         if (kind < 6) {  // a crate, and now and then a block of stone, which sinks
-            const bool stone = (i / 10) % 4 == 3 && kind < 3;
+            // Blocks of stone are among the crates only over a river, which is where they sink to the bed.
+            const bool stone = settings.riverBed && (i / 10) % 4 == 3 && kind < 3;
             description.shape = Shape::Box({0.25f + 0.3f * Unit(random), 0.25f + 0.25f * Unit(random), 0.25f + 0.3f * Unit(random)});
             description.density = stone ? 2400.0f : 450.0f;
             description.material = {0.6f, 0.1f, 0.05f};
@@ -178,6 +184,7 @@ void PropField::Spawn(const CityLayout& city, const PropSettings& settings) {
         }
     }
     submergedVolume.assign(boxBodies.size() + sphereBodies.size(), 0.0f);
+    restarted.assign(boxBodies.size() + sphereBodies.size(), 0);
     pendingSeconds = 0.0f;
     RefreshInstances();
 }
@@ -188,7 +195,7 @@ void PropField::Update(float seconds) {
         const float step = world.Settings().fixedStep;
         pendingSeconds += seconds;
         for (int steps = 0; pendingSeconds >= step && steps < world.Settings().maxStepsPerUpdate; ++steps) {
-            ApplyWater();
+            ApplyWater(step);
             world.Step();
             pendingSeconds -= step;
         }
@@ -209,24 +216,35 @@ void PropField::Update(float seconds) {
     RefreshInstances();
 }
 
-// Lifts every prop by the weight of the water it pushes aside, drags it along with the water round it, and pushes
-// the water aside as the prop sinks or lets it back as the prop rises. A prop is felt at a grid of points inside it,
-// each standing for an equal part of its volume, and a point counts as under water by as much as the surface of the
-// water is above it, over the height of its part.
-void PropField::ApplyWater() {
+// Lifts every prop by the weight of the water it pushes aside, drags it along with the water round it, and gives the
+// water the reaction: the water round a prop that is dragged along is dragged back by it, and water pushed aside by a
+// prop that sinks rises round it, while water that fills the place of a prop that rises sinks. A prop is felt at a grid
+// of points inside it, each standing for an equal part of its volume, and a point counts as under water by as much as
+// the surface of the water is above it, over the height of its part. Outside the window of the simulation the river is
+// taken to be still at its rest level.
+void PropField::ApplyWater(float seconds) {
     const fluid::ShallowWater& surface = water->Water();
     const float gravity = -world.Settings().gravity.y;
-    const float noWater = -1e9f;
+    const float restLevel = water->RestLevel();
     size_t slot = 0;
     for (const std::vector<uint32_t>* bodies : {&boxBodies, &sphereBodies}) {
         for (uint32_t index : *bodies) {
             const size_t number = slot++;
             const Body& body = world.GetBody(index);
-            if (body.isAsleep) {
-                continue;
-            }
             const bool isSphere = body.shape.type == ShapeType::Sphere;
             const glm::vec3 reach = isSphere ? glm::vec3(0.8f * body.shape.radius) : body.shape.halfExtents;
+            const glm::vec2 where(body.position.x, body.position.z);
+            if (body.isAsleep) {
+                // A prop that sleeps in water that moves or rises and falls is woken: it would sit still on a current.
+                const float level = surface.SurfaceHeightAt(where, restLevel);
+                const bool inWater = body.position.y - reach.y < level;
+                if (inWater && (glm::length(surface.VelocityAt(where)) > kWakeCurrent || std::abs(level - restLevel) > kWakeWave)) {
+                    world.Wake(index);
+                } else {
+                    restarted[number] = 1;
+                    continue;
+                }
+            }
             const float volume = isSphere ? (4.0f / 3.0f) * 3.14159265f * body.shape.radius * body.shape.radius * body.shape.radius
                                           : 8.0f * body.shape.halfExtents.x * body.shape.halfExtents.y * body.shape.halfExtents.z;
             constexpr int count = kSamplesPerAxis * kSamplesPerAxis * kSamplesPerAxis;
@@ -243,7 +261,7 @@ void PropField::ApplyWater() {
                                                 (2.0f * reach / static_cast<float>(kSamplesPerAxis));
                         const glm::vec3 offset = axes * local;
                         const glm::vec3 point = body.position + offset;
-                        const float level = surface.SurfaceHeightAt({point.x, point.z}, noWater);
+                        const float level = surface.SurfaceHeightAt({point.x, point.z}, restLevel);
                         const float fraction = std::clamp((level - (point.y - 0.5f * partHeight)) / partHeight, 0.0f, 1.0f);
                         if (fraction <= 0.0f) {
                             continue;
@@ -259,16 +277,29 @@ void PropField::ApplyWater() {
                 }
             }
 
-            // What sinks pushes water aside, and what rises lets it back.
-            const glm::vec2 where(body.position.x, body.position.z);
             const float radius = 1.2f * std::max(reach.x, reach.z);
             const float change = submerged - submergedVolume[number];
             submergedVolume[number] = submerged;
-            if (std::abs(change) > 1e-6f) {
-                water->Splash(where, radius, -change);
+            if (restarted[number] != 0) {
+                restarted[number] = 0;  // the volume it had was from before it slept: no splash for the difference
+            } else if (std::abs(change) > 1e-6f) {
+                // Water pushed aside by a prop that sinks rises round it, and sinks where a prop that rises lets it back. Only
+                // a prop that moves up or down fast makes a splash: one that floats, or bobs, or is jostled by its neighbours,
+                // would otherwise make waves that lift and drop it and its neighbours in turn, and the heap would never settle.
+                const float speed = std::abs(body.linearVelocity.y);
+                const float strength = std::clamp((speed - kSplashMinSpeed) / kSplashFullSpeedRange, 0.0f, 1.0f);
+                if (strength > 0.0f) {
+                    water->Splash(where, radius, change * strength);
+                }
             }
             if (submerged > 0.0f) {
-                water->Push(where, radius, 0.5f * glm::vec2(body.linearVelocity.x, body.linearVelocity.z));
+                // The water gives back what the drag took from the prop: the water of the column round it, which is much heavier
+                // than a prop, slows by a little.
+                const glm::vec2 current = surface.VelocityAt(where);
+                const glm::vec2 relative = glm::vec2(body.linearVelocity.x, body.linearVelocity.z) - current;
+                const float columnVolume = 3.14159265f * radius * radius * water->Depth();
+                const float share = std::min(submerged * kWaterDragRate * seconds / columnVolume, kMaxReaction);
+                water->Nudge(where, radius, relative * share);
             }
         }
     }

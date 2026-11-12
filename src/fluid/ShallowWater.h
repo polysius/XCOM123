@@ -63,6 +63,11 @@ public:
     // made it. Negative volume takes water out. Returns the volume actually added, which is less when
     // the cells have no water to give.
     float AddVolume(glm::vec2 point, float radius, float volume);
+    // Changes the flow of the water within `radius` of a world point, more at its centre, by `change` (metres per
+    // second along X and Z) at the centre. Where AddVelocity sets the speed of the water, this adds to it, as the
+    // water round a thing that is dragged along by a current is dragged back by it. A point or a change that is
+    // not a finite number is ignored.
+    void AddVelocityChange(glm::vec2 point, float radius, glm::vec2 change);
     // Pushes the water within `radius` of a world point, more at its centre, so that it flows with `velocity`
     // (metres per second along X and Z), as the hull of a boat or a leg in the river does. A point or a
     // velocity that is not a finite number is ignored.

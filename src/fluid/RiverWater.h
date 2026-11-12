@@ -47,6 +47,8 @@ public:
     void Splash(glm::vec2 point, float radius, float volume);
     // Pushes the water at a world point towards `velocity`.
     void Push(glm::vec2 point, float radius, glm::vec2 velocity);
+    // Adds `change` to the speed of the water at a world point, strongest at the centre.
+    void Nudge(glm::vec2 point, float radius, glm::vec2 change);
 
     bool IsBuilt() const { return built; }
     // The middle of the window, in world X and Z.
@@ -59,8 +61,9 @@ public:
     float CellSize() const { return water.Settings().cellSize; }
     int Width() const { return water.Width(); }
     int Height() const { return water.Height(); }
-    // The height of the still surface of the river.
+    // The height of the still surface of the river, and how deep the water is over its bed.
     float RestLevel() const { return restLevel; }
+    float Depth() const { return settings.depth; }
     // How many cells of the window hold water.
     int WaterCellCount() const { return waterCells; }
 

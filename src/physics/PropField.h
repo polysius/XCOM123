@@ -59,8 +59,8 @@ public:
 
 private:
     void RefreshInstances();
-    // Applies the forces of the water to every prop for one step of `seconds`, and the push of the props to the water.
-    void ApplyWater();
+    // Applies the forces of the water to every prop for one step of `seconds`, and the reaction of the props on the water.
+    void ApplyWater(float seconds);
 
     PhysicsWorld world;
     glm::vec2 dropCentre{0.0f};
@@ -68,6 +68,7 @@ private:
     fluid::RiverWater* water = nullptr;
     float pendingSeconds = 0.0f;           // time asked for that the stepping with water has not run yet
     std::vector<float> submergedVolume;    // per prop, how much of it was under water at the last step, in cubic metres
+    std::vector<uint8_t> restarted;        // per prop: it slept, so its submerged volume is out of date
     std::vector<uint32_t> boxBodies;     // the world's bodies that are drawn as boxes, with their instances
     std::vector<uint32_t> sphereBodies;
     std::vector<BodyInstance> boxInstances;

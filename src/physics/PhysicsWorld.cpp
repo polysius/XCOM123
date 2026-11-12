@@ -280,7 +280,8 @@ void PhysicsWorld::RefreshBodies() {
             continue;
         }
         body.inverseInertiaWorld = InverseInertiaInWorld(body);
-        body.linearVelocity += (settings.gravity + body.externalForce * body.inverseMass) * settings.fixedStep;
+        body.appliedVelocityStep = (settings.gravity + body.externalForce * body.inverseMass) * settings.fixedStep;
+        body.linearVelocity += body.appliedVelocityStep;
         body.angularVelocity += body.inverseInertiaWorld * body.externalTorque * settings.fixedStep;
         body.externalForce = glm::vec3(0.0f);
         body.externalTorque = glm::vec3(0.0f);
@@ -373,11 +374,12 @@ void PhysicsWorld::WakeSleepersTouchedByMovingBodies() {
         if (body.isStatic || body.isAsleep || !HasUsableBounds(body)) {
             continue;
         }
-        // Gravity has been added to the speed of every awake body this step; a body at rest on the ground
-        // is still, and must not wake the bodies it rests among because of it.
-        Body asBeforeGravity = body;
-        asBeforeGravity.linearVelocity -= settings.gravity * settings.fixedStep;
-        if (IsStill(asBeforeGravity, settings)) {
+        // Gravity, and any forces from outside such as the lift of water, have changed the speed of every awake body
+        // this step. A body at rest on the ground, or floating, is still, and must not wake the bodies it rests
+        // among because of it.
+        Body asBeforeForces = body;
+        asBeforeForces.linearVelocity -= body.appliedVelocityStep;
+        if (IsStill(asBeforeForces, settings)) {
             continue;
         }
         const glm::vec3 reach =

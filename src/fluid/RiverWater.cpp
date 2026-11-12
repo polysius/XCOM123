@@ -129,6 +129,12 @@ void RiverWater::Push(glm::vec2 point, float radius, glm::vec2 velocity) {
     }
 }
 
+void RiverWater::Nudge(glm::vec2 point, float radius, glm::vec2 change) {
+    if (built) {
+        water.AddVelocityChange(point, radius, change);
+    }
+}
+
 // Rain falls at random places of the window, but not in the sponge along its edge, where it would make ripples
 // that the sponge only half soaks up, and a drop that lands on a wall is lost.
 void RiverWater::DropRain(float seconds) {

@@ -357,14 +357,14 @@ struct PropsInARiver {
     fluid::RiverWater river;
     physics::PropField props;
 
-    explicit PropsInARiver(uint32_t count, uint32_t seed = 1) {
+    explicit PropsInARiver(uint32_t count, uint32_t seed = 1, glm::vec2 dropOffset = glm::vec2(0.0f)) {
         const CityLayout city = CityWithAWideRiver();
         fluid::RiverWaterSettings settings;
         settings.cells = 128;
         settings.spongeWidth = 16.0f;
         river.Build(city, {0.0f, 0.0f}, settings);
         physics::PropSettings dropped{.count = count, .seed = seed};
-        dropped.dropAt = river.Centre();
+        dropped.dropAt = river.Centre() + dropOffset;
         dropped.riverBed = river.RestLevel() - settings.depth;
         props.Spawn(city, dropped);
         props.SetWater(&river);
@@ -452,6 +452,103 @@ void TheHeapIsDroppedWhereAskedAndOnlyThere() {
         Check(glm::distance(glm::vec2(instance.center.x, instance.center.z), scene.river.Centre()) < 12.0f,
               "every prop starts over the middle of the river");
     }
+}
+
+// How deep a box sits in the water, as the share of its height that is under the surface.
+float DraftOf(const BodyInstance& box, float surface) {
+    const glm::mat3 axes = glm::mat3_cast(glm::quat(box.orientation.w, box.orientation.x, box.orientation.y, box.orientation.z));
+    const float halfHeight = std::abs(axes[0].y) * box.halfSize.x + std::abs(axes[1].y) * box.halfSize.y + std::abs(axes[2].y) * box.halfSize.z;
+    return (surface - (box.center.y - halfHeight)) / (2.0f * halfHeight);
+}
+
+void ACrateOfWoodSettlesAtTheDraftItsDensityGivesAndFallsAsleep() {
+    PropsInARiver scene(1);  // one crate of wood, at 450 kilograms per cubic metre
+    for (int frame = 0; frame < 30 * 60; ++frame) {
+        scene.Frame();
+    }
+    const float draft = DraftOf(scene.props.Boxes().front(), scene.river.RestLevel());
+    Check(draft > 0.42f && draft < 0.49f, "a crate of density 450 sinks 45% of its height into the water, " + std::to_string(draft));
+    Check(scene.props.AwakeCount() == 0, "and comes to rest and falls asleep, awake " + std::to_string(scene.props.AwakeCount()));
+}
+
+void AHeapOfPropsFloatsAndSettlesInsteadOfChurningForEver() {
+    PropsInARiver scene(100, 2);
+    for (int frame = 0; frame < 50 * 60; ++frame) {
+        scene.Frame();
+    }
+    Check(scene.props.AwakeCount() < 15, "after fifty seconds a heap of a hundred props has nearly all come to rest, awake " +
+                                             std::to_string(scene.props.AwakeCount()));
+    float biggestWave = 0.0f;
+    for (float offset : scene.river.Field()) {
+        if (offset != fluid::kNoWater) {
+            biggestWave = std::max(biggestWave, std::abs(offset));
+        }
+    }
+    Check(biggestWave < 0.05f, "and the water round it is nearly calm, " + std::to_string(biggestWave));
+}
+
+void ACurrentCarriesWhatFloatsWithIt() {
+    PropsInARiver scene(1);
+    for (int frame = 0; frame < 15 * 60; ++frame) {
+        scene.Frame();
+    }
+    const float start = scene.props.Boxes().front().center.x;
+    for (int frame = 0; frame < 12 * 60; ++frame) {
+        // A current of a metre a second along the river, kept up round the crate by a push every frame.
+        const BodyInstance& crate = scene.props.Boxes().front();
+        scene.river.Push({crate.center.x, crate.center.z}, 8.0f, {1.0f, 0.0f});
+        scene.Frame();
+    }
+    const float travelled = scene.props.Boxes().front().center.x - start;
+    Check(travelled > 6.0f, "a crate on a current of a metre a second goes along with it, " + std::to_string(travelled) + " m in twelve seconds");
+}
+
+void ASleepingCrateIsWokenByTheWaterMovingUnderIt() {
+    PropsInARiver scene(1);
+    for (int frame = 0; frame < 30 * 60; ++frame) {
+        scene.Frame();
+    }
+    Check(scene.props.AwakeCount() == 0, "the crate is asleep");
+    const float start = scene.props.Boxes().front().center.x;
+    for (int frame = 0; frame < 10 * 60; ++frame) {
+        const BodyInstance& crate = scene.props.Boxes().front();
+        scene.river.Push({crate.center.x, crate.center.z}, 8.0f, {1.0f, 0.0f});
+        scene.Frame();
+    }
+    Check(scene.props.Boxes().front().center.x - start > 3.0f, "a current wakes it and takes it along");
+}
+
+void WoodPastTheEdgeOfTheSimulatedWindowStillFloats() {
+    // The window is 64 m across, and these props are dropped 80 m from its middle, over river that is not simulated.
+    PropsInARiver scene(10, 4, {80.0f, 0.0f});
+    for (int frame = 0; frame < 20 * 60; ++frame) {
+        scene.Frame();
+    }
+    int floating = 0;
+    for (const BodyInstance& box : scene.props.Boxes()) {
+        floating += std::abs(box.center.y - scene.river.RestLevel()) < 0.9f ? 1 : 0;
+    }
+    Check(floating >= 5, "crates over river that is not simulated float on its rest level, " + std::to_string(floating) + " of " +
+                             std::to_string(scene.props.Boxes().size()));
+}
+
+void BlocksOfStoneAreDroppedOnlyOverARiver() {
+    const CityLayout city = CityWithAWideRiver();
+    const auto stones = [](const physics::PropField& props) {
+        int count = 0;
+        for (const BodyInstance& box : props.Boxes()) {
+            count += box.material == static_cast<float>(SurfaceMaterial::Stone) ? 1 : 0;
+        }
+        return count;
+    };
+    physics::PropField dry;
+    dry.Spawn(city, {.count = 80, .seed = 1});
+    Check(stones(dry) == 0, "a heap dropped on land has no blocks of stone, which keeps it as it was");
+    physics::PropSettings wet{.count = 80, .seed = 1};
+    wet.riverBed = -12.0f;
+    physics::PropField river;
+    river.Spawn(city, wet);
+    Check(stones(river) >= 5, "and one dropped over a river has some");
 }
 
 constexpr float kQuarterTurn = 1.5707964f;
@@ -660,6 +757,12 @@ int main() {
         {"PropsInARiverNeverGoThroughItsBed", PropsInARiverNeverGoThroughItsBed},
         {"PropsInARiverAreTheSameEveryTime", PropsInARiverAreTheSameEveryTime},
         {"TheHeapIsDroppedWhereAskedAndOnlyThere", TheHeapIsDroppedWhereAskedAndOnlyThere},
+        {"ACrateOfWoodSettlesAtTheDraftItsDensityGivesAndFallsAsleep", ACrateOfWoodSettlesAtTheDraftItsDensityGivesAndFallsAsleep},
+        {"AHeapOfPropsFloatsAndSettlesInsteadOfChurningForEver", AHeapOfPropsFloatsAndSettlesInsteadOfChurningForEver},
+        {"ACurrentCarriesWhatFloatsWithIt", ACurrentCarriesWhatFloatsWithIt},
+        {"ASleepingCrateIsWokenByTheWaterMovingUnderIt", ASleepingCrateIsWokenByTheWaterMovingUnderIt},
+        {"WoodPastTheEdgeOfTheSimulatedWindowStillFloats", WoodPastTheEdgeOfTheSimulatedWindowStillFloats},
+        {"BlocksOfStoneAreDroppedOnlyOverARiver", BlocksOfStoneAreDroppedOnlyOverARiver},
         {"ARoomWithAFreePassageIsAPortal", ARoomWithAFreePassageIsAPortal},
         {"AConversationCannotStandOnAPassage", AConversationCannotStandOnAPassage},
         {"ABlockedPassageIsNotAPortal", ABlockedPassageIsNotAPortal},
