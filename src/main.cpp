@@ -37,6 +37,7 @@ constexpr float kFixedTimeStep = 1.0f / 60.0f;
 // Screenshots at a late world time simulate the crowd up to it in steps this long first. It is
 // the largest step the interactive loop ever takes, so the crowd behaves the same.
 constexpr float kPreRollTimeStep = 0.1f;
+constexpr float kRiverPreRollSeconds = 30.0f;
 constexpr float kDefaultSunElevation = 24.0f;
 constexpr float kSunAzimuthDegrees = 230.0f;
 constexpr float kSunTurnSpeed = 10.0f;  // degrees per second while Z or X is held
@@ -319,7 +320,11 @@ void PreRollWorld(Engine& engine, float seconds) {
                 engine.props.Update(std::min(left, kFixedTimeStep));
             }
         }
-        engine.river.Update(step);  // does nothing unless the river is simulated
+        // The ripples of the river settle within half a minute, so only the last half minute of the time before
+        // a screenshot is simulated: running the water for ten minutes would take a minute of the user's time.
+        if (seconds <= kRiverPreRollSeconds) {
+            engine.river.Update(step);  // does nothing unless the river is simulated
+        }
         seconds -= step;
     }
 }
@@ -375,7 +380,7 @@ void PrintWorldSummary(const Options& options, const Engine& engine) {
               << engine.city.streets.edges.size() << " street segments, " << engine.city.plazas.size()
               << " squares, " << engine.crowd.AgentCount() << " people";
     if (engine.river.IsBuilt()) {
-        std::cout << ", river simulated around (" << engine.river.Origin().x + 64.0f << ", " << engine.river.Origin().y + 64.0f << ")";
+        std::cout << ", river simulated around (" << engine.river.Centre().x << ", " << engine.river.Centre().y << ")";
     }
     if (engine.props.Count() > 0) {
         std::cout << ", " << engine.props.Count() << " props above the square at (" << engine.props.DropCentre().x << ", "

@@ -19,11 +19,12 @@
 namespace fluid {
 
 struct RiverWaterSettings {
-    int cells = 256;               // cells along each side of the window
+    int cells = 256;               // cells along each side of the window, between 2 and 2048
     float cellSize = 0.5f;         // metres
     float depth = 7.5f;            // metres of water over the bed of the river
-    float spongeWidth = 12.0f;     // cells of sponge along each edge of the window
-    float spongeRate = 3.0f;       // how fast the sponge soaks up waves at the very edge, per second
+    // The sponge along each edge of the window: wide and strong enough that about 3% of a wave comes back.
+    float spongeWidth = 24.0f;     // cells
+    float spongeRate = 10.0f;      // how fast it soaks up waves at the very edge, per second
     float rainPerSecond = 0.0f;    // drops that fall on the window each second
     float dropVolume = 0.03f;      // cubic metres of water in a drop
     float dropRadius = 0.4f;       // metres
@@ -48,6 +49,8 @@ public:
     void Push(glm::vec2 point, float radius, glm::vec2 velocity);
 
     bool IsBuilt() const { return built; }
+    // The middle of the window, in world X and Z.
+    glm::vec2 Centre() const { return Origin() + 0.5f * static_cast<float>(Width()) * CellSize(); }
     const ShallowWater& Water() const { return water; }
     // How far the surface of every cell is above the level of the still river, row by row from the minimum Z; kNoWater
     // where a cell has no water.

@@ -6,6 +6,10 @@
 namespace fluid {
 namespace {
 
+constexpr int kMaxCells = 2048;
+// The most drops that fall in one Update. It is a second of rain at the heaviest rate the command line allows.
+constexpr float kMaxDropsPerUpdate = 5000.0f;
+
 // The point of `rect` that is nearest to `point`.
 glm::vec2 NearestPointOf(const OrientedRect& rect, glm::vec2 point) {
     const glm::vec2 local = rect.ToFrame(point);
@@ -16,20 +20,31 @@ glm::vec2 NearestPointOf(const OrientedRect& rect, glm::vec2 point) {
 
 bool RiverWater::Build(const CityLayout& city, glm::vec2 near, const RiverWaterSettings& waterSettings) {
     built = false;
+    field.clear();
+    waterCells = 0;
     settings = waterSettings;
+    settings.cells = std::clamp(settings.cells, 2, kMaxCells);
+    if (!(settings.cellSize > 1e-3f)) {
+        settings.cellSize = RiverWaterSettings{}.cellSize;
+    }
     random.seed(settings.seed);
     rainCarry = 0.0f;
-    if (city.water.empty()) {
-        return false;
-    }
 
-    // The window is centred on the water nearest to the given place.
-    glm::vec2 centre = NearestPointOf(city.water.front(), near);
+    // The window is centred on the water nearest to the given place. A rectangle with no area is no water.
+    bool found = false;
+    glm::vec2 centre(0.0f);
     for (const OrientedRect& rect : city.water) {
-        const glm::vec2 candidate = NearestPointOf(rect, near);
-        if (glm::distance(candidate, near) < glm::distance(centre, near)) {
-            centre = candidate;
+        if (rect.IsEmpty()) {
+            continue;
         }
+        const glm::vec2 candidate = NearestPointOf(rect, near);
+        if (!found || glm::distance(candidate, near) < glm::distance(centre, near)) {
+            centre = candidate;
+            found = true;
+        }
+    }
+    if (!found) {
+        return false;
     }
 
     WaterSettings grid;
@@ -46,7 +61,7 @@ bool RiverWater::Build(const CityLayout& city, glm::vec2 near, const RiverWaterS
     std::vector<const OrientedRect*> nearby;
     for (const OrientedRect& rect : city.water) {
         const Rect bounds = rect.Bounds();
-        if (bounds.min.x < window.max.x && bounds.max.x > window.min.x && bounds.min.y < window.max.y && bounds.max.y > window.min.y) {
+        if (!rect.IsEmpty() && bounds.min.x < window.max.x && bounds.max.x > window.min.x && bounds.min.y < window.max.y && bounds.max.y > window.min.y) {
             nearby.push_back(&rect);
         }
     }
@@ -80,14 +95,14 @@ bool RiverWater::Build(const CityLayout& city, glm::vec2 near, const RiverWaterS
             }
         }
     }
-    field.assign(static_cast<size_t>(settings.cells) * static_cast<size_t>(settings.cells), kNoWater);
+    field.assign(static_cast<size_t>(water.Width()) * static_cast<size_t>(water.Height()), kNoWater);
     RefreshField();
     built = true;
     return true;
 }
 
 void RiverWater::Update(float seconds) {
-    if (!built) {
+    if (!built || !(seconds > 0.0f) || !std::isfinite(seconds)) {
         return;
     }
     DropRain(seconds);
@@ -107,17 +122,20 @@ void RiverWater::Push(glm::vec2 point, float radius, glm::vec2 velocity) {
     }
 }
 
-// Rain falls at random places of the window, and a drop that lands on a wall is lost.
+// Rain falls at random places of the window, but not in the sponge along its edge, where it would make ripples
+// that the sponge only half soaks up, and a drop that lands on a wall is lost.
 void RiverWater::DropRain(float seconds) {
-    if (settings.rainPerSecond <= 0.0f) {
+    if (!(settings.rainPerSecond > 0.0f)) {
         return;
     }
-    rainCarry += settings.rainPerSecond * seconds;
+    // A long frame does not make a downpour: no more drops fall in one update than a second of the heaviest rain.
+    rainCarry = std::min(rainCarry + settings.rainPerSecond * seconds, kMaxDropsPerUpdate);
     const auto unit = [this]() { return static_cast<float>(random() >> 8) * (1.0f / 16777216.0f); };
-    const float extent = static_cast<float>(settings.cells) * settings.cellSize;
+    const float margin = std::min(settings.spongeWidth, 0.5f * static_cast<float>(water.Width()) - 1.0f) * settings.cellSize;
+    const float extent = static_cast<float>(water.Width()) * settings.cellSize - 2.0f * std::max(margin, 0.0f);
     while (rainCarry >= 1.0f) {
         rainCarry -= 1.0f;
-        const glm::vec2 point = Origin() + glm::vec2(unit(), unit()) * extent;
+        const glm::vec2 point = Origin() + std::max(margin, 0.0f) + glm::vec2(unit(), unit()) * extent;
         water.AddVolume(point, settings.dropRadius, settings.dropVolume);
     }
 }

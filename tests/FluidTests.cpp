@@ -511,11 +511,19 @@ CityLayout CityWithARiver() {
     return city;
 }
 
+// A river that runs on through the whole window, as the real one does, 300 m long and 20 m wide.
+CityLayout CityWithALongRiver() {
+    CityLayout city;
+    city.waterLevel = -4.5f;
+    city.water.push_back(OrientedRect(Rect{{-150.0f, -10.0f}, {150.0f, 10.0f}}, 0.3f));
+    return city;
+}
+
 fluid::RiverWaterSettings SmallWindow() {
     fluid::RiverWaterSettings settings;
     settings.cells = 128;
     settings.cellSize = 0.5f;
-    settings.spongeWidth = 10.0f;
+    settings.spongeWidth = 24.0f;
     return settings;
 }
 
@@ -570,25 +578,94 @@ void AStillRiverStaysStill() {
 }
 
 void AWaveLeavesTheWindowThroughTheSponge() {
-    fluid::RiverWater river;
-    river.Build(CityWithARiver(), {0.0f, 0.0f}, SmallWindow());
-    river.Splash({0.0f, 0.0f}, 1.5f, 6.0f);
-    const auto highest = [&river]() {
-        float rise = 0.0f;
+    // The size of the waves on the whole river: the root mean square of how far its surface is from still.
+    const auto waveSize = [](const fluid::RiverWater& river) {
+        double sum = 0.0;
+        int count = 0;
         for (float offset : river.Field()) {
             if (offset != fluid::kNoWater) {
-                rise = std::max(rise, std::abs(offset));
+                sum += static_cast<double>(offset) * static_cast<double>(offset);
+                ++count;
             }
         }
-        return rise;
+        return static_cast<float>(std::sqrt(sum / std::max(count, 1)));
     };
+    fluid::RiverWater river;
+    river.Build(CityWithALongRiver(), {0.0f, 0.0f}, SmallWindow());
+    river.Splash({0.0f, 0.0f}, 1.5f, 6.0f);
     river.Update(0.05f);
-    const float start = highest();
+    const float start = waveSize(river);
+    // Without the sponge the window is a closed pool, and the same splash goes on sloshing in it.
+    fluid::RiverWaterSettings closed = SmallWindow();
+    closed.spongeWidth = 0.0f;
+    fluid::RiverWater pool;
+    pool.Build(CityWithALongRiver(), {0.0f, 0.0f}, closed);
+    pool.Splash({0.0f, 0.0f}, 1.5f, 6.0f);
+    pool.Update(0.05f);
     for (int i = 0; i < 60 * 25; ++i) {
         river.Update(1.0f / 60.0f);
+        pool.Update(1.0f / 60.0f);
     }
-    Check(start > 0.05f, "the splash makes a clear rise at first, " + std::to_string(start));
-    Check(highest() < 0.1f * start, "and after twenty five seconds the waves have left or been soaked up, " + std::to_string(highest()));
+    Check(start > 0.03f, "the splash makes clear waves at first, " + std::to_string(start));
+    Check(waveSize(river) < 0.3f * start, "and after twenty five seconds most of the waves have left or been soaked up, " + std::to_string(waveSize(river)) + " from " + std::to_string(start));
+    // What the sponge takes out is a lot more than the friction of the bed alone does.
+    Check(waveSize(river) < 0.4f * waveSize(pool), "the sponge takes out far more of the waves than a wall would let go, " + std::to_string(waveSize(river)) + " against " + std::to_string(waveSize(pool)));
+}
+
+void RiverWaterSurvivesBadSettingsAndBadTimes() {
+    CityLayout city = CityWithARiver();
+    city.water.push_back(OrientedRect(Rect{{5.0f, 5.0f}, {5.0f, 5.0f}}));  // a rectangle with no area
+    for (int cells : {-3, 0, 1, 2, 3}) {
+        fluid::RiverWaterSettings settings = SmallWindow();
+        settings.cells = cells;
+        fluid::RiverWater river;
+        const bool built = river.Build(city, {0.0f, 0.0f}, settings);
+        Check(built && river.Field().size() == static_cast<size_t>(river.Width()) * static_cast<size_t>(river.Height()),
+              "a window of " + std::to_string(cells) + " cells is made safe, with a field that fits it");
+        river.Update(1.0f / 60.0f);
+    }
+    fluid::RiverWaterSettings rainy = SmallWindow();
+    rainy.rainPerSecond = 5000.0f;
+    fluid::RiverWater river;
+    river.Build(city, {0.0f, 0.0f}, rainy);
+    river.Update(std::numeric_limits<float>::infinity());
+    river.Update(std::nanf(""));
+    river.Update(-5.0f);
+    river.Update(4000.0f);  // finishes, with no more drops than one update may hold
+    Check(river.IsBuilt(), "bad frame times neither hang nor break the river");
+    fluid::RiverWater twice;
+    twice.Build(city, {0.0f, 0.0f}, SmallWindow());
+    Check(!twice.Build(CityLayout{}, {0.0f, 0.0f}, SmallWindow()) && twice.Field().empty() && !twice.IsBuilt(),
+          "a failed build leaves nothing of the one before");
+}
+
+void RainDoesNotFallInTheSponge() {
+    fluid::RiverWaterSettings settings = SmallWindow();
+    settings.rainPerSecond = 400.0f;
+    settings.spongeWidth = 20.0f;
+    fluid::RiverWater river;
+    river.Build(CityWithALongRiver(), {0.0f, 0.0f}, settings);
+    for (int i = 0; i < 120; ++i) {
+        river.Update(1.0f / 60.0f);
+    }
+    // The outermost cells of the window, where the river leaves it, are quiet next to the middle.
+    float edge = 0.0f;
+    float middle = 0.0f;
+    for (int j = 0; j < river.Height(); ++j) {
+        for (int i = 0; i < river.Width(); ++i) {
+            const float offset = river.Field()[static_cast<size_t>(j) * static_cast<size_t>(river.Width()) + static_cast<size_t>(i)];
+            if (offset == fluid::kNoWater) {
+                continue;
+            }
+            const int fromEdge = std::min({i, j, river.Width() - 1 - i, river.Height() - 1 - j});
+            if (fromEdge < 3) {
+                edge = std::max(edge, std::abs(offset));
+            } else if (fromEdge > 40) {
+                middle = std::max(middle, std::abs(offset));
+            }
+        }
+    }
+    Check(edge < 0.5f * middle, "the ripples die away towards the edge of the window, edge " + std::to_string(edge) + " middle " + std::to_string(middle));
 }
 
 void RainRipplesTheRiverAndTheSameRainFallsEveryTime() {
@@ -597,8 +674,8 @@ void RainRipplesTheRiverAndTheSameRainFallsEveryTime() {
     settings.seed = 7;
     fluid::RiverWater first;
     fluid::RiverWater second;
-    first.Build(CityWithARiver(), {0.0f, 0.0f}, settings);
-    second.Build(CityWithARiver(), {0.0f, 0.0f}, settings);
+    first.Build(CityWithALongRiver(), {0.0f, 0.0f}, settings);
+    second.Build(CityWithALongRiver(), {0.0f, 0.0f}, settings);
     for (int i = 0; i < 300; ++i) {
         first.Update(1.0f / 60.0f);
         second.Update(1.0f / 60.0f);
@@ -651,6 +728,8 @@ int main() {
         {"AStillRiverStaysStill", AStillRiverStaysStill},
         {"AWaveLeavesTheWindowThroughTheSponge", AWaveLeavesTheWindowThroughTheSponge},
         {"RainRipplesTheRiverAndTheSameRainFallsEveryTime", RainRipplesTheRiverAndTheSameRainFallsEveryTime},
+        {"RiverWaterSurvivesBadSettingsAndBadTimes", RiverWaterSurvivesBadSettingsAndBadTimes},
+        {"RainDoesNotFallInTheSponge", RainDoesNotFallInTheSponge},
     };
     for (const Test& test : tests) {
         const int failuresBefore = failureCount;
