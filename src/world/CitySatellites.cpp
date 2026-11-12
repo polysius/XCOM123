@@ -331,7 +331,7 @@ private:
         float lift = 0.0f;
         if (settings.terraces && !acrossRiver) {
             Random liftRandom(MixSeed(districtSeed, 0x4C494654u));
-            const float lifts[] = {0.0f, 3.0f, 4.5f, 6.0f};
+            const float lifts[] = {0.0f, 3.0f, 4.0f, 5.0f};  // a quarter of the districts stay level
             lift = liftRandom.Pick(lifts);
         }
         const StairPlan stair = PlanStair(lift, lastStub, plan.streetHalfWidth);

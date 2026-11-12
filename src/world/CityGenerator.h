@@ -165,7 +165,7 @@ struct CitySettings {
     // around the city, each joined to it by a street. Fewer are made when there is no room.
     int satelliteCount = 4;
 
-    // Whether a satellite district may stand on a terrace, three to six metres above the open land,
+    // Whether a satellite district may stand on a terrace, three to five metres above the open land,
     // reached by a stair on the street that joins it to the city. Switching it off keeps them level.
     bool terraces = true;
 };
