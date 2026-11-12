@@ -250,6 +250,12 @@ void StairClimbsOneRisePerTread() {
     Check(terrain.LiftAt({-0.1f, 0.0f}) == 0.0f && terrain.LiftAt({10.1f, 0.0f}) == 0.0f, "level before and after");
 }
 
+void StairWithoutATreadIsATerrace() {
+    const TerrainField terrain({TerrainZone{OrientedRect(Rect{{0.0f, 0.0f}, {10.0f, 10.0f}}), 2.0f, 0.15f, 0.0f}});
+    const float lift = terrain.LiftAt({5.0f, 5.0f});
+    Check(std::isfinite(lift) && lift == 2.0f, "a zero tread must not give an infinite or undefined lift");
+}
+
 void HighestLiftCountsWhereZonesMeet() {
     const TerrainField terrain({MakePlateau(OrientedRect(Rect{{0.0f, 0.0f}, {10.0f, 10.0f}}), 2.0f),
                                 MakePlateau(OrientedRect(Rect{{10.0f, 0.0f}, {20.0f, 10.0f}}), 5.0f)});
@@ -311,6 +317,7 @@ int main() {
         {"PlateauLiftsOnlyItsOwnArea", PlateauLiftsOnlyItsOwnArea},
         {"TurnedPlateauFollowsItsTurn", TurnedPlateauFollowsItsTurn},
         {"StairClimbsOneRisePerTread", StairClimbsOneRisePerTread},
+        {"StairWithoutATreadIsATerrace", StairWithoutATreadIsATerrace},
         {"HighestLiftCountsWhereZonesMeet", HighestLiftCountsWhereZonesMeet},
         {"ObstacleOnATerraceIsAnObstacle", ObstacleOnATerraceIsAnObstacle},
         {"WalkHeightFollowsTheTerrain", WalkHeightFollowsTheTerrain},

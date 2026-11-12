@@ -38,6 +38,8 @@ public:
     float SidewalkWidth() const { return sidewalkWidth; }
     // The height of the pavement at the level of the city. People stand higher on a terrace or a stair.
     float WalkHeight() const { return walkHeight; }
+    // True when the whole city is level, so that WalkHeightAt is WalkHeight everywhere.
+    bool IsLevel() const { return terrain.IsLevel(); }
     // The height of the walking surface at `point`: WalkHeight, plus the lift of the terrain there.
     float WalkHeightAt(glm::vec2 point) const { return walkHeight + terrain.LiftAt(point); }
 

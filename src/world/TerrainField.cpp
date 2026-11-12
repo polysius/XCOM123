@@ -6,8 +6,11 @@ void TerrainField::Build(const std::vector<TerrainZone>& zones) {
     entries.clear();
     entries.reserve(zones.size());
     for (const TerrainZone& zone : zones) {
+        // A stair needs a tread to climb one step per. Without one the zone is a terrace at its start
+        // lift, which is better than a height that is not a number.
+        const bool isStair = zone.rise > 0.0f && zone.tread > 0.0f;
         entries.push_back({zone.area.Bounds(), zone.area.Center(), std::cos(zone.area.yaw), std::sin(zone.area.yaw),
-                           zone.area.area, zone.startLift, zone.rise, zone.tread});
+                           zone.area.area, zone.startLift, isStair ? zone.rise : 0.0f, isStair ? zone.tread : 1.0f});
     }
 }
 
