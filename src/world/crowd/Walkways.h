@@ -30,6 +30,21 @@ public:
     const StreetGraph& Streets() const { return streets; }
     const std::vector<OrientedRect>& Plazas() const { return plazas; }
 
+    // A way from a square into a room inside a landmark and back. A person walks to `outsideSpot`
+    // or `insideSpot` as an ordinary stroller, then along `passage` (a strip clear of obstacles that
+    // runs between the two spots through the doorways) to the other spot, and carries on strolling
+    // in the square at the other end. The passage is walkable ground like a square.
+    struct Portal {
+        uint32_t outsidePlaza;
+        uint32_t insidePlaza;
+        OrientedRect passage;
+        glm::vec2 outsideSpot;
+        glm::vec2 insideSpot;
+    };
+    const std::vector<Portal>& Portals() const { return portals; }
+    // The portals that lead out of or into `plaza`.
+    const std::vector<uint32_t>& PortalsOfPlaza(uint32_t plaza) const { return portalsOfPlaza[plaza]; }
+
     // Distances from a street's centre line: the road ends and the pavement starts at
     // RoadHalfWidth, the middle of the pavement is LaneCenter, and it ends at OuterEdge.
     float RoadHalfWidth() const { return roadHalfWidth; }
@@ -69,7 +84,8 @@ public:
     // Marks a disc as taken, for example by a conversation circle, so that people strolling in
     // squares do not walk through it. Street walkers ignore reservations.
     void Reserve(glm::vec2 center, float radius);
-    // True if a person can stand anywhere in the disc and none of it is reserved.
+    // True if a person can stand anywhere in the disc and none of it is reserved. A disc on a
+    // portal's passage is never free.
     bool IsDiscFree(glm::vec2 center, float radius) const;
     // True if a person can walk the straight line from a to b without touching an obstacle
     // or reserved space.
@@ -117,6 +133,7 @@ private:
     void BuildArms();
     void BuildCrosswalks();
     void BuildObstacleGrid(const CityLayout& city);
+    void BuildPortals(const CityLayout& city);
     void RasteriseObstacle(const BoxInstance& box, float grow, uint8_t flag);
     uint8_t CellFlags(glm::vec2 point) const;
     glm::ivec2 CellOf(glm::vec2 point) const;
@@ -127,6 +144,8 @@ private:
 
     StreetGraph streets;
     std::vector<OrientedRect> plazas;
+    std::vector<Portal> portals;
+    std::vector<std::vector<uint32_t>> portalsOfPlaza;  // per square, indices into `portals`
     float roadHalfWidth = 0.0f;
     float laneCenter = 0.0f;
     float outerEdge = 0.0f;

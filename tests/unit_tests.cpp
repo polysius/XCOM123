@@ -175,6 +175,58 @@ void ObstacleFollowsADiagonalTurn() {
     Check(!walkways.IsInsideObstacle({5.0f, 0.0f}), "the corner of the enclosing rectangle is empty");
 }
 
+// A square, a room 25 m to its east, and a passage between them along Z = 0. Every piece is given
+// in the layout the way the generator gives it.
+CityLayout CityWithARoom() {
+    CityLayout city;
+    city.bounds = {{-40.0f, -40.0f}, {40.0f, 40.0f}};
+    city.plazas.push_back(Rect{{-30.0f, -10.0f}, {-10.0f, 10.0f}});
+    Interior room{LandmarkKind::ParishChurch, OrientedRect(Rect{{10.0f, -6.0f}, {30.0f, 6.0f}}), {10.4f, 0.0f}};
+    room.hasPassage = true;
+    room.passage = OrientedRect(Rect{{-15.0f, -1.0f}, {12.0f, 1.0f}});
+    room.outsideSpot = {-15.0f, 0.0f};
+    room.insideSpot = {12.0f, 0.0f};
+    city.interiors.push_back(room);
+    return city;
+}
+
+void ARoomWithAFreePassageIsAPortal() {
+    crowd::Walkways walkways;
+    walkways.Build(CityWithARoom());
+    Check(walkways.Plazas().size() == 2, "the room is a square for the crowd");
+    Check(walkways.Portals().size() == 1, "one portal");
+    const crowd::Walkways::Portal& portal = walkways.Portals().front();
+    Check(portal.outsidePlaza == 0 && portal.insidePlaza == 1, "from the square into the room");
+    Check(walkways.PortalsOfPlaza(0).size() == 1 && walkways.PortalsOfPlaza(1).size() == 1, "both ends know it");
+    Check(walkways.IsWalkable({0.0f, 0.0f}, 0.0f), "the passage is walkable ground");
+    Check(!walkways.IsWalkable({0.0f, 4.0f}, 0.0f), "and the ground beside it is not");
+}
+
+void AConversationCannotStandOnAPassage() {
+    crowd::Walkways walkways;
+    walkways.Build(CityWithARoom());
+    Check(!walkways.IsDiscFree({0.0f, 0.0f}, 1.0f), "a disc on the passage is not free");
+    Check(!walkways.IsDiscFree({0.0f, 2.0f}, 1.5f), "nor one that reaches into it");
+    Check(walkways.IsDiscFree({-20.0f, 6.0f}, 1.0f), "a disc in the square away from the passage is free");
+}
+
+void ABlockedPassageIsNotAPortal() {
+    CityLayout city = CityWithARoom();
+    city.boxes.push_back({.center = {0.0f, 1.0f, 0.0f}, .halfSize = {0.5f, 1.0f, 0.5f}});
+    crowd::Walkways walkways;
+    walkways.Build(city);
+    Check(walkways.Portals().empty(), "a pillar in the passage closes the portal");
+    Check(walkways.PortalsOfPlaza(0).empty() && walkways.PortalsOfPlaza(1).empty(), "and neither end lists one");
+}
+
+void APassageThatStartsOutsideEverySquareIsNotAPortal() {
+    CityLayout city = CityWithARoom();
+    city.interiors.front().outsideSpot = {-35.0f, 0.0f};
+    crowd::Walkways walkways;
+    walkways.Build(city);
+    Check(walkways.Portals().empty(), "there is no square to come from");
+}
+
 constexpr float kQuarterTurn = 1.5707964f;
 constexpr float kEighthTurn = 0.7853982f;
 
@@ -369,6 +421,10 @@ int main() {
         {"ObstacleStaysAxisAlignedAtYawZero", ObstacleStaysAxisAlignedAtYawZero},
         {"ObstacleFollowsAQuarterTurn", ObstacleFollowsAQuarterTurn},
         {"ObstacleFollowsADiagonalTurn", ObstacleFollowsADiagonalTurn},
+        {"ARoomWithAFreePassageIsAPortal", ARoomWithAFreePassageIsAPortal},
+        {"AConversationCannotStandOnAPassage", AConversationCannotStandOnAPassage},
+        {"ABlockedPassageIsNotAPortal", ABlockedPassageIsNotAPortal},
+        {"APassageThatStartsOutsideEverySquareIsNotAPortal", APassageThatStartsOutsideEverySquareIsNotAPortal},
     };
     for (const Test& test : tests) {
         const int failuresBefore = failureCount;

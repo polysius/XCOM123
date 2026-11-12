@@ -473,7 +473,16 @@ void BuildParishChurch(BoxWriter& boxes, CityLayout& city, const Rect& land, Dis
     }
     AddPews(boxes, frame, nave, PewLayout{naveStart + 4.0f, naveEnd - 6.0f, 2.4f, 1.2f, 5}, wood);
     AddAltar(boxes, frame, naveEnd + 4.5f, floorStone);
-    city.interiors.push_back({LandmarkKind::ParishChurch, OrientedRect(RoomFloor(frame, nave)), frame.Point(naveStart + 0.4f, 0.0f)});
+    // People walk in from the forecourt along the axis of the church, through the west door, the
+    // vestibule and the nave doorway, to the central aisle. The strip is narrower than every doorway.
+    constexpr float kPassageStart = 13.0f;  // inside the forecourt square, which reaches at least this far
+    constexpr float kPassageHalfWidth = 1.0f;
+    Interior churchNave{LandmarkKind::ParishChurch, OrientedRect(RoomFloor(frame, nave)), frame.Point(naveStart + 0.4f, 0.0f)};
+    churchNave.hasPassage = true;
+    churchNave.passage = OrientedRect(frame.Area(kPassageStart, naveStart + 2.5f, -kPassageHalfWidth, kPassageHalfWidth));
+    churchNave.outsideSpot = frame.Point(kPassageStart, 0.0f);
+    churchNave.insideSpot = frame.Point(naveStart + 2.5f, 0.0f);
+    city.interiors.push_back(churchNave);
     SteppedRoof(boxes, frame, naveStart, naveEnd, -7.0f, 7.0f, 15.0f, 6.0f, 3, true, roof);
     SteppedRoof(boxes, frame, naveEnd, naveEnd + 7.0f, -5.0f, 5.0f, 12.0f, 4.0f, 2, true, roof);
     for (float u = naveStart + 3.0f; u + 3.0f <= naveEnd; u += 6.0f) {
