@@ -393,7 +393,7 @@ void BuildMarketHall(BoxWriter& boxes, CityLayout& city, const Rect& land, Rando
     }
     const LocalFrame frame = FrameFacing(land, alongX ? kSideSouth : kSideWest);
     // People shop between the piers; the stalls are obstacles on the floor.
-    city.interiors.push_back({LandmarkKind::MarketHall, OrientedRect(hall.Expanded(-1.5f)), frame.Point(border - 1.2f, 0.0f)});
+    city.interiors.push_back({LandmarkKind::MarketHall, OrientedRect(hall.Expanded(-1.5f)), frame.Point(border + 1.6f, 0.0f)});
     RecordLandmark(city, LandmarkKind::MarketHall, hall.Expanded(1.2f), frame, border - 1.2f);
 }
 
@@ -450,7 +450,7 @@ void BuildParishChurch(BoxWriter& boxes, CityLayout& city, const Rect& land, Dis
     // A west tower with a belfry and spire, then the nave and a small apse.
     const glm::vec2 tower = frame.Point(towerFront + 4.5f, 0.0f);
     // The tower is hollow at its foot: a vestibule behind the west door, open to the nave.
-    constexpr float kVestibuleCeiling = 5.4f;
+    constexpr float kVestibuleCeiling = 5.6f;  // above the top of the doorway into the nave
     const RoomSpec vestibule{towerFront, towerFront + 9.0f, -4.5f, 4.5f, 28.0f, 0.9f, Doorway{1.6f, 4.6f}, Doorway{2.0f, 5.5f}};
     BuildRoomWalls(boxes, frame, vestibule, stone);
     BuildRoomFloor(boxes, frame, vestibule, floorStone);
