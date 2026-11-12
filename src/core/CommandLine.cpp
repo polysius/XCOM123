@@ -13,6 +13,7 @@
 namespace {
 // More props than this cost far more to simulate than a frame can spare.
 constexpr uint32_t kMaxProps = 5000;
+constexpr uint32_t kMaxRain = 5000;
 // Reads the value that follows an option, or throws when the command line ends too early.
 class ArgumentReader {
 public:
@@ -117,6 +118,14 @@ Options ParseCommandLine(int argc, char** argv) {
                 throw std::invalid_argument(option + " must be at most " + std::to_string(kMaxProps));
             }
             options.propCount = count;
+        } else if (option == "--river-sim") {
+            options.riverSimulation = true;
+        } else if (option == "--rain") {
+            const uint32_t drops = ParseUnsigned(option, arguments.ValueFor(option));
+            if (drops > kMaxRain) {
+                throw std::invalid_argument(option + " must be at most " + std::to_string(kMaxRain));
+            }
+            options.rainPerSecond = drops;
         } else if (option == "--no-terraces") {
             options.terraces = false;
         } else if (option == "--novsync") {
@@ -165,6 +174,8 @@ void PrintUsage() {
         "  --satellites N           districts turned to their own angles around the city (0 to 8)\n"
         "  --no-terraces            keep the satellite districts level, with no terraces and stairs\n"
         "  --props N                drop N crates, barrels and balls into the largest square, under physics\n"
+        "  --river-sim              simulate the water of the river near the props (or the centre of the city)\n"
+        "  --rain N                 raindrops per second on the simulated river (default 40, with --river-sim)\n"
         "  --sun DEGREES            sun elevation above the horizon (default 24)\n"
         "  --time SECONDS           world clock of the screenshot (0 to 3600); the crowd is simulated\n"
         "                           up to it\n"

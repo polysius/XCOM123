@@ -20,6 +20,8 @@ struct Options {
     std::optional<int> satelliteCount;  // satellite districts around the city; unset keeps the generator's default
     bool terraces = true;               // whether satellite districts may stand on terraces
     uint32_t propCount = 0;             // crates, barrels and balls dropped into the largest square
+    bool riverSimulation = false;       // simulate the water of the river near the props, or near the centre
+    uint32_t rainPerSecond = 40;        // raindrops per second on the simulated river
     bool vsync = true;
     bool showHelp = false;
 

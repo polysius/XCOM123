@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "fluid/RiverWater.h"
 #include "fluid/ShallowWater.h"
 
 namespace {
@@ -500,6 +501,120 @@ void APushOnlyTouchesTheSidesNearIt() {
           "and the water far from it does not");
 }
 
+// The river of a city ----------------------------------------------------------------------------
+
+// A city that is a river 60 m long and 20 m wide, turned a little, with its water level at -4.5 m.
+CityLayout CityWithARiver() {
+    CityLayout city;
+    city.waterLevel = -4.5f;
+    city.water.push_back(OrientedRect(Rect{{-30.0f, -10.0f}, {30.0f, 10.0f}}, 0.3f));
+    return city;
+}
+
+fluid::RiverWaterSettings SmallWindow() {
+    fluid::RiverWaterSettings settings;
+    settings.cells = 128;
+    settings.cellSize = 0.5f;
+    settings.spongeWidth = 10.0f;
+    return settings;
+}
+
+void TheWindowIsWaterWhereTheCityHasWater() {
+    fluid::RiverWater river;
+    Check(river.Build(CityWithARiver(), {5.0f, 5.0f}, SmallWindow()), "a city with water can be simulated");
+    // The river is 60 by 20 m, which is 4800 cells of a quarter of a square metre.
+    Check(river.WaterCellCount() > 4400 && river.WaterCellCount() < 5200, "about 4800 cells are water, got " + std::to_string(river.WaterCellCount()));
+    const glm::vec2 centre = river.Origin() + 32.0f;
+    Check(river.Water().IsWetAt(centre), "the middle of the window is water");
+    Check(river.Water().IsWetAt({0.0f, 0.0f}) && !river.Water().IsWetAt({0.0f, 25.0f}), "and the land beside the river is not");
+    Check(river.RestLevel() == -4.5f, "the still level is the city's water level");
+    bool allRest = true;
+    for (float offset : river.Field()) {
+        allRest = allRest && (offset == 0.0f || offset == fluid::kNoWater);
+    }
+    Check(allRest, "every cell is either at rest or has no water");
+}
+
+void ACityWithoutWaterHasNothingToSimulate() {
+    fluid::RiverWater river;
+    CityLayout dry;
+    Check(!river.Build(dry, {0.0f, 0.0f}, SmallWindow()) && !river.IsBuilt(), "there is no river to simulate");
+    river.Update(1.0f);
+    river.Splash({0.0f, 0.0f}, 1.0f, 1.0f);
+    river.Push({0.0f, 0.0f}, 1.0f, {1.0f, 0.0f});
+    Check(river.Field().empty(), "and asking it to do things does nothing");
+}
+
+void TheWindowIsCentredOnTheNearestWater() {
+    CityLayout city = CityWithARiver();
+    city.water.push_back(OrientedRect(Rect{{400.0f, 400.0f}, {460.0f, 420.0f}}));  // a canal far away
+    fluid::RiverWater near;
+    near.Build(city, {430.0f, 395.0f}, SmallWindow());
+    Check(std::abs(near.Origin().x + 32.0f - 430.0f) < 1.0f && std::abs(near.Origin().y + 32.0f - 400.0f) < 1.0f,
+          "the window is on the water closest to the given place");
+}
+
+void AStillRiverStaysStill() {
+    fluid::RiverWater river;
+    river.Build(CityWithARiver(), {0.0f, 0.0f}, SmallWindow());
+    for (int i = 0; i < 600; ++i) {
+        river.Update(1.0f / 60.0f);
+    }
+    float rise = 0.0f;
+    for (float offset : river.Field()) {
+        if (offset != fluid::kNoWater) {
+            rise = std::max(rise, std::abs(offset));
+        }
+    }
+    Check(rise < 1e-4f, "a river nothing disturbs stays flat, rise " + std::to_string(rise));
+}
+
+void AWaveLeavesTheWindowThroughTheSponge() {
+    fluid::RiverWater river;
+    river.Build(CityWithARiver(), {0.0f, 0.0f}, SmallWindow());
+    river.Splash({0.0f, 0.0f}, 1.5f, 6.0f);
+    const auto highest = [&river]() {
+        float rise = 0.0f;
+        for (float offset : river.Field()) {
+            if (offset != fluid::kNoWater) {
+                rise = std::max(rise, std::abs(offset));
+            }
+        }
+        return rise;
+    };
+    river.Update(0.05f);
+    const float start = highest();
+    for (int i = 0; i < 60 * 25; ++i) {
+        river.Update(1.0f / 60.0f);
+    }
+    Check(start > 0.05f, "the splash makes a clear rise at first, " + std::to_string(start));
+    Check(highest() < 0.1f * start, "and after twenty five seconds the waves have left or been soaked up, " + std::to_string(highest()));
+}
+
+void RainRipplesTheRiverAndTheSameRainFallsEveryTime() {
+    fluid::RiverWaterSettings settings = SmallWindow();
+    settings.rainPerSecond = 200.0f;
+    settings.seed = 7;
+    fluid::RiverWater first;
+    fluid::RiverWater second;
+    first.Build(CityWithARiver(), {0.0f, 0.0f}, settings);
+    second.Build(CityWithARiver(), {0.0f, 0.0f}, settings);
+    for (int i = 0; i < 300; ++i) {
+        first.Update(1.0f / 60.0f);
+        second.Update(1.0f / 60.0f);
+    }
+    float rise = 0.0f;
+    bool same = true;
+    for (size_t i = 0; i < first.Field().size(); ++i) {
+        if (first.Field()[i] != fluid::kNoWater) {
+            rise = std::max(rise, std::abs(first.Field()[i]));
+        }
+        same = same && first.Field()[i] == second.Field()[i];
+    }
+    Check(rise > 1e-3f, "rain puts ripples on the water, rise " + std::to_string(rise));
+    Check(same, "and two rivers with the same seed are rippled the same way");
+}
+
 }  // namespace
 
 int main() {
@@ -530,6 +645,12 @@ int main() {
         {"AVeryLongFrameIsCappedAndNotRunBackwards", AVeryLongFrameIsCappedAndNotRunBackwards},
         {"ASmallSplashAddsItsVolumeWhereverItFalls", ASmallSplashAddsItsVolumeWhereverItFalls},
         {"APushOnlyTouchesTheSidesNearIt", APushOnlyTouchesTheSidesNearIt},
+        {"TheWindowIsWaterWhereTheCityHasWater", TheWindowIsWaterWhereTheCityHasWater},
+        {"ACityWithoutWaterHasNothingToSimulate", ACityWithoutWaterHasNothingToSimulate},
+        {"TheWindowIsCentredOnTheNearestWater", TheWindowIsCentredOnTheNearestWater},
+        {"AStillRiverStaysStill", AStillRiverStaysStill},
+        {"AWaveLeavesTheWindowThroughTheSponge", AWaveLeavesTheWindowThroughTheSponge},
+        {"RainRipplesTheRiverAndTheSameRainFallsEveryTime", RainRipplesTheRiverAndTheSameRainFallsEveryTime},
     };
     for (const Test& test : tests) {
         const int failuresBefore = failureCount;

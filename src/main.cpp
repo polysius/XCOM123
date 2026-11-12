@@ -19,6 +19,7 @@
 #include "core/CommandLine.h"
 #include "core/FlyCamera.h"
 #include "core/Module_Interface.h"
+#include "fluid/RiverWater.h"
 #include "physics/PropField.h"
 #include "render/IRenderModule.h"
 #include "scene/Frustum.h"
@@ -68,6 +69,7 @@ struct Engine {
     Crowd crowd;
     std::vector<NpcInstance> visibleNpcs;
     physics::PropField props;  // crates, barrels and balls under the physics engine; none unless --props is given
+    fluid::RiverWater river;   // the water of the river near the props, simulated; unbuilt unless --river-sim is given
 };
 
 // Returns 0 when the window is minimised.
@@ -108,6 +110,19 @@ void UpdateProps(Engine& engine, float deltaSeconds, FrameInput& frame) {
     engine.props.Update(deltaSeconds);
     frame.bodyBoxes = engine.props.Boxes();
     frame.bodySpheres = engine.props.Spheres();
+}
+
+// Moves the simulated river forward and puts its surface into the frame.
+void UpdateRiver(Engine& engine, float deltaSeconds, FrameInput& frame) {
+    if (!engine.river.IsBuilt()) {
+        return;
+    }
+    engine.river.Update(deltaSeconds);
+    frame.water = {.offsets = engine.river.Field(),
+                   .origin = engine.river.Origin(),
+                   .cellSize = engine.river.CellSize(),
+                   .width = engine.river.Width(),
+                   .height = engine.river.Height()};
 }
 
 // Polls window events. Returns false once the window should close.
@@ -215,6 +230,7 @@ int RunInteractive(Engine& engine, const Options& options) {
         FrameInput frame = MakeFrameInput(camera, aspect, sunElevation, worldSeconds);
         const double crowdMs = UpdateCrowd(engine, deltaSeconds, frame);
         UpdateProps(engine, deltaSeconds, frame);
+        UpdateRiver(engine, deltaSeconds, frame);
         engine.renderer->Render(frame);
         title.AddFrame(crowdMs, engine);
     }
@@ -268,6 +284,7 @@ int RunBenchmark(Engine& engine, const Options& options) {
         FrameInput frame = MakeFrameInput(camera, aspect, sunElevation, worldSeconds);
         const double crowdMs = UpdateCrowd(engine, kFixedTimeStep, frame);
         UpdateProps(engine, kFixedTimeStep, frame);
+        UpdateRiver(engine, kFixedTimeStep, frame);
         engine.renderer->Render(frame);
         title.AddFrame(crowdMs, engine);
 
@@ -302,6 +319,7 @@ void PreRollWorld(Engine& engine, float seconds) {
                 engine.props.Update(std::min(left, kFixedTimeStep));
             }
         }
+        engine.river.Update(step);  // does nothing unless the river is simulated
         seconds -= step;
     }
 }
@@ -327,6 +345,7 @@ int RunScreenshot(Engine& engine, const Options& options) {
         FrameInput frame = MakeFrameInput(camera, aspect, sunElevation, worldSeconds);
         UpdateCrowd(engine, kFixedTimeStep, frame);
         UpdateProps(engine, kFixedTimeStep, frame);
+        UpdateRiver(engine, kFixedTimeStep, frame);
 
         const bool lastFrame = frameIndex + 1 == frames;
         if (!lastFrame) {
@@ -355,6 +374,9 @@ void PrintWorldSummary(const Options& options, const Engine& engine) {
     std::cout << "City (seed " << options.seed << "): " << engine.city.boxes.size() << " boxes, "
               << engine.city.streets.edges.size() << " street segments, " << engine.city.plazas.size()
               << " squares, " << engine.crowd.AgentCount() << " people";
+    if (engine.river.IsBuilt()) {
+        std::cout << ", river simulated around (" << engine.river.Origin().x + 64.0f << ", " << engine.river.Origin().y + 64.0f << ")";
+    }
     if (engine.props.Count() > 0) {
         std::cout << ", " << engine.props.Count() << " props above the square at (" << engine.props.DropCentre().x << ", "
                   << engine.props.DropCentre().y << ")";
@@ -400,6 +422,16 @@ int RunEngine(const Options& options, GLFWwindow* window) {
     engine.visibleNpcs.reserve(engine.crowd.AgentCount());
     if (options.propCount > 0) {
         engine.props.Spawn(engine.city, {.count = options.propCount, .seed = options.seed});
+    }
+    if (options.riverSimulation) {
+        // The river near the props, or near the middle of the city.
+        const glm::vec2 near = engine.props.Count() > 0 ? engine.props.DropCentre() : glm::vec2(0.0f);
+        fluid::RiverWaterSettings river;
+        river.rainPerSecond = static_cast<float>(options.rainPerSecond);
+        river.seed = options.seed;
+        if (!engine.river.Build(engine.city, near, river)) {
+            std::cerr << "The city has no water to simulate\n";
+        }
     }
     PrintWorldSummary(options, engine);
 

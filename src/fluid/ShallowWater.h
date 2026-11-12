@@ -49,8 +49,12 @@ public:
     // Puts water of the given depth in a cell, or none.
     void SetDepth(int i, int j, float waterDepth);
     // Fills every cell that is not a wall with water up to the surface height `level`; cells whose bed is
-    // higher stay dry.
+    // higher stay dry. This is also the level that sponge cells (see SetSponge) bring the water back to.
     void FillToLevel(float level);
+    // Makes a cell part of a sponge, which soaks up waves: its flow is slowed by `rate` per second and its
+    // surface is drawn back towards the level of FillToLevel at the same rate. A band of sponge cells round the
+    // edge of a grid lets waves leave it, where a wall would turn them back. Zero is an ordinary cell.
+    void SetSponge(int i, int j, float rate);
 
     // Sources ----------------------------------------------------------------------------------
 
@@ -119,6 +123,8 @@ private:
     std::vector<float> scratchU;
     std::vector<float> scratchV;
     std::vector<float> outflowScale;  // per cell, how much of its outgoing flux it can really give
+    std::vector<float> sponge;        // per cell, the rate at which waves are soaked up
+    float restLevel = 0.0f;
     float pendingSeconds = 0.0f;
 };
 
