@@ -25,11 +25,11 @@ float SignOf(float value) {
 
 // Spheres -------------------------------------------------------------------------------------
 
-bool SphereSphere(const Body& a, const Body& b, Manifold& manifold) {
+bool SphereSphere(const Body& a, const Body& b, Manifold& manifold, float margin) {
     const glm::vec3 between = b.position - a.position;
     const float distanceSquared = glm::dot(between, between);
     const float radii = a.shape.radius + b.shape.radius;
-    const float reach = radii + kContactMargin;
+    const float reach = radii + margin;
     if (distanceSquared > reach * reach) {
         return false;
     }
@@ -44,7 +44,7 @@ bool SphereSphere(const Body& a, const Body& b, Manifold& manifold) {
 }
 
 // The contact between a sphere and a box. The normal points from the sphere to the box.
-bool SphereBox(const Body& sphere, const Body& box, Manifold& manifold) {
+bool SphereBox(const Body& sphere, const Body& box, Manifold& manifold, float margin) {
     const Obb obb = ObbOf(box);
     const float radius = sphere.shape.radius;
     const glm::vec3 local = glm::transpose(obb.axes) * (sphere.position - obb.center);
@@ -53,7 +53,7 @@ bool SphereBox(const Body& sphere, const Body& box, Manifold& manifold) {
     const float distanceSquared = glm::dot(delta, delta);
 
     if (distanceSquared > 1e-12f) {
-        const float reach = radius + kContactMargin;
+        const float reach = radius + margin;
         if (distanceSquared > reach * reach) {
             return false;
         }
@@ -176,7 +176,7 @@ void ReduceToFour(std::vector<Candidate>& candidates, glm::vec3 normal) {
 // The contacts of a face of one box against the other box. `reference` owns the face, whose outward
 // normal `referenceNormal` points towards `incident`.
 void FaceContacts(const Obb& reference, int referenceAxis, glm::vec3 referenceNormal, const Obb& incident,
-                  glm::vec3 normalFromAToB, Manifold& manifold) {
+                  glm::vec3 normalFromAToB, float margin, Manifold& manifold) {
     // The face of the incident box that points most directly back at the reference face.
     int incidentAxis = 0;
     float mostFacing = 0.0f;
@@ -208,7 +208,7 @@ void FaceContacts(const Obb& reference, int referenceAxis, glm::vec3 referenceNo
     std::vector<Candidate> candidates;
     for (const glm::vec3& point : polygon) {
         const float depth = -glm::dot(point - referenceCentre, referenceNormal);
-        if (depth >= -kContactMargin) {
+        if (depth >= -margin) {
             // Halfway between the incident corner and its shadow on the reference face.
             candidates.push_back({point + referenceNormal * (0.5f * depth), depth});
         }
@@ -252,7 +252,7 @@ void EdgeContact(const Obb& a, int i, const Obb& b, int j, glm::vec3 normalFromA
     manifold.points[0].depth = -separation;
 }
 
-bool BoxBox(const Body& bodyA, const Body& bodyB, Manifold& manifold) {
+bool BoxBox(const Body& bodyA, const Body& bodyB, Manifold& manifold, float margin) {
     const Obb a = ObbOf(bodyA);
     const Obb b = ObbOf(bodyB);
     const glm::vec3 offset = b.center - a.center;
@@ -266,7 +266,7 @@ bool BoxBox(const Body& bodyA, const Body& bodyB, Manifold& manifold) {
     for (int i = 0; i < 3; ++i) {
         const float separationA = SeparationAlong(a, b, offset, a.axes[i]);
         const float separationB = SeparationAlong(a, b, offset, b.axes[i]);
-        if (separationA > kContactMargin || separationB > kContactMargin) {
+        if (separationA > margin || separationB > margin) {
             return false;
         }
         if (separationA > bestFaceSeparation) {
@@ -294,7 +294,7 @@ bool BoxBox(const Body& bodyA, const Body& bodyB, Manifold& manifold) {
             }
             axis /= length;
             const float separation = SeparationAlong(a, b, offset, axis);
-            if (separation > kContactMargin) {
+            if (separation > margin) {
                 return false;
             }
             if (separation > bestEdgeSeparation) {
@@ -322,28 +322,28 @@ bool BoxBox(const Body& bodyA, const Body& bodyB, Manifold& manifold) {
     const glm::vec3 towardsIncident = incident.center - reference.center;
     const glm::vec3 referenceNormal = glm::dot(faceAxis, towardsIncident) < 0.0f ? -faceAxis : faceAxis;
     const glm::vec3 normalFromAToB = bestFaceIsA ? referenceNormal : -referenceNormal;
-    FaceContacts(reference, bestFaceAxis, referenceNormal, incident, normalFromAToB, manifold);
+    FaceContacts(reference, bestFaceAxis, referenceNormal, incident, normalFromAToB, margin, manifold);
     return manifold.count > 0;
 }
 
 }  // namespace
 
-bool Collide(const Body& a, const Body& b, Manifold& manifold) {
+bool Collide(const Body& a, const Body& b, Manifold& manifold, float margin) {
     manifold.count = 0;
     if (a.shape.type == ShapeType::Sphere && b.shape.type == ShapeType::Sphere) {
-        return SphereSphere(a, b, manifold);
+        return SphereSphere(a, b, manifold, margin);
     }
     if (a.shape.type == ShapeType::Sphere) {
-        return SphereBox(a, b, manifold);
+        return SphereBox(a, b, manifold, margin);
     }
     if (b.shape.type == ShapeType::Sphere) {
-        if (!SphereBox(b, a, manifold)) {
+        if (!SphereBox(b, a, manifold, margin)) {
             return false;
         }
         manifold.normal = -manifold.normal;  // the normal must point from `a` to `b`
         return true;
     }
-    return BoxBox(a, b, manifold);
+    return BoxBox(a, b, manifold, margin);
 }
 
 }  // namespace physics

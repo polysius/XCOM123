@@ -6,6 +6,7 @@
 #include <cmath>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -509,6 +510,291 @@ void ASphereInsideABoxIsPushedOutThroughTheNearestFace() {
     Check(Near(manifold.points[0].depth, 0.3f, 1e-3f), "the overlap is the radius plus the distance to the face");
 }
 
+// Robustness, and the cases an independent review found -------------------------------------
+
+bool IsFinite(const Body& body) {
+    const auto finite = [](glm::vec3 v) { return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z); };
+    return finite(body.position) && finite(body.linearVelocity) && finite(body.angularVelocity) &&
+           std::isfinite(body.orientation.w);
+}
+
+void BadInputDoesNotPoisonTheWorld() {
+    PhysicsWorld world;
+    const uint32_t ground = AddGround(world);
+    const uint32_t good = AddBox(world, {8.0f, 3.0f, 0.0f});
+    AddBox(world, {0.5f, 1.0f, 0.0f}, {0.0f, 0.0f, 0.0f});   // a box with no size
+    AddBox(world, {-0.5f, 1.0f, 0.0f}, {0.0f, 0.5f, 0.5f});  // a box that is flat
+    AddSphere(world, {1.0f, 1.0f, 0.0f}, 0.0f);              // a ball with no radius
+    BodyDescription broken;
+    broken.shape = Shape::Box({0.5f, 0.5f, 0.5f});
+    broken.position = {std::nanf(""), 2.0f, 0.0f};
+    broken.linearVelocity = {std::numeric_limits<float>::infinity(), 0.0f, 0.0f};
+    world.AddBody(broken);
+    Simulate(world, 2.0f);
+    bool allFinite = true;
+    for (uint32_t i = 0; i < world.BodyCount(); ++i) {
+        allFinite = allFinite && IsFinite(world.GetBody(i));
+    }
+    Check(allFinite, "no body ends up with a number that is not a number");
+    Check(world.GetBody(ground).position == glm::vec3(0.0f, -0.5f, 0.0f), "and the ground has not moved");
+    Check(Near(world.GetBody(good).position.y, 0.5f, 0.03f), "a good box far from the bad ones still lands on the ground");
+}
+
+void ABodyStartingBadlyDoesNotSpreadToOthers() {
+    PhysicsWorld world;
+    AddGround(world);
+    const uint32_t neighbour = AddBox(world, {3.0f, 0.5f, 0.0f});
+    AddSphere(world, {0.0f, 0.5f, 0.0f}, 0.0f);
+    Simulate(world, 2.0f);
+    Check(IsFinite(world.GetBody(neighbour)) && Near(world.GetBody(neighbour).position.y, 0.5f, 0.02f),
+          "a box on the same ground is unaffected");
+}
+
+void AHeavyBallLandingOnASleepingBoxDoesNotPushItIntoTheGround() {
+    PhysicsWorld world;
+    AddGround(world);
+    const uint32_t box = AddBox(world, {0.0f, 0.5f, 0.0f}, {1.0f, 0.5f, 1.0f});
+    Simulate(world, 2.0f);
+    Check(world.GetBody(box).isAsleep, "the box is asleep");
+    BodyDescription ball;
+    ball.shape = Shape::Sphere(0.4f);
+    ball.density = 20000.0f;
+    ball.position = {0.9f, 6.0f, 0.0f};
+    ball.linearVelocity = {0.0f, -30.0f, 0.0f};
+    world.AddBody(ball);
+    float lowest = 1e9f;
+    for (int i = 0; i < 240; ++i) {
+        world.Step();
+        lowest = std::min(lowest, world.GetBody(box).position.y);
+    }
+    Check(lowest > 0.47f, "the box is not driven into the ground when it is woken, lowest centre " + std::to_string(lowest));
+}
+
+void ASleepingStackWakesAsAWhole() {
+    PhysicsWorld world;
+    AddGround(world);
+    std::vector<uint32_t> stack;
+    for (int i = 0; i < 4; ++i) {
+        stack.push_back(AddBox(world, {0.0f, 0.5f + static_cast<float>(i), 0.0f}));
+    }
+    Simulate(world, 2.0f);
+    Check(world.AwakeBodyCount() == 0, "the stack sleeps");
+    BodyDescription ball;
+    ball.shape = Shape::Sphere(0.3f);
+    ball.density = 3000.0f;
+    ball.position = {0.0f, 8.0f, 0.0f};
+    world.AddBody(ball);
+    bool lowerWoke = false;
+    for (int i = 0; i < 240; ++i) {  // the ball takes about 1.3 seconds to arrive
+        world.Step();
+        lowerWoke = lowerWoke || !world.GetBody(stack[0]).isAsleep;
+    }
+    Check(lowerWoke, "a ball hitting the top of the stack wakes the bottom box too");
+}
+
+void APerfectlyElasticBounceKeepsItsHeightWhateverTheFramePhase() {
+    float worst = 1.0f;
+    float best = 0.0f;
+    // The ball starts at heights spread over the distance it falls in one step at the moment of impact.
+    for (int phase = 0; phase < 20; ++phase) {
+        const float drop = 3.0f + 0.0033f * static_cast<float>(phase);  // 6.5 cm in all: a ball falls that far in a step
+        PhysicsWorld world;
+        AddGround(world, 0.6f, 1.0f);
+        BodyDescription description;
+        description.shape = Shape::Sphere(0.25f);
+        description.position = {0.0f, 0.25f + drop, 0.0f};
+        description.material = {0.6f, 1.0f, 0.0f};
+        const uint32_t ball = world.AddBody(description);
+        bool bounced = false;
+        float apex = 0.0f;
+        for (int i = 0; i < 400; ++i) {
+            world.Step();
+            const Body& body = world.GetBody(ball);
+            bounced = bounced || body.linearVelocity.y > 1.0f;
+            if (bounced) {
+                apex = std::max(apex, body.position.y - 0.25f);
+            }
+        }
+        worst = std::min(worst, apex / drop);
+        best = std::max(best, apex / drop);
+    }
+    Check(worst > 0.9f, "a perfectly elastic ball always comes back up, worst ratio " + std::to_string(worst));
+    Check(best < 1.03f, "and never higher than it fell from, best ratio " + std::to_string(best));
+}
+
+void BouncinessIsTheLargerOfTheTwoMaterials() {
+    PhysicsWorld world;
+    AddGround(world, 0.6f, 0.2f);
+    BodyDescription description;
+    description.shape = Shape::Sphere(0.25f);
+    description.position = {0.0f, 5.25f, 0.0f};
+    description.material = {0.6f, 0.8f, 0.0f};
+    const uint32_t ball = world.AddBody(description);
+    float apex = 0.0f;
+    bool bounced = false;
+    for (int i = 0; i < 400; ++i) {
+        world.Step();
+        const Body& body = world.GetBody(ball);
+        bounced = bounced || body.linearVelocity.y > 1.0f;
+        if (bounced) {
+            apex = std::max(apex, body.position.y - 0.25f);
+        }
+    }
+    // The pair bounces as the livelier surface does: 0.8, so 64% of the height.
+    Check(apex > 2.5f, "a lively ball on a dead floor still bounces, apex " + std::to_string(apex));
+}
+
+void SmallFastBodiesDoNotTunnelThroughAThinPlate() {
+    int passedThrough = 0;
+    for (int phase = 0; phase < 12; ++phase) {
+        PhysicsWorld world;
+        BodyDescription plate;
+        plate.shape = Shape::Box({5.0f, 0.05f, 5.0f});
+        plate.position = {0.0f, 5.0f, 0.0f};
+        plate.isStatic = true;
+        world.AddBody(plate);
+        BodyDescription ball;
+        ball.shape = Shape::Sphere(0.05f);
+        ball.position = {0.0f, 6.0f + 0.01f * static_cast<float>(phase), 0.0f};
+        ball.linearVelocity = {0.0f, -40.0f, 0.0f};
+        const uint32_t id = world.AddBody(ball);
+        Simulate(world, 0.5f);
+        passedThrough += world.GetBody(id).position.y < 5.0f ? 1 : 0;
+    }
+    Check(passedThrough == 0, "a 10 cm ball at 40 m/s stays above a 10 cm plate at every phase, passed " +
+                                  std::to_string(passedThrough));
+}
+
+void BoxesMeetingHeadOnStopOrSwapSpeedsAsRestitutionSays() {
+    for (float restitution : {0.0f, 1.0f}) {
+        PhysicsSettings settings;
+        settings.gravity = glm::vec3(0.0f);
+        PhysicsWorld world(settings);
+        BodyDescription left;
+        left.shape = Shape::Box({0.5f, 0.5f, 0.5f});
+        left.position = {-3.0f, 0.0f, 0.0f};
+        left.linearVelocity = {10.0f, 0.0f, 0.0f};
+        left.material = {0.0f, restitution, 0.0f};
+        BodyDescription right = left;
+        right.position = {3.0f, 0.0f, 0.0f};
+        right.linearVelocity = {-10.0f, 0.0f, 0.0f};
+        const uint32_t a = world.AddBody(left);
+        const uint32_t b = world.AddBody(right);
+        Simulate(world, 1.0f);
+        const float speedA = world.GetBody(a).linearVelocity.x;
+        const float speedB = world.GetBody(b).linearVelocity.x;
+        const std::string speeds = " got " + std::to_string(speedA) + " and " + std::to_string(speedB);
+        if (restitution == 0.0f) {
+            Check(std::abs(speedA) < 0.3f && std::abs(speedB) < 0.3f, "equal boxes with no bounce stop dead," + speeds);
+        } else {
+            Check(Near(speedA, -10.0f, 0.8f) && Near(speedB, 10.0f, 0.8f), "equal elastic boxes swap speeds," + speeds);
+        }
+        Check(Near(speedA + speedB, 0.0f, 0.05f), "and momentum is conserved");
+    }
+}
+
+void ABoxStartingDeepInTheGroundRisesOutGently() {
+    PhysicsWorld world;
+    AddGround(world);
+    const uint32_t box = AddBox(world, {0.0f, 0.0f, 0.0f});  // half of it below the surface
+    float fastest = 0.0f;
+    float highest = 0.0f;
+    for (int i = 0; i < 480; ++i) {
+        world.Step();
+        fastest = std::max(fastest, glm::length(world.GetBody(box).linearVelocity));
+        highest = std::max(highest, world.GetBody(box).position.y);
+    }
+    Check(fastest < 1.0f, "pushing a box out of an overlap does not fling it, fastest " + std::to_string(fastest));
+    Check(highest < 0.55f, "it does not shoot above where it rests, highest " + std::to_string(highest));
+    Check(Near(world.GetBody(box).position.y, 0.5f, 0.015f), "and it ends up resting on the ground");
+}
+
+void ABoxHangingPastItsSupportTipsOverAndOneOverTheEdgeStays() {
+    for (float overhang : {0.45f, 0.53f}) {
+        PhysicsWorld world;
+        AddGround(world);
+        AddBox(world, {0.0f, 0.5f, 0.0f});
+        const uint32_t upper = AddBox(world, {overhang, 1.5f, 0.0f});
+        Simulate(world, 3.0f);
+        if (overhang < 0.5f) {
+            Check(Near(world.GetBody(upper).position.y, 1.5f, 0.03f), "a cube with its centre over the edge stays up");
+        } else {
+            Check(world.GetBody(upper).position.y < 1.2f, "a cube with its centre past the edge falls off");
+        }
+    }
+}
+
+void ASpinningBodyKeepsItsOrientationNormal() {
+    PhysicsSettings settings;
+    settings.gravity = glm::vec3(0.0f);
+    PhysicsWorld world(settings);
+    BodyDescription box;
+    box.shape = Shape::Box({1.0f, 0.5f, 0.25f});
+    box.angularVelocity = {7.0f, 5.0f, 3.0f};
+    const uint32_t id = world.AddBody(box);
+    Simulate(world, 10.0f);
+    Check(Near(glm::length(world.GetBody(id).orientation), 1.0f, 1e-4f),
+          "the orientation is still a unit quaternion after ten seconds of spin");
+}
+
+void CrossedEdgesAreFoundAsAnEdgeContact() {
+    // Two cubes standing on an edge, one turned about Z and one about X, the second lying on the first.
+    Body lower;
+    lower.shape = Shape::Box({0.5f, 0.5f, 0.5f});
+    lower.orientation = glm::angleAxis(glm::radians(45.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+    Body upper;
+    upper.shape = Shape::Box({0.5f, 0.5f, 0.5f});
+    upper.orientation = glm::angleAxis(glm::radians(45.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+    const float edge = 0.5f * std::sqrt(2.0f);
+    upper.position = {0.0f, 2.0f * edge - 0.01f, 0.0f};  // the edges overlap by a centimetre
+    physics::Manifold manifold;
+    Check(physics::Collide(lower, upper, manifold), "the cubes touch");
+    Check(manifold.count == 1, "crossed edges make a single contact, got " + std::to_string(manifold.count));
+    Check(manifold.normal.y > 0.99f, "and push apart straight up");
+    Check(Near(manifold.points[0].depth, 0.01f, 0.003f), "by one centimetre");
+}
+
+void ContactsOfAnOverhangingBoxStayOnTheFaceBelow() {
+    Body lower;
+    lower.shape = Shape::Box({1.0f, 0.5f, 1.0f});
+    lower.position = {0.0f, 0.5f, 0.0f};
+    Body upper;
+    upper.shape = Shape::Box({0.5f, 0.5f, 0.5f});
+    upper.position = {1.2f, 1.49f, 0.0f};  // half of it hangs over the edge
+    physics::Manifold manifold;
+    Check(physics::Collide(lower, upper, manifold), "the boxes touch");
+    float furthest = -1e9f;
+    for (int i = 0; i < manifold.count; ++i) {
+        furthest = std::max(furthest, manifold.points[i].position.x);
+    }
+    Check(furthest <= 1.0f + 1e-3f, "no contact lies beyond the edge of the box below, furthest " + std::to_string(furthest));
+}
+
+void AHeavyBoxOnLightOnesDoesNotScatterThem() {
+    PhysicsWorld world;
+    AddGround(world);
+    std::vector<uint32_t> light;
+    for (int i = 0; i < 3; ++i) {
+        BodyDescription box;
+        box.shape = Shape::Box({0.5f, 0.5f, 0.5f});
+        box.position = {0.0f, 0.5f + static_cast<float>(i), 0.0f};
+        box.density = 100.0f;
+        light.push_back(world.AddBody(box));
+    }
+    BodyDescription heavy;
+    heavy.shape = Shape::Box({0.5f, 0.5f, 0.5f});
+    heavy.position = {0.0f, 3.5f, 0.0f};
+    heavy.density = 1000.0f;  // ten times the others
+    const uint32_t top = world.AddBody(heavy);
+    Simulate(world, 6.0f);
+    float drift = 0.0f;
+    for (uint32_t id : light) {
+        drift = std::max(drift, std::abs(world.GetBody(id).position.x) + std::abs(world.GetBody(id).position.z));
+    }
+    drift = std::max(drift, std::abs(world.GetBody(top).position.x) + std::abs(world.GetBody(top).position.z));
+    Check(drift < 0.15f, "a box ten times heavier on top of three light ones keeps the stack, drift " + std::to_string(drift));
+}
+
 }  // namespace
 
 int main() {
@@ -542,6 +828,20 @@ int main() {
         {"BoxesThatAreApartMakeNoContacts", BoxesThatAreApartMakeNoContacts},
         {"TwoEdgesCrossingMakeOneContact", TwoEdgesCrossingMakeOneContact},
         {"ASphereInsideABoxIsPushedOutThroughTheNearestFace", ASphereInsideABoxIsPushedOutThroughTheNearestFace},
+        {"BadInputDoesNotPoisonTheWorld", BadInputDoesNotPoisonTheWorld},
+        {"ABodyStartingBadlyDoesNotSpreadToOthers", ABodyStartingBadlyDoesNotSpreadToOthers},
+        {"AHeavyBallLandingOnASleepingBoxDoesNotPushItIntoTheGround", AHeavyBallLandingOnASleepingBoxDoesNotPushItIntoTheGround},
+        {"ASleepingStackWakesAsAWhole", ASleepingStackWakesAsAWhole},
+        {"APerfectlyElasticBounceKeepsItsHeightWhateverTheFramePhase", APerfectlyElasticBounceKeepsItsHeightWhateverTheFramePhase},
+        {"BouncinessIsTheLargerOfTheTwoMaterials", BouncinessIsTheLargerOfTheTwoMaterials},
+        {"SmallFastBodiesDoNotTunnelThroughAThinPlate", SmallFastBodiesDoNotTunnelThroughAThinPlate},
+        {"BoxesMeetingHeadOnStopOrSwapSpeedsAsRestitutionSays", BoxesMeetingHeadOnStopOrSwapSpeedsAsRestitutionSays},
+        {"ABoxStartingDeepInTheGroundRisesOutGently", ABoxStartingDeepInTheGroundRisesOutGently},
+        {"ABoxHangingPastItsSupportTipsOverAndOneOverTheEdgeStays", ABoxHangingPastItsSupportTipsOverAndOneOverTheEdgeStays},
+        {"ASpinningBodyKeepsItsOrientationNormal", ASpinningBodyKeepsItsOrientationNormal},
+        {"CrossedEdgesAreFoundAsAnEdgeContact", CrossedEdgesAreFoundAsAnEdgeContact},
+        {"ContactsOfAnOverhangingBoxStayOnTheFaceBelow", ContactsOfAnOverhangingBoxStayOnTheFaceBelow},
+        {"AHeavyBoxOnLightOnesDoesNotScatterThem", AHeavyBoxOnLightOnesDoesNotScatterThem},
     };
     for (const Test& test : tests) {
         const int failuresBefore = failureCount;

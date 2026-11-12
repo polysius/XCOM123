@@ -12,9 +12,13 @@ namespace physics {
 constexpr float kContactMargin = 0.02f;
 
 // Finds the contacts between bodies `a` and `b`. When the shapes touch or overlap, or are closer
-// than kContactMargin, fills `manifold` (the normal points from `a` to `b`, its contacts carry no
+// than `margin`, fills `manifold` (the normal points from `a` to `b`, its contacts carry no
 // impulses yet) and returns true. `manifold.a` and `manifold.b` are left for the caller to set.
-bool Collide(const Body& a, const Body& b, Manifold& manifold);
+//
+// A margin wider than kContactMargin makes the contact speculative: the shapes are still apart, and the
+// solver lets them approach only as fast as closes the gap in one step. The world widens the margin of
+// a pair by the distance they close in a step, so that fast bodies cannot pass through each other.
+bool Collide(const Body& a, const Body& b, Manifold& manifold, float margin = kContactMargin);
 
 // The axes of a box in the world: the columns of the rotation matrix.
 inline glm::mat3 AxesOf(const Body& body) {

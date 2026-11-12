@@ -63,6 +63,7 @@ struct Body {
     glm::vec3 boundsMin{0.0f};                 // world axis aligned box around the shape
     glm::vec3 boundsMax{0.0f};
     float quietSeconds = 0.0f;                 // how long the body has hardly moved
+    uint32_t sleepGroup = kInvalidBody;        // while asleep, the group of bodies that sleeps and wakes together
     bool isStatic = false;
     bool isAsleep = false;
 };
@@ -86,6 +87,10 @@ struct Manifold {
     glm::vec3 normal{0.0f, 1.0f, 0.0f};
     int count = 0;
     ContactPoint points[kMaxContactsPerPair];
+    // How fast the bodies were closing in, along the normal, while they were still apart (zero if they were
+    // not, or closing slowly): when the solver stops them at the surface, they bounce from this speed.
+    float impactSpeed = 0.0f;
+    float carriedImpactSpeed = 0.0f;  // the same, from the last step, when the contact is first touching
 };
 
 }  // namespace physics
