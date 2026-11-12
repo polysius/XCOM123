@@ -1312,12 +1312,13 @@ void TestSeed(uint32_t seed, bool checkDeterminism, bool districtOnly = false, i
         }
         Expect(hasArches && hasStucco, "architecture", "the default city has no arched or stuccoed buildings");
         Expect(spires > 0, "architecture", "the default city has no belvedere with a copper spire");
-        Expect(!city.interiors.empty(), "interiors", "the default city has no room to walk in");        // A wall knocked out of a church must be noticed.
-        CityLayout breached = city;
+        Expect(!city.interiors.empty(), "interiors", "the default city has no room to walk in");
+        // A wall knocked out of any hall must be noticed, so each hall is breached on its own.
         for (const Interior& interior : city.interiors) {
-            if (interior.kind != LandmarkKind::ParishChurch) {
+            if (interior.kind == LandmarkKind::MarketHall) {
                 continue;
             }
+            CityLayout breached = city;
             const Rect floor = interior.floor.Bounds();
             for (size_t i = 0; i < breached.boxes.size(); ++i) {
                 const glm::vec2 at(breached.boxes[i].center.x, breached.boxes[i].center.z);
@@ -1326,9 +1327,9 @@ void TestSeed(uint32_t seed, bool checkDeterminism, bool districtOnly = false, i
                     breached.boxes[i].center.y += 100.0f;  // lift the wall piece out of the way
                 }
             }
+            Expect(CountFailuresOf([&] { CheckInteriors(breached); }) > 0, "interiors",
+                   "the check did not notice walls missing from a hall");
         }
-        Expect(CountFailuresOf([&] { CheckInteriors(breached); }) > 0, "interiors",
-               "the check did not notice walls missing from a church");
         Expect(CountFailuresOf([&] { CheckArchitecture(planted); }) > 0, "architecture",
                "the check did not notice a landmark with arched windows");
     }

@@ -161,7 +161,7 @@ void BuildCathedral(BoxWriter& boxes, CityLayout& city, const Rect& land, Random
         Block(boxes, frame, front - 0.06f, front + 0.1f, side * 8.0f, side * 12.0f, 0.15f, 6.0f, door);
     }
     // Between the towers the west front is hollow: a narthex behind the porch, open to the nave.
-    const RoomSpec narthex{front, naveStart, -4.0f, 4.0f, 33.0f, 0.8f, Doorway{2.2f, 8.0f}, Doorway{3.0f, 10.0f}};
+    const RoomSpec narthex{front, naveStart, -4.0f, 4.0f, 33.0f, 0.8f, Doorway{2.2f, 8.0f}, Doorway{2.7f, 10.0f}};
     BuildRoomWalls(boxes, frame, narthex, stone);
     BuildRoomFloor(boxes, frame, narthex, floorStone);
     BuildRoomCeiling(boxes, frame, narthex, Look{kTrimStone, SurfaceMaterial::Plain, 0.9f, 0.0f});
@@ -177,7 +177,7 @@ void BuildCathedral(BoxWriter& boxes, CityLayout& city, const Rect& land, Random
     // Nave, aisles and transept, each under a stepped lead roof.
     // The nave west of the crossing is a hall people can enter. The rest of the church stays solid.
     const float hallEnd = crossing - 8.0f;
-    const RoomSpec hall{naveStart, hallEnd, -kNaveHalf, kNaveHalf, kNaveHeight, 0.8f, Doorway{3.0f, 10.0f}, std::nullopt};
+    const RoomSpec hall{naveStart, hallEnd, -kNaveHalf, kNaveHalf, kNaveHeight, 0.8f, Doorway{2.7f, 10.0f}, std::nullopt};
     BuildRoomWalls(boxes, frame, hall, stone);
     BuildRoomFloor(boxes, frame, hall, floorStone);
     BuildRoomCeiling(boxes, frame, hall, Look{kTrimStone, SurfaceMaterial::Plain, 0.9f, 0.0f});
@@ -324,7 +324,7 @@ void BuildPalace(BoxWriter& boxes, CityLayout& city, const Rect& land, Random& r
     BuildRoomCeiling(boxes, frame, hall, Look{kTrimStone, SurfaceMaterial::Plain, 0.9f, 0.0f});
     AddColumns(boxes, frame, ColumnLayout{pavilionFront + 5.0f, pavilionBack - 5.0f, 6.0f, {-5.0f, 5.0f}, 0.5f, pavilionTop - 0.35f}, stone);
     AddHangingLamps(boxes, frame, hall, 6.0f);
-    Interior palaceHall{LandmarkKind::Palace, OrientedRect(RoomFloor(frame, hall)), frame.Point(pavilionFront + 1.4f, 0.0f)};
+    Interior palaceHall{LandmarkKind::Palace, OrientedRect(RoomFloor(frame, hall)), frame.Point(pavilionFront + 0.5f, 0.0f)};
     // Straight in from the court, between the two middle columns of the portico.
     palaceHall.hasPassage = true;
     palaceHall.passage = OrientedRect(frame.Area(court - 8.0f, pavilionFront + 8.0f, -1.0f, 1.0f));

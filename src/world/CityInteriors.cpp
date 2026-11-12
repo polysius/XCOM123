@@ -20,6 +20,12 @@ void Block(BoxWriter& boxes, const LocalFrame& frame, float u0, float u1, float 
     boxes.Footprint(frame.Area(u0, u1, v0, v1), bottom, top, look);
 }
 
+// The half width of a doorway in an end wall between `v0` and `v1`: as asked, but always leaving half a
+// metre of wall on either side.
+float DoorHalfWidth(const Doorway& door, float v0, float v1) {
+    return std::min(door.halfWidth, (v1 - v0) * 0.5f - 0.5f);
+}
+
 // One end wall of a room, from `v0` to `v1` between the side walls, with an optional doorway in the middle.
 void BuildEndWall(BoxWriter& boxes, const LocalFrame& frame, float u0, float u1, float v0, float v1, float height,
                   const std::optional<Doorway>& door, const Look& wall) {
@@ -27,15 +33,17 @@ void BuildEndWall(BoxWriter& boxes, const LocalFrame& frame, float u0, float u1,
         Block(boxes, frame, u0, u1, v0, v1, 0.0f, height, wall);
         return;
     }
-    const float halfWidth = std::min(door->halfWidth, (v1 - v0) * 0.5f - 0.5f);
+    const float halfWidth = DoorHalfWidth(*door, v0, v1);
     Block(boxes, frame, u0, u1, v0, -halfWidth, 0.0f, height, wall);
     Block(boxes, frame, u0, u1, halfWidth, v1, 0.0f, height, wall);
     Block(boxes, frame, u0, u1, -halfWidth, halfWidth, door->height, height, wall);
 }
 
 // The slab that carries the floor through the thickness of an end wall's doorway.
-void BuildThreshold(BoxWriter& boxes, const LocalFrame& frame, float u0, float u1, const Doorway& door, const Look& floor) {
-    Block(boxes, frame, u0, u1, -door.halfWidth, door.halfWidth, kFloorBottom, kPlazaHeight, floor);
+void BuildThreshold(BoxWriter& boxes, const LocalFrame& frame, const RoomSpec& room, float u0, float u1, const Doorway& door,
+                    const Look& floor) {
+    const float halfWidth = DoorHalfWidth(door, room.vLeft + room.wallThickness, room.vRight - room.wallThickness);
+    Block(boxes, frame, u0, u1, -halfWidth, halfWidth, kFloorBottom, kPlazaHeight, floor);
 }
 
 }  // namespace
@@ -59,10 +67,10 @@ void BuildRoomFloor(BoxWriter& boxes, const LocalFrame& frame, const RoomSpec& r
     const float t = room.wallThickness;
     Block(boxes, frame, room.uFront + t, room.uBack - t, room.vLeft + t, room.vRight - t, kFloorBottom, kPlazaHeight, floor);
     if (room.frontDoor) {
-        BuildThreshold(boxes, frame, room.uFront, room.uFront + t, *room.frontDoor, floor);
+        BuildThreshold(boxes, frame, room, room.uFront, room.uFront + t, *room.frontDoor, floor);
     }
     if (room.backDoor) {
-        BuildThreshold(boxes, frame, room.uBack - t, room.uBack, *room.backDoor, floor);
+        BuildThreshold(boxes, frame, room, room.uBack - t, room.uBack, *room.backDoor, floor);
     }
 }
 
@@ -113,12 +121,21 @@ void AddHangingLamps(BoxWriter& boxes, const LocalFrame& frame, const RoomSpec& 
     const Look chain{{0.05f, 0.05f, 0.055f}, SurfaceMaterial::Metal, 0.5f, 0.0f};
     const float t = room.wallThickness;
     const float ceiling = room.height - kCeilingThickness;
-    const float u0 = room.uFront + t + spacing * 0.5f;
-    const float u1 = room.uBack - t;
-    const float v0 = room.vLeft + t + spacing * 0.5f;
-    const float v1 = room.vRight - t;
-    for (float u = u0; u < u1; u += spacing) {
-        for (float v = v0; v < v1; v += spacing) {
+    // The grid is centred on the room and keeps a lantern's width clear of the walls.
+    const float margin = t + kLampHalfSize + 0.2f;
+    const float uSpan = room.uBack - room.uFront - 2.0f * margin;
+    const float vSpan = room.vRight - room.vLeft - 2.0f * margin;
+    if (uSpan < 0.0f || vSpan < 0.0f) {
+        return;
+    }
+    const int uCount = 1 + static_cast<int>(uSpan / spacing);
+    const int vCount = 1 + static_cast<int>(vSpan / spacing);
+    const float uMiddle = (room.uFront + room.uBack) * 0.5f;
+    const float vMiddle = (room.vLeft + room.vRight) * 0.5f;
+    for (int i = 0; i < uCount; ++i) {
+        for (int j = 0; j < vCount; ++j) {
+            const float u = uMiddle + (static_cast<float>(i) - 0.5f * static_cast<float>(uCount - 1)) * spacing;
+            const float v = vMiddle + (static_cast<float>(j) - 0.5f * static_cast<float>(vCount - 1)) * spacing;
             const glm::vec2 at = frame.Point(u, v);
             boxes.Footprint({at - glm::vec2(kLampHalfSize), at + glm::vec2(kLampHalfSize)}, ceiling - kHangingDrop - kLampHeight,
                             ceiling - kHangingDrop, lantern);
