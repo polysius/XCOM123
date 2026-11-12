@@ -378,6 +378,14 @@ void PhysicsWorld::FindPairs(std::vector<std::pair<uint32_t, uint32_t>>& pairs) 
     const auto reachOf = [this](const Body& body) {
         return glm::min(glm::abs(body.linearVelocity) * settings.fixedStep, glm::vec3(settings.maxLookAhead)) + kContactMargin;
     };
+    // The furthest any awake body reaches this step. A partner may come from that far beyond the reach of the
+    // body that looks for it, and the search is widened by no more, so a heap at rest costs nothing extra.
+    glm::vec3 longestReach(kContactMargin);
+    for (const Body& body : bodies) {
+        if (!body.isStatic && !body.isAsleep && HasUsableBounds(body)) {
+            longestReach = glm::max(longestReach, reachOf(body));
+        }
+    }
     std::vector<uint32_t> candidates;
     for (uint32_t index = 0; index < static_cast<uint32_t>(bodies.size()); ++index) {
         const Body& body = bodies[index];
@@ -411,7 +419,7 @@ void PhysicsWorld::FindPairs(std::vector<std::pair<uint32_t, uint32_t>>& pairs) 
             }
         }
         // A partner that is itself moving fast may come from beyond this body's reach.
-        CollectMovingCandidates(low - settings.maxLookAhead, high + settings.maxLookAhead, candidates);
+        CollectMovingCandidates(low - longestReach, high + longestReach, candidates);
 
         std::sort(candidates.begin(), candidates.end());
         candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());

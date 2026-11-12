@@ -835,13 +835,20 @@ void ADenseHeapOfThreeHundredBodiesSettles() {
 }
 
 void AnElasticBoxDroppedAtAnyTiltNeverGainsEnergy() {
-    for (float degrees : {0.0f, 20.0f, 40.0f}) {
+    struct Drop {
+        float degrees;
+        glm::vec3 axis;
+    };
+    const Drop drops[] = {{0.0f, {1.0f, 0.0f, 0.0f}},  {20.0f, {1.0f, 0.0f, 0.5f}}, {40.0f, {1.0f, 0.0f, 0.5f}},
+                          {25.0f, {1.0f, 0.0f, 0.0f}}, {55.0f, {1.0f, 0.0f, 1.0f}}, {35.0f, {0.0f, 0.0f, 1.0f}}};
+    for (const Drop& drop : drops) {
+        const float degrees = drop.degrees;
         PhysicsWorld world;
         AddGround(world, 0.6f, 1.0f);
         BodyDescription description;
         description.shape = Shape::Box({0.5f, 0.5f, 0.5f});
         description.position = {0.0f, 3.0f, 0.0f};
-        description.orientation = glm::angleAxis(glm::radians(degrees), glm::normalize(glm::vec3(1.0f, 0.0f, 0.5f)));
+        description.orientation = glm::angleAxis(glm::radians(degrees), glm::normalize(drop.axis));
         description.material = {0.6f, 1.0f, 0.0f};
         const uint32_t box = world.AddBody(description);
         const float mass = 1.0f / world.GetBody(box).inverseMass;
