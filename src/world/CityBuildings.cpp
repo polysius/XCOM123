@@ -119,9 +119,9 @@ bool WantsBelvedere(District district, const Lot& lot) {
     switch (district) {
     case District::OldQuarter:
         return LotHasFeature(lot, kBelvedereSalt, 0.12f);
-    case District::Market:
     case District::Residential:
         return LotHasFeature(lot, kBelvedereSalt, 0.08f);
+    case District::Market:  // its roofs are pitched or flat, never mansard
     case District::Grand:
     case District::Parkland:
     default:
@@ -234,16 +234,20 @@ float AddRoof(BoxWriter& boxes, const Rect& footprint, uint8_t slopeSides, float
     }
 }
 
-// A small tower turned a quarter turn to the street, standing in the middle of a mansard roof,
-// with a stepped copper spire. `top` is the flat top of the roof. Nothing is built when the flat
-// part is too small for the tower to stand clear of the slopes.
-void AddBelvedere(BoxWriter& boxes, const Rect& top, float base, const BuildingDesign& design) {
+// A small tower turned 45 degrees to the street, standing in the middle of a mansard roof, with a
+// stepped copper spire. `top` is the flat top of the roof. Nothing is built when the flat part is
+// too small for the tower to stand clear of the slopes, or when the lot is so narrow that the
+// chimneys along its party walls would reach into the tower.
+void AddBelvedere(BoxWriter& boxes, const Lot& lot, const Rect& top, float base, const BuildingDesign& design) {
     constexpr float kHalfSide = 1.2f;
     constexpr float kClearance = 0.3f;
-    constexpr float kQuarterTurn = 0.78539816f;
+    constexpr float kDiagonalTurn = 0.78539816f;
+    constexpr float kChimneyReach = 0.7f;  // how far a chimney stack extends in from the wall of the lot
     const float halfDiagonal = kHalfSide * 1.41421356f;
     const glm::vec2 size = top.Size();
-    if (std::min(size.x, size.y) < 2.0f * (halfDiagonal + kClearance)) {
+    const glm::vec2 lotSize = lot.area.Size();
+    if (std::min(size.x, size.y) < 2.0f * (halfDiagonal + kClearance) ||
+        std::min(lotSize.x, lotSize.y) < 2.0f * (halfDiagonal + kChimneyReach + kClearance)) {
         return;
     }
     const glm::vec2 middle = top.Center();
@@ -254,9 +258,9 @@ void AddBelvedere(BoxWriter& boxes, const Rect& top, float base, const BuildingD
 
     constexpr float kShaftHeight = kUpperFloorHeight;
     float height = base;
-    boxes.TurnedBox(AtHeight(middle, height + kShaftHeight * 0.5f), {kHalfSide, kShaftHeight * 0.5f, kHalfSide}, kQuarterTurn, walls);
+    boxes.TurnedBox(AtHeight(middle, height + kShaftHeight * 0.5f), {kHalfSide, kShaftHeight * 0.5f, kHalfSide}, kDiagonalTurn, walls);
     height += kShaftHeight;
-    boxes.TurnedBox(AtHeight(middle, height + 0.12f), {kHalfSide + 0.2f, 0.12f, kHalfSide + 0.2f}, kQuarterTurn, trim);
+    boxes.TurnedBox(AtHeight(middle, height + 0.12f), {kHalfSide + 0.2f, 0.12f, kHalfSide + 0.2f}, kDiagonalTurn, trim);
     height += 0.24f;
     // Each step is turned back square to the street and narrower than the last, so the spire
     // reads as eight sided from a distance.
@@ -533,7 +537,7 @@ void AddBuilding(BoxWriter& boxes, const Lot& lot, const BuildingDesign& design,
     const float roofTop = AddRoof(boxes, roofFootprint, slopeSides, roofBase, design, random);
     AddChimneys(boxes, lot, slopeSides, roofBase, roofTop, random);
     if (design.belvedere) {
-        AddBelvedere(boxes, ShrinkClamped(roofFootprint, slopeSides, kMansardTopInset), roofTop, design);
+        AddBelvedere(boxes, lot, ShrinkClamped(roofFootprint, slopeSides, kMansardTopInset), roofTop, design);
     }
 }
 
