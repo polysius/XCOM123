@@ -144,6 +144,8 @@ enum FacadeFlag : uint32_t {
     kFacadeWideBays = 8,     // 4.2 m window bays
     kFacadeShutters = 16,    // painted shutters beside the windows
     kFacadeRusticated = 32,  // grooved stone ground floor
+    kFacadeArched = 64,      // round-headed windows and shop openings, with a stone ring and keystone
+    kFacadeStucco = 128,     // smooth hand-troweled plaster with hairline cracks and a damp foot
 };
 
 enum RoofFlag : uint32_t {

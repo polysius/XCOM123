@@ -98,6 +98,36 @@ Rect EdgeBand(const Rect& rect, Side side, float from, float to, float trim) {
 
 constexpr Side kSides[] = {kSideWest, kSideEast, kSideSouth, kSideNorth};
 
+// A repeatable yes or no for a lot, decided from where it stands. The architecture details use this
+// instead of the random generator so that choosing them never changes the draws that follow, and
+// the layout of the city stays exactly as it was.
+bool LotHasFeature(const Lot& lot, uint32_t salt, float chance) {
+    const auto quantised = [](float metres) { return static_cast<uint32_t>(static_cast<int32_t>(std::lround(metres * 4.0f))); };
+    const uint32_t hash = MixSeed(MixSeed(salt, quantised(lot.area.min.x)), quantised(lot.area.min.y));
+    return static_cast<float>(hash & 0xFFFFu) / 65536.0f < chance;
+}
+
+// Round-headed openings and troweled plaster, the softer building language of the hill towns that
+// inspired the map. The grand district keeps its square-cut limestone.
+uint32_t ArchitectureFlags(District district, const Lot& lot) {
+    constexpr uint32_t kArchSalt = 0x41524348u;
+    constexpr uint32_t kStuccoSalt = 0x53544B4Fu;
+    switch (district) {
+    case District::OldQuarter:
+        return (LotHasFeature(lot, kArchSalt, 0.3f) ? kFacadeArched : 0u) |
+               (LotHasFeature(lot, kStuccoSalt, 0.5f) ? kFacadeStucco : 0u);
+    case District::Market:
+        return LotHasFeature(lot, kArchSalt, 0.6f) ? kFacadeArched : 0u;
+    case District::Residential:
+        return (LotHasFeature(lot, kArchSalt, 0.2f) ? kFacadeArched : 0u) |
+               (LotHasFeature(lot, kStuccoSalt, 0.3f) ? kFacadeStucco : 0u);
+    case District::Grand:
+    case District::Parkland:
+    default:
+        return 0u;
+    }
+}
+
 // A slab the size of the lot that sticks out `overhang` over the street sides. It is pulled in
 // slightly at the party walls so that neighbouring slabs never share a face and flicker.
 Rect ProjectingSlab(const Lot& lot, float overhang) {
@@ -275,6 +305,7 @@ BuildingDesign DesignBuilding(District district, const BlockTheme& theme, const 
         design.attic = random.Chance(0.15f);
         break;
     }
+    design.facadeFlags |= ArchitectureFlags(district, lot);
     if (!facesStreet) {
         // Back buildings in courtyards have no shops and no balconies.
         design.facadeFlags |= kFacadeNoShops;
