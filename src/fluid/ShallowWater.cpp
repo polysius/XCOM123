@@ -16,6 +16,13 @@ constexpr float kMaxPendingSeconds = 2.0f;
 // centre of one: the furthest a point can be from the nearest centre is 0.71 of a cell.
 constexpr float kMinReachInCells = 0.75f;
 
+// Turns a position in cells into a whole number between 0 and limit. The position is limited before it
+// becomes an int, because a float far outside the range of int has no defined int value. A position that
+// is not a number ends up at limit.
+int ClampedWholeCell(float position, int limit) {
+    return static_cast<int>(std::max(0.0f, std::min(static_cast<float>(limit), position)));
+}
+
 }  // namespace
 
 void ShallowWater::Initialise(const WaterSettings& waterSettings) {
@@ -67,10 +74,10 @@ float ShallowWater::AddVolume(glm::vec2 point, float radius, float volume) {
     const float cellArea = settings.cellSize * settings.cellSize;
     const glm::vec2 inGrid = (point - settings.origin) / settings.cellSize;
     const float reach = std::max(radius / settings.cellSize, kMinReachInCells);
-    const int i0 = std::max(static_cast<int>(std::floor(inGrid.x - reach)), 0);
-    const int i1 = std::min(static_cast<int>(std::ceil(inGrid.x + reach)), settings.width - 1);
-    const int j0 = std::max(static_cast<int>(std::floor(inGrid.y - reach)), 0);
-    const int j1 = std::min(static_cast<int>(std::ceil(inGrid.y + reach)), settings.height - 1);
+    const int i0 = ClampedWholeCell(std::floor(inGrid.x - reach), settings.width - 1);
+    const int i1 = ClampedWholeCell(std::ceil(inGrid.x + reach), settings.width - 1);
+    const int j0 = ClampedWholeCell(std::floor(inGrid.y - reach), settings.height - 1);
+    const int j1 = ClampedWholeCell(std::ceil(inGrid.y + reach), settings.height - 1);
 
     // Each cell takes a share of the volume that falls off smoothly from the centre.
     struct Share {
@@ -143,10 +150,10 @@ void ShallowWater::AddVelocity(glm::vec2 point, float radius, glm::vec2 velocity
         return distance < 1.0f ? 1.0f - distance * distance : 0.0f;
     };
     // Only the sides within reach of the point are looked at.
-    const int i0 = std::max(static_cast<int>(std::floor(inGrid.x - reach)), 0);
-    const int i1 = std::min(static_cast<int>(std::ceil(inGrid.x + reach)), settings.width);
-    const int j0 = std::max(static_cast<int>(std::floor(inGrid.y - reach)), 0);
-    const int j1 = std::min(static_cast<int>(std::ceil(inGrid.y + reach)), settings.height);
+    const int i0 = ClampedWholeCell(std::floor(inGrid.x - reach), settings.width);
+    const int i1 = ClampedWholeCell(std::ceil(inGrid.x + reach), settings.width);
+    const int j0 = ClampedWholeCell(std::floor(inGrid.y - reach), settings.height);
+    const int j1 = ClampedWholeCell(std::ceil(inGrid.y + reach), settings.height);
     for (int j = j0; j < j1; ++j) {
         for (int i = std::max(i0, 1); i < std::min(i1 + 1, settings.width); ++i) {
             const float weight = weightAt(static_cast<float>(i), static_cast<float>(j) + 0.5f);
@@ -433,9 +440,11 @@ bool ShallowWater::IsWetAt(glm::vec2 point) const {
         return false;
     }
     const glm::vec2 inGrid = (point - settings.origin) / settings.cellSize;
-    const int i = static_cast<int>(std::floor(inGrid.x));
-    const int j = static_cast<int>(std::floor(inGrid.y));
-    return i >= 0 && j >= 0 && i < settings.width && j < settings.height && IsWet(i, j);
+    if (inGrid.x < 0.0f || inGrid.y < 0.0f || inGrid.x >= static_cast<float>(settings.width) ||
+        inGrid.y >= static_cast<float>(settings.height)) {
+        return false;
+    }
+    return IsWet(static_cast<int>(inGrid.x), static_cast<int>(inGrid.y));
 }
 
 }  // namespace fluid
