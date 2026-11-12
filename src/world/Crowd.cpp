@@ -73,7 +73,7 @@ void Crowd::Spawn(const CityLayout& city, const CrowdSettings& settings) {
 
     agentCells.assign(state.AgentCount(), crowd::kNoIndex);
     const glm::vec2 center = StreetNetworkCenter(walkways.Streets());
-    focusPoint = glm::vec3(center.x, walkways.WalkHeight() + kEyeHeight, center.y);
+    focusPoint = glm::vec3(center.x, walkways.WalkHeightAt(center) + kEyeHeight, center.y);
     simulationTime = 0.0f;
     stepIndex = 0;
 }
@@ -110,9 +110,12 @@ void Crowd::AssignTiersAndCells() {
     const size_t agentCount = state.AgentCount();
     const size_t chunkCount = (agentCount + kAgentChunkSize - 1) / kAgentChunkSize;
     chunkTierCounts.assign(chunkCount, {});
-    // The height difference counts too, so a camera high above the street simulates less.
-    const float heightOffset = focusPoint.y - walkways.WalkHeight();
-    const float heightOffsetSquared = heightOffset * heightOffset;
+    // The height difference counts too, so a camera high above the street simulates less. It is
+    // measured to the ground under each person, so that people on the terrace the camera stands on
+    // count as beside it, not as far below. At the level of the city that is one value for everyone.
+    const bool level = walkways.IsLevel();
+    const float levelOffset = focusPoint.y - walkways.WalkHeight();
+    const float levelOffsetSquared = levelOffset * levelOffset;
 
     jobs->ParallelFor(chunkCount, 1, [&](size_t firstChunk, size_t endChunk) {
         for (size_t chunk = firstChunk; chunk < endChunk; ++chunk) {
@@ -123,6 +126,11 @@ void Crowd::AssignTiersAndCells() {
             for (size_t agent = chunk * kAgentChunkSize; agent < end; ++agent) {
                 const glm::vec2 position = state.motion[agent].position;
                 const glm::vec2 offset = position - focus;
+                float heightOffsetSquared = levelOffsetSquared;
+                if (!level) {
+                    const float heightOffset = focusPoint.y - walkways.WalkHeightAt(position);
+                    heightOffsetSquared = heightOffset * heightOffset;
+                }
                 const crowd::SimTier tier = TierAtDistanceSquared(glm::dot(offset, offset) + heightOffsetSquared);
                 state.tiers[agent] = tier;
                 ++tierCounts[static_cast<size_t>(tier)];
@@ -164,7 +172,7 @@ void Crowd::StepUnits(float deltaSeconds) {
 }
 
 void Crowd::CollectVisible(const Frustum& frustum, std::vector<NpcInstance>& visible) const {
-    visibility.Collect(*jobs, state, walkways.WalkHeight(), frustum, focusPoint, visible);
+    visibility.Collect(*jobs, state, walkways, frustum, focusPoint, visible);
 }
 
 CrowdStats Crowd::Stats() const {

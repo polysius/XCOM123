@@ -42,6 +42,7 @@ void Walkways::Build(const CityLayout& city) {
     roadHalfWidth = city.sidewalkCenterOffset - city.sidewalkWidth * 0.5f;
     outerEdge = city.sidewalkCenterOffset + city.sidewalkWidth * 0.5f;
     walkHeight = city.walkHeight;
+    terrain.Build(city.terrain);
 
     BuildArms();
     BuildCrosswalks();
@@ -195,7 +196,9 @@ void Walkways::BuildObstacleGrid(const CityLayout& city) {
     for (const BoxInstance& box : city.boxes) {
         const float bottom = box.center.y - box.halfSize.y;
         const float top = box.center.y + box.halfSize.y;
-        if (bottom < walkHeight + kObstacleHighest && top > walkHeight + kObstacleLowest) {
+        // Whether a box is in people's way depends on how high it stands above the ground under it.
+        const float ground = WalkHeightAt({box.center.x, box.center.z});
+        if (bottom < ground + kObstacleHighest && top > ground + kObstacleLowest) {
             RasteriseObstacle(box, -kObstacleShrink, kObstacleFlag);
             RasteriseObstacle(box, kBodyRadius - kObstacleShrink, kNoStandingFlag);
         }

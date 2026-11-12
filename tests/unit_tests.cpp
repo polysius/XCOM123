@@ -10,6 +10,7 @@
 
 #include "core/CommandLine.h"
 #include "core/FrameStatistics.h"
+#include "world/TerrainField.h"
 #include "world/crowd/Walkways.h"
 
 namespace {
@@ -220,6 +221,74 @@ void OrientedRectOverlapUsesTheTurnNotTheBounds() {
     Check(LongRectangle(kEighthTurn).Overlaps(LongRectangle(-kEighthTurn)), "a cross overlaps");
 }
 
+void LevelTerrainHasNoLift() {
+    const TerrainField level{std::vector<TerrainZone>{}};
+    Check(level.IsLevel(), "no zones means level");
+    Check(level.LiftAt({123.0f, -456.0f}) == 0.0f, "exactly zero everywhere");
+}
+
+void PlateauLiftsOnlyItsOwnArea() {
+    const TerrainField terrain({MakePlateau(OrientedRect(Rect{{-10.0f, -10.0f}, {10.0f, 10.0f}}), 4.5f)});
+    Check(terrain.LiftAt({0.0f, 0.0f}) == 4.5f && terrain.LiftAt({9.9f, -9.9f}) == 4.5f, "inside");
+    Check(terrain.LiftAt({10.1f, 0.0f}) == 0.0f && terrain.LiftAt({0.0f, -10.1f}) == 0.0f, "outside");
+}
+
+void TurnedPlateauFollowsItsTurn() {
+    // 12 m by 2 m, turned a quarter, so it runs along Z.
+    const TerrainField terrain({MakePlateau(LongRectangle(kQuarterTurn), 3.0f)});
+    Check(terrain.LiftAt({0.0f, 5.0f}) == 3.0f, "along the long side");
+    Check(terrain.LiftAt({5.0f, 0.0f}) == 0.0f, "beside it");
+}
+
+void StairClimbsOneRisePerTread() {
+    // Ten metres along +X from the ground at lift 1.0, 0.4 m treads and 0.15 m rises.
+    const TerrainField terrain({TerrainZone{OrientedRect(Rect{{0.0f, -5.0f}, {10.0f, 5.0f}}), 1.0f, 0.15f, 0.4f}});
+    Check(std::abs(terrain.LiftAt({0.1f, 0.0f}) - 1.15f) < 1e-5f, "the first step stands one rise up");
+    Check(std::abs(terrain.LiftAt({0.5f, 0.0f}) - 1.30f) < 1e-5f, "the second step");
+    Check(std::abs(terrain.LiftAt({9.99f, 0.0f}) - (1.0f + 25.0f * 0.15f)) < 1e-4f, "the last step: 25 treads");
+    Check(std::abs(terrain.LiftAt({10.0f, 0.0f}) - (1.0f + 25.0f * 0.15f)) < 1e-4f, "the far edge belongs to the last step");
+    Check(terrain.LiftAt({-0.1f, 0.0f}) == 0.0f && terrain.LiftAt({10.1f, 0.0f}) == 0.0f, "level before and after");
+}
+
+void StairWithoutATreadIsATerrace() {
+    const TerrainField terrain({TerrainZone{OrientedRect(Rect{{0.0f, 0.0f}, {10.0f, 10.0f}}), 2.0f, 0.15f, 0.0f}});
+    const float lift = terrain.LiftAt({5.0f, 5.0f});
+    Check(std::isfinite(lift) && lift == 2.0f, "a zero tread must not give an infinite or undefined lift");
+}
+
+void HighestLiftCountsWhereZonesMeet() {
+    const TerrainField terrain({MakePlateau(OrientedRect(Rect{{0.0f, 0.0f}, {10.0f, 10.0f}}), 2.0f),
+                                MakePlateau(OrientedRect(Rect{{10.0f, 0.0f}, {20.0f, 10.0f}}), 5.0f)});
+    Check(terrain.LiftAt({10.0f, 5.0f}) == 5.0f, "on the shared edge");
+}
+
+// A city with no streets and one building 2 m tall that stands on the ground it is on, or, with a
+// terrace under it, on a terrace 50 m up.
+crowd::Walkways WalkwaysWithBuildingOnATerrace(bool terraceRecorded) {
+    CityLayout city;
+    city.bounds = {{-30.0f, -30.0f}, {30.0f, 30.0f}};
+    city.boxes.push_back({.center = {0.0f, 51.0f, 0.0f}, .halfSize = {6.0f, 1.0f, 6.0f}});
+    if (terraceRecorded) {
+        city.terrain.push_back(MakePlateau(OrientedRect(Rect{{-30.0f, -30.0f}, {30.0f, 30.0f}}), 50.0f));
+    }
+    crowd::Walkways walkways;
+    walkways.Build(city);
+    return walkways;
+}
+
+void ObstacleOnATerraceIsAnObstacle() {
+    // The box spans 50 to 52 m. On the terrace that is the first two metres above the ground, so
+    // people walk into it. At the level of the city it is a ceiling far overhead.
+    Check(WalkwaysWithBuildingOnATerrace(true).IsInsideObstacle({0.0f, 0.0f}), "a building on a terrace is in the way");
+    Check(!WalkwaysWithBuildingOnATerrace(false).IsInsideObstacle({0.0f, 0.0f}), "the same box without a terrace is overhead");
+}
+
+void WalkHeightFollowsTheTerrain() {
+    const crowd::Walkways walkways = WalkwaysWithBuildingOnATerrace(true);
+    Check(walkways.WalkHeightAt({0.0f, 0.0f}) == walkways.WalkHeight() + 50.0f, "people stand on the terrace");
+    Check(walkways.WalkHeightAt({100.0f, 0.0f}) == walkways.WalkHeight(), "and at the level of the city elsewhere");
+}
+
 struct Test {
     const char* name;
     std::function<void()> run;
@@ -244,6 +313,14 @@ int main() {
         {"OrientedRectFollowsItsTurn", OrientedRectFollowsItsTurn},
         {"OrientedRectFrameRoundTrips", OrientedRectFrameRoundTrips},
         {"OrientedRectOverlapUsesTheTurnNotTheBounds", OrientedRectOverlapUsesTheTurnNotTheBounds},
+        {"LevelTerrainHasNoLift", LevelTerrainHasNoLift},
+        {"PlateauLiftsOnlyItsOwnArea", PlateauLiftsOnlyItsOwnArea},
+        {"TurnedPlateauFollowsItsTurn", TurnedPlateauFollowsItsTurn},
+        {"StairClimbsOneRisePerTread", StairClimbsOneRisePerTread},
+        {"StairWithoutATreadIsATerrace", StairWithoutATreadIsATerrace},
+        {"HighestLiftCountsWhereZonesMeet", HighestLiftCountsWhereZonesMeet},
+        {"ObstacleOnATerraceIsAnObstacle", ObstacleOnATerraceIsAnObstacle},
+        {"WalkHeightFollowsTheTerrain", WalkHeightFollowsTheTerrain},
         {"ObstacleStaysAxisAlignedAtYawZero", ObstacleStaysAxisAlignedAtYawZero},
         {"ObstacleFollowsAQuarterTurn", ObstacleFollowsAQuarterTurn},
         {"ObstacleFollowsADiagonalTurn", ObstacleFollowsADiagonalTurn},

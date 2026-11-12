@@ -154,6 +154,7 @@ BenchmarkCameraPath::Shot RiseOut(glm::vec2 start, glm::vec2 cityCentre, float e
 BenchmarkCameraPath::BenchmarkCameraPath(const CityLayout& city, const Crowd& crowd) {
     const glm::vec2 centre = city.coreBounds.Center();
     const float extent = std::max(city.coreBounds.Size().x, city.coreBounds.Size().y);
+    // The path stays in the core of the city, which is level (only satellite districts are raised).
     const float eyeHeight = city.walkHeight + kEyeHeight;
 
     // Without any square, the "square" shots use the city centre instead.

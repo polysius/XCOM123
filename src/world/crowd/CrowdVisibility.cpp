@@ -53,8 +53,8 @@ NpcInstance MakeNpcInstance(const AgentMotion& motion, const AgentLook& look, fl
     return instance;
 }
 
-void CrowdVisibility::Collect(JobSystem& jobs, const CrowdState& state, float walkHeight, const Frustum& frustum,
-                              glm::vec3 viewPoint, std::vector<NpcInstance>& visible) {
+void CrowdVisibility::Collect(JobSystem& jobs, const CrowdState& state, const Walkways& walkways,
+                              const Frustum& frustum, glm::vec3 viewPoint, std::vector<NpcInstance>& visible) {
     agentCount = state.AgentCount();
     agentBand.resize(agentCount);
     const size_t chunkCount = (agentCount + kChunkSize - 1) / kChunkSize;
@@ -64,7 +64,7 @@ void CrowdVisibility::Collect(JobSystem& jobs, const CrowdState& state, float wa
     // where its people go, write them out in band order.
     jobs.ParallelFor(chunkCount, 1, [&](size_t begin, size_t end) {
         for (size_t chunk = begin; chunk < end; ++chunk) {
-            ClassifyChunk(chunk, state, walkHeight, frustum, viewPoint);
+            ClassifyChunk(chunk, state, walkways, frustum, viewPoint);
         }
     });
     ComputeChunkOffsets();
@@ -76,18 +76,18 @@ void CrowdVisibility::Collect(JobSystem& jobs, const CrowdState& state, float wa
     visible.resize(total);
     jobs.ParallelFor(chunkCount, 1, [&](size_t begin, size_t end) {
         for (size_t chunk = begin; chunk < end; ++chunk) {
-            WriteChunk(chunk, state, walkHeight, visible);
+            WriteChunk(chunk, state, walkways, visible);
         }
     });
 }
 
-void CrowdVisibility::ClassifyChunk(size_t chunk, const CrowdState& state, float walkHeight, const Frustum& frustum,
-                                    glm::vec3 viewPoint) {
+void CrowdVisibility::ClassifyChunk(size_t chunk, const CrowdState& state, const Walkways& walkways,
+                                    const Frustum& frustum, glm::vec3 viewPoint) {
     BandCounts& counts = chunkBands[chunk];
     const size_t end = std::min(agentCount, (chunk + 1) * kChunkSize);
     for (size_t agent = chunk * kChunkSize; agent < end; ++agent) {
         const glm::vec2 position = state.motion[agent].position;
-        const glm::vec3 feet(position.x, walkHeight, position.y);
+        const glm::vec3 feet(position.x, walkways.WalkHeightAt(position), position.y);
         const glm::vec3 center = feet + glm::vec3(0.0f, kBoundsCenterHeight, 0.0f);
         // Far people are drawn a little ahead of their stored position (about 10 cm at most
         // at 60 steps per second); the slack in the bounds covers that.
@@ -126,7 +126,7 @@ void CrowdVisibility::ComputeChunkOffsets() {
     }
 }
 
-void CrowdVisibility::WriteChunk(size_t chunk, const CrowdState& state, float walkHeight,
+void CrowdVisibility::WriteChunk(size_t chunk, const CrowdState& state, const Walkways& walkways,
                                  std::vector<NpcInstance>& visible) const {
     BandCounts slot = chunkBands[chunk];
     const size_t end = std::min(agentCount, (chunk + 1) * kChunkSize);
@@ -135,7 +135,7 @@ void CrowdVisibility::WriteChunk(size_t chunk, const CrowdState& state, float wa
         if (band != kInvisible) {
             visible[slot[band]++] = MakeNpcInstance(state.motion[agent], state.looks[agent],
                                                     state.behaviour[agent].gaitLength, state.lagSeconds[agent],
-                                                    walkHeight);
+                                                    walkways.WalkHeightAt(state.motion[agent].position));
         }
     }
 }

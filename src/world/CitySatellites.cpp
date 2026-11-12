@@ -97,15 +97,17 @@ float DistanceToSegment(glm::vec2 point, glm::vec2 a, glm::vec2 b) {
 // The outer pavement of a ring road runs unbroken past every T junction, because nothing used to
 // leave a ring road outwards. Where a joining street leaves, the pavement is opened across its
 // road, or it would cross the street as a kerb. The pavement box that holds the point just
-// outside `junction` is cut in two, leaving a gap as wide as the road. If no pavement lies there
+// outside `junction` is cut in two, leaving a gap as wide as the road. `lift` is how high the
+// ring road stands above the level of the city. If no pavement lies there
 // nothing is cut; CityTests' road-clear check reports a street that still has a kerb across it.
-void OpenPavementAt(CityLayout& city, glm::vec2 junction, glm::vec2 outward, float roadHalfWidth, float streetHalfWidth) {
+void OpenPavementAt(CityLayout& city, glm::vec2 junction, glm::vec2 outward, float roadHalfWidth, float streetHalfWidth,
+                    float lift) {
     const glm::vec2 probe = junction + outward * ((roadHalfWidth + streetHalfWidth) * 0.5f);
     for (size_t i = 0; i < city.boxes.size(); ++i) {
         const BoxInstance original = city.boxes[i];
         const bool isPavementSlab = city.boxParts[i] == CityPart::Pavement &&
-                                    std::abs(original.center.y - original.halfSize.y) < 1e-3f &&
-                                    std::abs(original.center.y + original.halfSize.y - kPavementHeight) < 1e-3f;
+                                    std::abs(original.center.y - original.halfSize.y - lift) < 1e-3f &&
+                                    std::abs(original.center.y + original.halfSize.y - kPavementHeight - lift) < 1e-3f;
         if (!isPavementSlab) {
             continue;
         }
@@ -485,9 +487,9 @@ private:
         const uint32_t districtNodeOffset = static_cast<uint32_t>(city.streets.nodes.size());
         AppendPart(city, district, placement);
         districts.push_back(placement.Apply(OrientedRect(district.bounds)));
-        OpenPavementAt(city, coreJunction.position, coreJunction.outward, plan.roadHalfWidth, plan.streetHalfWidth);
+        OpenPavementAt(city, coreJunction.position, coreJunction.outward, plan.roadHalfWidth, plan.streetHalfWidth, 0.0f);
         OpenPavementAt(city, city.streets.nodes[districtNodeOffset + districtJunction.node],
-                       placement.Turn(districtJunction.outward), plan.roadHalfWidth, plan.streetHalfWidth);
+                       placement.Turn(districtJunction.outward), plan.roadHalfWidth, plan.streetHalfWidth, placement.lift);
 
         // Two new nodes for the bends and three edges joining the two ring roads.
         StreetGraph& streets = city.streets;

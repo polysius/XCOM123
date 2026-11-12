@@ -251,6 +251,18 @@ struct PointOfInterest {
     PointOfInterestKind kind;
 };
 
+// A region where people stand higher than the level of the city. `area` is turned like any
+// OrientedRect, and its own +X axis is the way a stair climbs. The walking surface of the zone is
+// `startLift` metres above CityLayout::walkHeight, and on a stair (rise above zero) it climbs one
+// step of `rise` metres for every `tread` metres along the zone, the first step standing one rise
+// above `startLift`. A terrace has no rise. See TerrainField for the height at a point.
+struct TerrainZone {
+    OrientedRect area;
+    float startLift;
+    float rise;
+    float tread;
+};
+
 // Everything the generator produces: geometry to draw, and the walkable spaces people use.
 struct CityLayout {
     std::vector<BoxInstance> boxes;
@@ -273,7 +285,8 @@ struct CityLayout {
     float roadWidth = 0.0f;
     float sidewalkCenterOffset = 0.0f;  // distance from a street's centre line to the middle of its pavements
     float sidewalkWidth = 0.0f;
-    float walkHeight = 0.0f;            // height of the pavement surface people stand on
+    float walkHeight = 0.0f;            // height of the pavement surface people stand on at the level of the city
+    std::vector<TerrainZone> terrain;   // the places where they stand higher; none when the city is level
     float waterLevel = 0.0f;            // height of the river surface
 };
 
