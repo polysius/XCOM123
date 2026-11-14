@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <span>
 #include <vector>
 
 #include <glm/glm.hpp>
@@ -49,6 +50,9 @@ public:
     explicit Crowd(JobSystem& jobs);
 
     void Spawn(const CityLayout& city, const CrowdSettings& settings);
+    // Tells the crowd where things stand that people must go round and that move, such as crates. Call it between
+    // updates; the crowd keeps them in mind until the next call.
+    void SetMovableObstacles(std::span<const MovableObstacle> obstacles) { walkways.SetMovableObstacles(obstacles); }
     // The point the simulation level of detail is centred on, usually the camera position.
     void SetFocusPoint(glm::vec3 point);
     void Update(float deltaSeconds);

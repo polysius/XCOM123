@@ -52,6 +52,8 @@ public:
     size_t AwakeCount() const { return world.AwakeBodyCount(); }
     std::span<const BodyInstance> Boxes() const { return boxInstances; }
     std::span<const BodyInstance> Spheres() const { return sphereInstances; }
+    // The props as obstacles for the crowd: the box round each one seen from above, with its lowest and highest height.
+    std::span<const MovableObstacle> Obstacles() const { return obstacles; }
     const PhysicsWorld& World() const { return world; }
     // The middle of the heap the props were dropped in, on the ground. The heap stands a little off the
     // middle of the square.
@@ -73,6 +75,7 @@ private:
     std::vector<uint32_t> sphereBodies;
     std::vector<BodyInstance> boxInstances;
     std::vector<BodyInstance> sphereInstances;
+    std::vector<MovableObstacle> obstacles;  // one for every prop, boxes first
 };
 
 }  // namespace physics

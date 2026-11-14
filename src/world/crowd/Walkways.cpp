@@ -227,6 +227,8 @@ void Walkways::BuildObstacleGrid(const CityLayout& city) {
     gridColumns = static_cast<int>(std::ceil((high.x - low.x + 2.0f * kGridMargin) / gridCellSize));
     gridRows = static_cast<int>(std::ceil((high.y - low.y + 2.0f * kGridMargin) / gridCellSize));
     gridFlags.assign(static_cast<size_t>(gridColumns) * static_cast<size_t>(gridRows), 0);
+    movableCells.clear();  // they pointed into the grid that was just replaced
+    movableDepth.assign(gridFlags.size(), 0);
 
     for (const BoxInstance& box : city.boxes) {
         const float bottom = box.center.y - box.halfSize.y;
@@ -296,6 +298,54 @@ uint8_t Walkways::CellFlags(glm::vec2 point) const {
         return kObstacleFlag | kNoStandingFlag;  // nobody may leave the city
     }
     return gridFlags[static_cast<size_t>(cell.y) * static_cast<size_t>(gridColumns) + static_cast<size_t>(cell.x)];
+}
+
+int Walkways::MovableDepthAt(glm::vec2 point) const {
+    const glm::ivec2 cell = CellOf(point);
+    if (cell.x < 0 || cell.y < 0 || cell.x >= gridColumns || cell.y >= gridRows) {
+        return 0;
+    }
+    return movableDepth[static_cast<size_t>(cell.y) * static_cast<size_t>(gridColumns) + static_cast<size_t>(cell.x)];
+}
+
+void Walkways::SetMovableObstacles(std::span<const MovableObstacle> obstacles) {
+    for (uint32_t cell : movableCells) {
+        gridFlags[cell] = static_cast<uint8_t>(gridFlags[cell] & ~kMovableFlag);
+        movableDepth[cell] = 0;
+    }
+    movableCells.clear();
+    for (const MovableObstacle& obstacle : obstacles) {
+        const glm::vec2 middle = 0.5f * (obstacle.min + obstacle.max);
+        if (!std::isfinite(middle.x) || !std::isfinite(middle.y)) {
+            continue;
+        }
+        // Whether it is in people's way depends on how high it stands above the ground under it, as for the boxes of the city.
+        const float ground = WalkHeightAt(middle);
+        if (!(obstacle.bottom < ground + kObstacleHighest && obstacle.top > ground + kObstacleLowest)) {
+            continue;
+        }
+        const glm::ivec2 low = CellOf(obstacle.min - kBodyRadius);
+        const glm::ivec2 high = CellOf(obstacle.max + kBodyRadius);
+        for (int y = std::max(low.y, 0); y <= std::min(high.y, gridRows - 1); ++y) {
+            for (int x = std::max(low.x, 0); x <= std::min(high.x, gridColumns - 1); ++x) {
+                const glm::vec2 cellCenter = gridOrigin + (glm::vec2(x, y) + 0.5f) * gridCellSize;
+                // As the footprints of the boxes of the city: a cell counts when its centre is within a body radius of the box.
+                if (cellCenter.x >= obstacle.min.x - kBodyRadius + kObstacleShrink && cellCenter.x <= obstacle.max.x + kBodyRadius - kObstacleShrink &&
+                    cellCenter.y >= obstacle.min.y - kBodyRadius + kObstacleShrink && cellCenter.y <= obstacle.max.y + kBodyRadius - kObstacleShrink) {
+                    const size_t cell = static_cast<size_t>(y) * static_cast<size_t>(gridColumns) + static_cast<size_t>(x);
+                    if ((gridFlags[cell] & kMovableFlag) == 0) {
+                        movableCells.push_back(static_cast<uint32_t>(cell));
+                    }
+                    gridFlags[cell] = static_cast<uint8_t>(gridFlags[cell] | kMovableFlag);
+                    // The distance to the nearest edge, if the centre is inside, in cells; negative if it is in the margin.
+                    const float toEdge = std::min(std::min(cellCenter.x - obstacle.min.x, obstacle.max.x - cellCenter.x),
+                                                  std::min(cellCenter.y - obstacle.min.y, obstacle.max.y - cellCenter.y));
+                    const int depth = toEdge < 0.0f ? 1 : 2 + std::min(static_cast<int>(toEdge / gridCellSize), 200);
+                    movableDepth[cell] = std::max(movableDepth[cell], static_cast<uint8_t>(depth));
+                }
+            }
+        }
+    }
 }
 
 void Walkways::Reserve(glm::vec2 center, float radius) {

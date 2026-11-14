@@ -100,6 +100,7 @@ double UpdateCrowd(Engine& engine, float deltaSeconds, FrameInput& frame) {
     const Clock::time_point start = Clock::now();
     // The crowd simulates people near this point in the most detail.
     engine.crowd.SetFocusPoint(frame.cameraPosition);
+    engine.crowd.SetMovableObstacles(engine.props.Obstacles());  // where the crates are, as of the last frame
     engine.crowd.Update(deltaSeconds);
     engine.crowd.CollectVisible(Frustum(frame.projection * frame.view), engine.visibleNpcs);
     frame.npcs = engine.visibleNpcs;
@@ -317,6 +318,7 @@ void PreRollWorld(Engine& engine, float seconds) {
     const bool coupled = engine.river.IsBuilt() && engine.props.Count() > 0;
     while (seconds > 0.0f) {
         const float step = std::min(seconds, kPreRollTimeStep);
+        engine.crowd.SetMovableObstacles(engine.props.Obstacles());
         engine.crowd.Update(step);
         if (coupled) {
             // The props and the water act on each other, so they run together, in pieces of a frame, and only for the
