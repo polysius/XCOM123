@@ -58,6 +58,15 @@ bool IsDynamic(const Body& body) {
     return !body.isStatic && !body.isKinematic;
 }
 
+// Whether two bodies can touch at all: not when neither can move, and not when one is kinematic and the other has been
+// made immune to kinematic bodies.
+bool CanInteract(const Body& a, const Body& b) {
+    if (!IsDynamic(a) && !IsDynamic(b)) {
+        return false;
+    }
+    return !(a.isKinematic && !b.isPushable) && !(b.isKinematic && !a.isPushable);
+}
+
 uint64_t PairKey(uint32_t a, uint32_t b) {
     return (static_cast<uint64_t>(a) << 32) | b;
 }
@@ -421,7 +430,8 @@ void PhysicsWorld::WakeSleepersTouchedByMovingBodies() {
         candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
         for (uint32_t other : candidates) {
             const Body& partner = bodies[other];
-            if (partner.isAsleep && BoundsOverlap(body.boundsMin - reach, body.boundsMax + reach, partner.boundsMin, partner.boundsMax)) {
+            if (partner.isAsleep && CanInteract(body, partner) &&
+                BoundsOverlap(body.boundsMin - reach, body.boundsMax + reach, partner.boundsMin, partner.boundsMax)) {
                 Wake(other);
             }
         }
@@ -488,8 +498,8 @@ void PhysicsWorld::FindPairs(std::vector<std::pair<uint32_t, uint32_t>>& pairs) 
                 continue;
             }
             const Body& partner = bodies[other];
-            if (!IsDynamic(body) && !IsDynamic(partner)) {
-                continue;  // two bodies that nothing can move have no contact to solve
+            if (!CanInteract(body, partner)) {
+                continue;  // no contact to solve between two bodies that nothing can move, or that kinematic bodies pass through
             }
             const glm::vec3 partnerReach = partner.isStatic ? glm::vec3(kContactMargin) : reachOf(partner);
             if (BoundsOverlap(low, high, partner.boundsMin - partnerReach, partner.boundsMax + partnerReach)) {
@@ -880,9 +890,28 @@ void PhysicsWorld::SetParked(uint32_t index, bool parked) {
     ForgetContactsOf(index);
 }
 
-// Drops what the world remembers of the contacts of a body, which is the impulses that the next step starts from.
+void PhysicsWorld::SetPushable(uint32_t index, bool pushable) {
+    bodies[index].isPushable = pushable;
+}
+
+// Drops what the world remembers of the contacts of a body, which is the impulses that the next step starts from, and
+// wakes the bodies that touched it: one that rested on it, asleep, would hang in the air once it is gone.
 void PhysicsWorld::ForgetContactsOf(uint32_t index) {
+    std::vector<uint32_t> touching;
+    for (const auto& [key, manifold] : previousManifolds) {
+        if (manifold.a == index) {
+            touching.push_back(manifold.b);
+        } else if (manifold.b == index) {
+            touching.push_back(manifold.a);
+        }
+    }
     std::erase_if(previousManifolds, [index](const auto& entry) { return entry.second.a == index || entry.second.b == index; });
+    std::sort(touching.begin(), touching.end());  // the order of a hash table must not decide who is woken first
+    for (uint32_t other : touching) {
+        if (IsDynamic(bodies[other])) {
+            Wake(other);
+        }
+    }
 }
 
 }  // namespace physics

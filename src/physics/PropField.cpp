@@ -26,6 +26,7 @@ constexpr float kPushableMass = 60.0f;     // props lighter than this, in kilogr
 constexpr size_t kMostWokenByAPerson = 4;  // a prop in a heap of more than this many is not pushed: moving a heap costs too much
 constexpr size_t kPersonBodies = 64;       // how many people can push props at once
 constexpr glm::vec3 kPersonHalfSize{0.25f, 0.9f, 0.25f};  // a person is a box 50 cm wide and 1.8 m tall
+constexpr float kPersonDeadBand = 0.01f;   // a person who has moved less than this (metres) since the last call has not moved: the body stays
 constexpr float kPersonJump = 1.5f;        // a person further than this from their body (metres) is put down at once, not walked to
 constexpr uint32_t kNoPerson = 0xFFFFFFFFu;
 constexpr float kFallDepth = 80.0f;        // props this far below the ground under the heap have fallen out of the world
@@ -201,8 +202,7 @@ void PropField::Spawn(const CityLayout& city, const PropSettings& settings) {
         world.SetParked(personBodies.back(), true);
     }
     personAgents.assign(kPersonBodies, kNoPerson);
-    personTargets.assign(kPersonBodies, glm::vec3(0.0f));
-    personHasTarget.assign(kPersonBodies, 0);
+    personDriveSecondsLeft = 0.0f;
     peopleOverflow = 0;
     submergedVolume.assign(boxBodies.size() + sphereBodies.size(), 0.0f);
     restarted.assign(boxBodies.size() + sphereBodies.size(), 0);
@@ -211,7 +211,6 @@ void PropField::Spawn(const CityLayout& city, const PropSettings& settings) {
 }
 
 void PropField::Update(float seconds) {
-    DrivePeople(seconds);
     if (water != nullptr && water->IsBuilt()) {
         // The water acts on the props before every step of the physics, so the stepping is done here.
         const float step = world.Settings().fixedStep;
@@ -227,7 +226,13 @@ void PropField::Update(float seconds) {
     } else {
         world.Update(seconds);
     }
-    StopPeople();
+    if (personDriveSecondsLeft > 0.0f) {
+        personDriveSecondsLeft -= seconds;
+        if (personDriveSecondsLeft <= 1e-6f) {
+            personDriveSecondsLeft = 0.0f;
+            StopPeople();
+        }
+    }
     // A prop that has gone through the river, which has no floor, would fall for ever and never sleep.
     for (const std::vector<uint32_t>* bodies : {&boxBodies, &sphereBodies}) {
         for (uint32_t index : *bodies) {
@@ -340,17 +345,23 @@ std::optional<uint32_t> PropField::BodyOfPerson(uint32_t agent) const {
     return personBodies[static_cast<size_t>(found - personAgents.begin())];
 }
 
-void PropField::SetPeople(std::span<const PersonBody> people) {
+void PropField::SetPeople(std::span<const PersonBody> people, float seconds) {
     peopleOverflow = 0;
-    const auto setTarget = [this](size_t slot, const PersonBody& person) {
+    personDriveSecondsLeft = std::isfinite(seconds) ? std::max(seconds, 0.0f) : 0.0f;
+    const auto setTarget = [&](size_t slot, const PersonBody& person) {
         const glm::vec3 target(person.position.x, person.feet + kPersonHalfSize.y, person.position.y);
+        const float distance = glm::distance(world.GetBody(personBodies[slot]).position, target);
         // Someone who has gone far since their body last moved (the crowd moved them, or they changed level of detail)
         // is not walked to: that would push everything on the way.
-        if (glm::distance(world.GetBody(personBodies[slot]).position, target) > kPersonJump) {
+        if (distance > kPersonJump) {
             world.PlaceKinematic(personBodies[slot], target);
         }
-        personTargets[slot] = target;
-        personHasTarget[slot] = 1;
+        // Someone who hardly moves is not followed: a body that sways by a millimetre keeps a heap awake for good.
+        if (distance < kPersonDeadBand || personDriveSecondsLeft <= 0.0f) {
+            world.SetVelocity(personBodies[slot], glm::vec3(0.0f), glm::vec3(0.0f));
+        } else {
+            world.SetKinematicTarget(personBodies[slot], target, personDriveSecondsLeft);
+        }
     };
     const auto byAgent = [](const PersonBody& person, uint32_t agent) { return person.agent < agent; };
 
@@ -385,24 +396,12 @@ void PropField::SetPeople(std::span<const PersonBody> people) {
     }
 }
 
-void PropField::DrivePeople(float seconds) {
-    if (!(seconds > 0.0f)) {
-        return;
-    }
-    for (size_t slot = 0; slot < personBodies.size(); ++slot) {
-        if (personHasTarget[slot] != 0) {
-            world.SetKinematicTarget(personBodies[slot], personTargets[slot], seconds);
-        }
-    }
-}
-
-// After the time of an Update the bodies stand where they are until they are given a target again, so that a person who
-// is no longer looked after does not walk on for ever.
+// The bodies stand where they are until SetPeople gives them a speed again, so that a person who is no longer looked
+// after does not walk on for ever.
 void PropField::StopPeople() {
     for (size_t slot = 0; slot < personBodies.size(); ++slot) {
-        if (personHasTarget[slot] != 0) {
+        if (personAgents[slot] != kNoPerson) {
             world.SetVelocity(personBodies[slot], glm::vec3(0.0f), glm::vec3(0.0f));
-            personHasTarget[slot] = 0;
         }
     }
 }
@@ -425,7 +424,9 @@ void PropField::RefreshInstances() {
             const Body& body = world.GetBody(index);
             // Light enough for a person to push, and not part of a heap that the person would stir and keep awake: people walk
             // into such a prop instead of round it. A prop that is in a heap is an obstacle, like the heavy ones.
-            if (body.inverseMass * kPushableMass > 1.0f && world.IslandSize(index) <= kMostWokenByAPerson) {
+            const bool pushable = body.inverseMass * kPushableMass > 1.0f && world.IslandSize(index) <= kMostWokenByAPerson;
+            world.SetPushable(index, pushable);
+            if (pushable) {
                 pushablePositions.emplace_back(body.position.x, body.position.z);
                 continue;
             }

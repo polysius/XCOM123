@@ -1123,6 +1123,38 @@ void AStillPersonInAHeapDoesNotKeepItAwakeOrJoinTwoHeaps() {
     Check(world.GetBody(left).sleepGroup != world.GetBody(right).sleepGroup, "in groups of their own, the person does not join them");
 }
 
+void ACrateOnAPersonFallsWhenThePersonIsTakenAway() {
+    for (const bool parkThem : {true, false}) {
+        PhysicsWorld world;
+        AddGround(world);
+        const uint32_t person = AddPerson(world, {0.0f, 0.0f, 0.0f});
+        const uint32_t crate = AddBox(world, {0.0f, 1.8f + 0.4f + 0.01f, 0.0f}, {0.4f, 0.4f, 0.4f});
+        Simulate(world, 3.0f);
+        Check(world.GetBody(crate).isAsleep && Near(world.GetBody(crate).position.y, 2.2f, 0.05f), "a crate sleeps on a person's head");
+        if (parkThem) {
+            world.SetParked(person, true);
+        } else {
+            world.PlaceKinematic(person, {20.0f, 0.9f, 0.0f});
+        }
+        Simulate(world, 2.0f);
+        Check(Near(world.GetBody(crate).position.y, 0.4f, 0.05f), std::string("and falls to the ground when the person is ") +
+                                                                       (parkThem ? "parked" : "placed elsewhere"));
+    }
+}
+
+void BodiesThatCannotBePushedArePassedThroughByPeople() {
+    PhysicsWorld world;
+    AddGround(world);
+    const uint32_t heavy = AddBox(world, {2.0f, 0.5f, 0.0f});
+    world.SetPushable(heavy, false);
+    const uint32_t person = AddPerson(world, {0.0f, 0.0f, 0.0f});
+    Simulate(world, 1.0f);
+    Check(world.GetBody(heavy).isAsleep, "the crate sleeps");
+    WalkPerson(world, person, 1.5f, 3.0f);
+    Check(world.GetBody(heavy).isAsleep && Near(world.GetBody(heavy).position.x, 2.0f, 1e-4f), "and a person who walks through it neither wakes nor moves it");
+    Check(Near(world.GetBody(person).position.x, 4.5f, 0.02f), "and is not held up");
+}
+
 void AParkedPersonTouchesNothing() {
     PhysicsWorld world;
     AddGround(world);
@@ -1209,6 +1241,8 @@ int main() {
         {"ACrateThatFallsOnAPersonLandsOnTheGroundBesideThemOrOnTheirHead", ACrateThatFallsOnAPersonLandsOnTheGroundBesideThemOrOnTheirHead},
         {"AHeapSleepsBesideAStillPersonWakesForAWalkingOneAndSleepsAgain", AHeapSleepsBesideAStillPersonWakesForAWalkingOneAndSleepsAgain},
         {"AStillPersonInAHeapDoesNotKeepItAwakeOrJoinTwoHeaps", AStillPersonInAHeapDoesNotKeepItAwakeOrJoinTwoHeaps},
+        {"ACrateOnAPersonFallsWhenThePersonIsTakenAway", ACrateOnAPersonFallsWhenThePersonIsTakenAway},
+        {"BodiesThatCannotBePushedArePassedThroughByPeople", BodiesThatCannotBePushedArePassedThroughByPeople},
         {"AParkedPersonTouchesNothing", AParkedPersonTouchesNothing},
         {"APersonIsPlacedAtOnceAndStops", APersonIsPlacedAtOnceAndStops},
         {"APersonIsDrivenNoFasterThanTheTopSpeed", APersonIsDrivenNoFasterThanTheTopSpeed},

@@ -297,6 +297,19 @@ void LightPropsAreNotObstaclesAndHeavyOnesAre() {
     Check(!props.PushablePositions().empty(), "the barrels and balls can be pushed");
 }
 
+void PropsInAHeapCannotBePushed() {
+    physics::PropField props;
+    props.Spawn(CityWithASquare(), {.count = 360, .seed = 5});  // ten layers: a heap that cannot spread out
+    const size_t pushableInTheAir = props.PushablePositions().size();
+    for (int step = 0; step < 20 * 60; ++step) {
+        props.Update(1.0f / 60.0f);
+    }
+    Check(props.PushablePositions().size() * 2 < pushableInTheAir,
+          "once the props lie in a heap, those in it are no longer pushed: " + std::to_string(pushableInTheAir) + " before, " +
+              std::to_string(props.PushablePositions().size()) + " after");
+    Check(props.Obstacles().size() + props.PushablePositions().size() == 360, "and are obstacles instead");
+}
+
 // People standing on a flat ground at the given indices in the crowd, a metre apart.
 std::vector<PersonBody> PeopleWithIndices(uint32_t first, uint32_t last) {
     std::vector<PersonBody> people;
@@ -310,20 +323,20 @@ void PeopleTakeBodiesKeepThemAndAreCountedWhenThereAreNone() {
     physics::PropField props;
     props.Spawn(CityWithASquare(), {.count = 5, .seed = 2});
     const std::vector<PersonBody> first = PeopleWithIndices(0, 70);
-    props.SetPeople(first);
+    props.SetPeople(first, 1.0f / 60.0f);
     Check(props.PeopleBodyCount() == 64 && props.PeopleOverflow() == 6, "64 people have bodies and the other 6 are counted");
     Check(props.BodyOfPerson(0).has_value() && !props.BodyOfPerson(69).has_value(), "the lowest indices come first");
     const uint32_t bodyOfTwenty = *props.BodyOfPerson(20);
 
     // Some leave, some are new, and whoever stays keeps their body.
     const std::vector<PersonBody> second = PeopleWithIndices(10, 80);
-    props.SetPeople(second);
+    props.SetPeople(second, 1.0f / 60.0f);
     Check(props.BodyOfPerson(20) == bodyOfTwenty, "someone who stays in the list keeps their body");
     Check(!props.BodyOfPerson(5).has_value(), "someone who is gone has none");
     Check(props.PeopleBodyCount() == 64, "and the bodies they left are given on");
     Check(props.PeopleOverflow() == 6, "to the new ones as far as they go");
 
-    props.SetPeople({});
+    props.SetPeople({}, 1.0f / 60.0f);
     Check(props.PeopleBodyCount() == 0, "with nobody near, no body is in use");
 }
 
@@ -332,17 +345,25 @@ void ABodyFollowsItsPersonAndStopsWhenTheyAreNotLookedAfter() {
     props.Spawn(CityWithASquare(), {.count = 3, .seed = 2});
     std::vector<PersonBody> people = PeopleWithIndices(7, 8);
     people[0].position = {-40.0f, 30.0f};  // far from the heap, on the ground
-    props.SetPeople(people);
+    props.SetPeople(people, 1.0f / 60.0f);
     const uint32_t body = *props.BodyOfPerson(7);
     Check(glm::distance(props.World().GetBody(body).position, glm::vec3(-40.0f, 0.9f, 30.0f)) < 1e-4f, "a person's body stands where they do");
 
-    people[0].position.x += 0.02f;  // one frame of walking
-    props.SetPeople(people);
-    props.Update(1.0f / 60.0f);
-    Check(std::abs(props.World().GetBody(body).position.x - (-39.98f)) < 0.002f, "and walks with them");
+    people[0].position.x += 0.03f;  // one frame of walking, spread over three Updates as the pre-roll does
+    props.SetPeople(people, 0.03f);
+    for (int i = 0; i < 3; ++i) {
+        props.Update(0.01f);
+    }
+    const float walkedTo = props.World().GetBody(body).position.x;
+    Check(walkedTo > -39.985f && walkedTo < -39.96f, "and walks with them, at their speed and not faster, to " + std::to_string(walkedTo));
 
-    props.Update(1.0f / 60.0f);  // nobody gave it a target this time
-    Check(std::abs(props.World().GetBody(body).position.x - (-39.98f)) < 0.002f, "and stays there when nobody says where to go next");
+    props.Update(0.05f);  // nobody gave it a target this time
+    Check(props.World().GetBody(body).position.x == walkedTo, "and stays there when nobody says where to go next");
+
+    people[0].position.x = walkedTo + 0.004f;  // a sway
+    props.SetPeople(people, 1.0f / 60.0f);
+    props.Update(1.0f / 60.0f);
+    Check(props.World().GetBody(body).position.x == walkedTo, "a person who hardly moves is not followed");
 }
 
 void PropsAreDroppedOverTheLargestSquare() {
@@ -862,7 +883,9 @@ void SomeoneInACrateMayWalkOutButNotDeeperAndNotThroughWalls() {
     const glm::vec2 farOutside(-5.0f, 0.0f);
     bool foundMarginPlace = false;
     for (float shift = 0.0f; shift < 0.5f; shift += 0.1f) {
-        const MovableObstacle crate = CrateShiftedEast(walkways.WalkHeight(), shift);
+        // Wide enough to have cells inside it that are not next to open ground.
+        const MovableObstacle crate = {.min = {-1.5f + shift, -1.5f}, .max = {1.5f + shift, 1.5f}, .bottom = walkways.WalkHeight(),
+                                       .top = walkways.WalkHeight() + 1.0f};
         walkways.SetMovableObstacles(std::span(&crate, 1));
         const glm::vec2 middle = 0.5f * (crate.min + crate.max);
         Check(walkways.CanStepOutOfMovableObstacle(middle, middle + glm::vec2(0.0f, 0.1f)), "from inside a crate one may step on inside it");
@@ -928,6 +951,7 @@ int main() {
         {"ABodyIsDrawnWithTheLayoutOfABox", ABodyIsDrawnWithTheLayoutOfABox},
         {"PropsFallOnTheGroundAndComeToRest", PropsFallOnTheGroundAndComeToRest},
         {"LightPropsAreNotObstaclesAndHeavyOnesAre", LightPropsAreNotObstaclesAndHeavyOnesAre},
+        {"PropsInAHeapCannotBePushed", PropsInAHeapCannotBePushed},
         {"PeopleTakeBodiesKeepThemAndAreCountedWhenThereAreNone", PeopleTakeBodiesKeepThemAndAreCountedWhenThereAreNone},
         {"ABodyFollowsItsPersonAndStopsWhenTheyAreNotLookedAfter", ABodyFollowsItsPersonAndStopsWhenTheyAreNotLookedAfter},
         {"PropsAreDroppedOverTheLargestSquare", PropsAreDroppedOverTheLargestSquare},

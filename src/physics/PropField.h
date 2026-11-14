@@ -56,7 +56,9 @@ public:
     // one of a limited number of kinematic bodies and keeps it while they stay in the list; people over the limit have
     // none and walk through props, and PeopleOverflow counts them. Call it before Update, with the people the crowd
     // found near PushablePositions.
-    void SetPeople(std::span<const PersonBody> people);
+    // `seconds` is the time until the next call: the bodies walk to where their people are in that time, and stand
+    // still when it is over, however many Updates it takes.
+    void SetPeople(std::span<const PersonBody> people, float seconds);
     // Where the props are that a person can push, on the ground. Heavier ones are obstacles, not pushed.
     std::span<const glm::vec2> PushablePositions() const { return pushablePositions; }
     size_t PeopleBodyCount() const;
@@ -72,8 +74,6 @@ public:
 
 private:
     void RefreshInstances();
-    // Gives the bodies of people the speed that takes them to where their people are, and takes it away again.
-    void DrivePeople(float seconds);
     void StopPeople();
     // Applies the forces of the water to every prop for one step of `seconds`, and the reaction of the props on the water.
     void ApplyWater(float seconds);
@@ -93,8 +93,7 @@ private:
     std::vector<glm::vec2> pushablePositions;
     std::vector<uint32_t> personBodies;     // the pool of kinematic bodies, parked when not in use
     std::vector<uint32_t> personAgents;     // per body, the person who has it, or kNoPerson
-    std::vector<glm::vec3> personTargets;   // per body, where its person is
-    std::vector<uint8_t> personHasTarget;   // per body: the target was set since the last Update
+    float personDriveSecondsLeft = 0.0f;    // how long the bodies of people keep the speed SetPeople gave them
     uint32_t peopleOverflow = 0;
 };
 

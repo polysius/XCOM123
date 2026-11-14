@@ -73,6 +73,7 @@ struct Body {
     uint32_t sleepGroup = kInvalidBody;        // while asleep, the group of bodies that sleeps and wakes together
     bool isStatic = false;
     bool isKinematic = false;
+    bool isPushable = true;  // false: kinematic bodies pass through it (see PhysicsWorld::SetPushable)
     bool isParked = false;  // a kinematic body that is out of play: it touches nothing (see PhysicsWorld::SetParked)
     bool isAsleep = false;
 };

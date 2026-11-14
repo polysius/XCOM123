@@ -526,7 +526,7 @@ void RunBenchmark(const CityLayout& city, uint32_t agentCount, const BenchOption
         if (options.props > 0) {
             const Clock::time_point physicsStart = Clock::now();
             crowd.CollectPeopleAround(props.PushablePositions(), 1.2f, peopleNearProps);
-            props.SetPeople(peopleNearProps);
+            props.SetPeople(peopleNearProps, kStepSeconds);
             props.Update(kStepSeconds);
             propsMs.push_back(MillisecondsBetween(physicsStart, Clock::now()));
             awakeProps += props.AwakeCount();

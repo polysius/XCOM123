@@ -111,9 +111,9 @@ double UpdateCrowd(Engine& engine, float deltaSeconds, FrameInput& frame) {
 // People within this distance of a prop that they can push get a body in the physics, so that they push it as they walk.
 constexpr float kPushReach = 1.2f;
 
-void GivePeopleToProps(Engine& engine) {
+void GivePeopleToProps(Engine& engine, float deltaSeconds) {
     engine.crowd.CollectPeopleAround(engine.props.PushablePositions(), kPushReach, engine.peopleNearProps);
-    engine.props.SetPeople(engine.peopleNearProps);
+    engine.props.SetPeople(engine.peopleNearProps, deltaSeconds);
 }
 
 // Moves the props forward and puts them into the frame.
@@ -121,7 +121,7 @@ void UpdateProps(Engine& engine, float deltaSeconds, FrameInput& frame) {
     if (engine.props.Count() == 0) {
         return;
     }
-    GivePeopleToProps(engine);
+    GivePeopleToProps(engine, deltaSeconds);
     engine.props.Update(deltaSeconds);
     frame.bodyBoxes = engine.props.Boxes();
     frame.bodySpheres = engine.props.Spheres();
@@ -331,7 +331,7 @@ void PreRollWorld(Engine& engine, float seconds) {
         engine.crowd.SetMovableObstacles(engine.props.Obstacles());
         engine.crowd.Update(step);
         if (engine.props.Count() > 0) {
-            GivePeopleToProps(engine);
+            GivePeopleToProps(engine, step);
         }
         if (coupled) {
             // The props and the water act on each other, so they run together, in pieces of a frame, and only for the

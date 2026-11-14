@@ -75,6 +75,9 @@ public:
     void SetKinematicTarget(uint32_t index, glm::vec3 target, float seconds);
     void PlaceKinematic(uint32_t index, glm::vec3 position);
     void SetParked(uint32_t index, bool parked);
+    // Tells whether kinematic bodies may push this body. One that is not pushable is passed through by them: they neither
+    // move nor wake it. For bodies that are too heavy to push, or in a heap that a push would stir and keep awake.
+    void SetPushable(uint32_t index, bool pushable);
     // Takes a body out of the simulation for good: it stays where it is, as an immovable body, and costs
     // almost nothing. For bodies that have fallen out of the world.
     void Disable(uint32_t index);

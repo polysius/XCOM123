@@ -144,8 +144,9 @@ private:
     static constexpr uint8_t kNoStandingFlag = 2;  // within a body radius of an obstacle
     static constexpr uint8_t kReservedFlag = 4;
     static constexpr uint8_t kMovableFlag = 8;     // within a body radius of an obstacle that can move
-    // 0 outside every movable obstacle, 1 in the margin round one, and inside one 2 plus the number of cells to its edge.
+    // 0 outside every movable obstacle, and inside them the number of cells to the nearest open ground, 1 at the edge.
     int MovableDepthAt(glm::vec2 point) const;
+    void MeasureMovableDepth();
 
     void BuildArms();
     void BuildCrosswalks();
