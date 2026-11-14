@@ -857,6 +857,27 @@ MovableObstacle CrateShiftedEast(float ground, float shift) {
     return crate;
 }
 
+void SomeoneInAHoleInAHeapOfCratesCanStillStepOut() {
+    // Four crates round a hole 40 cm across. Every cell of the hole is closed, and so is every cell round it, so that a
+    // rule that only let people move to cells at least as near to open ground as their own would hold them for good.
+    crowd::Walkways walkways = EmptyWalkways();
+    const float ground = walkways.WalkHeight();
+    const MovableObstacle ring[] = {
+        {.min = {-1.7f, 0.2f}, .max = {1.7f, 1.7f}, .bottom = ground, .top = ground + 1.0f},
+        {.min = {-1.7f, -1.7f}, .max = {1.7f, -0.2f}, .bottom = ground, .top = ground + 1.0f},
+        {.min = {0.2f, -0.2f}, .max = {1.7f, 0.2f}, .bottom = ground, .top = ground + 1.0f},
+        {.min = {-1.7f, -0.2f}, .max = {-0.2f, 0.2f}, .bottom = ground, .top = ground + 1.0f},
+    };
+    walkways.SetMovableObstacles(ring);
+    const glm::vec2 hole(0.0f, 0.0f);
+    Check(!walkways.CanStandAt(hole), "nobody stands in the hole");
+    bool canGoSomewhere = false;
+    for (const glm::vec2 step : {glm::vec2(0.5f, 0.0f), glm::vec2(-0.5f, 0.0f), glm::vec2(0.0f, 0.5f), glm::vec2(0.0f, -0.5f)}) {
+        canGoSomewhere = canGoSomewhere || walkways.CanStepOutOfMovableObstacle(hole, hole + step);
+    }
+    Check(canGoSomewhere, "but someone in it can take a step, towards the way out");
+}
+
 void ACrateHasAMarginOfOneBodyRadius() {
     crowd::Walkways walkways = EmptyWalkways();
     bool marginIsClosed = false;
@@ -943,6 +964,7 @@ int main() {
         {"ACrateThatMovedClosesItsNewPlaceAndOpensTheOld", ACrateThatMovedClosesItsNewPlaceAndOpensTheOld},
         {"ACrateInTheAirOrFarBelowIsNoObstacle", ACrateInTheAirOrFarBelowIsNoObstacle},
         {"ANonFiniteCrateIsIgnored", ANonFiniteCrateIsIgnored},
+        {"SomeoneInAHoleInAHeapOfCratesCanStillStepOut", SomeoneInAHoleInAHeapOfCratesCanStillStepOut},
         {"ACrateHasAMarginOfOneBodyRadius", ACrateHasAMarginOfOneBodyRadius},
         {"SomeoneInACrateMayWalkOutButNotDeeperAndNotThroughWalls", SomeoneInACrateMayWalkOutButNotDeeperAndNotThroughWalls},
         {"ObstacleStaysAxisAlignedAtYawZero", ObstacleStaysAxisAlignedAtYawZero},

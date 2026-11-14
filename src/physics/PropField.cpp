@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <random>
+#include <unordered_map>
 
 namespace physics {
 namespace {
@@ -24,6 +25,8 @@ constexpr int kSamplesPerAxis = 3;         // a prop feels the water at this man
 constexpr float kHighestFloor = 12.0f;     // a box with its top higher than this is not a floor: a tree or a roof
 constexpr float kPushableMass = 60.0f;     // props lighter than this, in kilograms, are pushed by people and not walked round
 constexpr size_t kMostWokenByAPerson = 4;  // a prop in a heap of more than this many is not pushed: moving a heap costs too much
+constexpr float kTouchReach = 0.3f;        // a prop within this distance (m) of one that is not pushable counts as touching it
+constexpr float kTouchCellSize = 2.0f;     // edge of the cells of the grid that finds such props
 constexpr size_t kPersonBodies = 64;       // how many people can push props at once
 constexpr glm::vec3 kPersonHalfSize{0.25f, 0.9f, 0.25f};  // a person is a box 50 cm wide and 1.8 m tall
 constexpr float kPersonDeadBand = 0.01f;   // a person who has moved less than this (metres) since the last call has not moved: the body stays
@@ -417,19 +420,75 @@ void PropField::RefreshInstances() {
     refresh(boxBodies, boxInstances);
     refresh(sphereBodies, sphereInstances);
 
+    // A prop is pushable when it is light enough for a person to push, is not part of a heap that the person would stir and
+    // keep awake, and does not touch one: a prop that leans on a heap would hit it when pushed and wake it just the same.
+    // People walk into a pushable prop and go round the others, which are obstacles like the heavy ones.
+    std::vector<uint32_t> props;
+    for (const std::vector<uint32_t>* bodies : {&boxBodies, &sphereBodies}) {
+        props.insert(props.end(), bodies->begin(), bodies->end());
+    }
+    std::vector<uint8_t> pushable(props.size(), 0);
+    for (size_t i = 0; i < props.size(); ++i) {
+        const Body& body = world.GetBody(props[i]);
+        pushable[i] = body.inverseMass * kPushableMass > 1.0f && world.IslandSize(props[i]) <= kMostWokenByAPerson;
+    }
+    // The props that are not pushable, by the cells of a grid that their bounds, grown by the reach of a touch, cover.
+    const auto cellOf = [](float coordinate) { return static_cast<int>(std::floor(coordinate / kTouchCellSize)); };
+    const auto cellKey = [](int x, int z) { return (static_cast<uint64_t>(static_cast<uint32_t>(x)) << 32) | static_cast<uint32_t>(z); };
+    const auto hasUsableBounds = [](const Body& body) {
+        return std::isfinite(body.boundsMin.x) && std::isfinite(body.boundsMin.z) && std::isfinite(body.boundsMax.x) &&
+               std::isfinite(body.boundsMax.z) && std::abs(body.boundsMin.x) < 1e6f && std::abs(body.boundsMin.z) < 1e6f &&
+               std::abs(body.boundsMax.x) < 1e6f && std::abs(body.boundsMax.z) < 1e6f;
+    };
+    std::unordered_map<uint64_t, std::vector<uint32_t>> fixedProps;
+    for (size_t i = 0; i < props.size(); ++i) {
+        const Body& body = world.GetBody(props[i]);
+        if (pushable[i] != 0 || !hasUsableBounds(body)) {
+            continue;
+        }
+        for (int x = cellOf(body.boundsMin.x - kTouchReach); x <= cellOf(body.boundsMax.x + kTouchReach); ++x) {
+            for (int z = cellOf(body.boundsMin.z - kTouchReach); z <= cellOf(body.boundsMax.z + kTouchReach); ++z) {
+                fixedProps[cellKey(x, z)].push_back(static_cast<uint32_t>(i));
+            }
+        }
+    }
+    for (size_t i = 0; i < props.size(); ++i) {
+        const Body& body = world.GetBody(props[i]);
+        if (pushable[i] == 0 || !hasUsableBounds(body)) {
+            pushable[i] = 0;
+            continue;
+        }
+        bool touchesFixedProp = false;
+        for (int x = cellOf(body.boundsMin.x); x <= cellOf(body.boundsMax.x) && !touchesFixedProp; ++x) {
+            for (int z = cellOf(body.boundsMin.z); z <= cellOf(body.boundsMax.z) && !touchesFixedProp; ++z) {
+                const auto cell = fixedProps.find(cellKey(x, z));
+                if (cell == fixedProps.end()) {
+                    continue;
+                }
+                for (uint32_t other : cell->second) {
+                    const Body& near = world.GetBody(props[other]);
+                    if (body.boundsMin.x - kTouchReach <= near.boundsMax.x && near.boundsMin.x - kTouchReach <= body.boundsMax.x &&
+                        body.boundsMin.y - kTouchReach <= near.boundsMax.y && near.boundsMin.y - kTouchReach <= body.boundsMax.y &&
+                        body.boundsMin.z - kTouchReach <= near.boundsMax.z && near.boundsMin.z - kTouchReach <= body.boundsMax.z) {
+                        touchesFixedProp = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if (touchesFixedProp) {
+            pushable[i] = 0;
+        }
+    }
+
     obstacles.clear();
     pushablePositions.clear();
-    for (const std::vector<uint32_t>* bodies : {&boxBodies, &sphereBodies}) {
-        for (uint32_t index : *bodies) {
-            const Body& body = world.GetBody(index);
-            // Light enough for a person to push, and not part of a heap that the person would stir and keep awake: people walk
-            // into such a prop instead of round it. A prop that is in a heap is an obstacle, like the heavy ones.
-            const bool pushable = body.inverseMass * kPushableMass > 1.0f && world.IslandSize(index) <= kMostWokenByAPerson;
-            world.SetPushable(index, pushable);
-            if (pushable) {
-                pushablePositions.emplace_back(body.position.x, body.position.z);
-                continue;
-            }
+    for (size_t i = 0; i < props.size(); ++i) {
+        const Body& body = world.GetBody(props[i]);
+        world.SetPushable(props[i], pushable[i] != 0);
+        if (pushable[i] != 0) {
+            pushablePositions.emplace_back(body.position.x, body.position.z);
+        } else {
             obstacles.push_back({{body.boundsMin.x, body.boundsMin.z}, {body.boundsMax.x, body.boundsMax.z}, body.boundsMin.y, body.boundsMax.y});
         }
     }

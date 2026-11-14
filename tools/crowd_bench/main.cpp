@@ -503,6 +503,8 @@ void RunBenchmark(const CityLayout& city, uint32_t agentCount, const BenchOption
     std::vector<PersonBody> peopleNearProps;
     std::vector<double> propsMs;
     size_t awakeProps = 0;
+    size_t previousAwake = 0;
+    size_t bigWakes = 0;  // times that a hundred props or more woke in one step after the heap had settled
     size_t peopleBodies = 0;
     size_t peopleOverflow = 0;
     if (options.props > 0) {
@@ -529,7 +531,12 @@ void RunBenchmark(const CityLayout& city, uint32_t agentCount, const BenchOption
             props.SetPeople(peopleNearProps, kStepSeconds);
             props.Update(kStepSeconds);
             propsMs.push_back(MillisecondsBetween(physicsStart, Clock::now()));
-            awakeProps += props.AwakeCount();
+            const size_t awakeNow = props.AwakeCount();
+            awakeProps += awakeNow;
+            if (step > 900 && awakeNow > previousAwake + 100) {
+                ++bigWakes;
+            }
+            previousAwake = awakeNow;
             peopleBodies += props.PeopleBodyCount();
             peopleOverflow += props.PeopleOverflow();
         }
@@ -572,7 +579,7 @@ void RunBenchmark(const CityLayout& city, uint32_t agentCount, const BenchOption
         const double allSteps = static_cast<double>(kWarmupSteps + options.steps);
         PrintTiming("props", Summarize(propsMs));
         std::cout << "  props: " << props.Count() << " in the world, " << std::setprecision(0) << awakeProps / allSteps
-                  << " awake per step on average, " << props.AwakeCount() << " awake at the end; " << peopleBodies / allSteps
+                  << " awake per step on average, " << props.AwakeCount() << " awake at the end, " << bigWakes << " sudden wakes of 100 or more; " << peopleBodies / allSteps
                   << " people pushing per step, and " << peopleOverflow / allSteps << " more without a body for lack of one\n"
                   << std::setprecision(1);
     }
