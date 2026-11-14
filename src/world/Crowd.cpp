@@ -78,6 +78,26 @@ void Crowd::Spawn(const CityLayout& city, const CrowdSettings& settings) {
     stepIndex = 0;
 }
 
+void Crowd::CollectPeopleAround(std::span<const glm::vec2> points, float reach, std::vector<PersonBody>& people) const {
+    people.clear();
+    const float reachSquared = reach * reach;
+    for (glm::vec2 point : points) {
+        neighbourGrid.ForEachNear(point, reach, [&](const crowd::NeighbourEntry& entry) {
+            const glm::vec2 offset = entry.position - point;
+            if (glm::dot(offset, offset) <= reachSquared) {
+                people.push_back({entry.agent, entry.position, entry.velocity, 0.0f});
+            }
+        });
+    }
+    // A person near several points is one person. The height of the ground is looked up once they are counted.
+    std::sort(people.begin(), people.end(), [](const PersonBody& a, const PersonBody& b) { return a.agent < b.agent; });
+    people.erase(std::unique(people.begin(), people.end(), [](const PersonBody& a, const PersonBody& b) { return a.agent == b.agent; }),
+                 people.end());
+    for (PersonBody& person : people) {
+        person.feet = walkways.WalkHeightAt(person.position);
+    }
+}
+
 void Crowd::SetFocusPoint(glm::vec3 point) {
     focusPoint = point;
 }

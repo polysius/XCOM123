@@ -53,6 +53,9 @@ public:
     // Tells the crowd where things stand that people must go round and that move, such as crates. Call it between
     // updates; the crowd keeps them in mind until the next call.
     void SetMovableObstacles(std::span<const MovableObstacle> obstacles) { walkways.SetMovableObstacles(obstacles); }
+    // Replaces the contents of `people` with everyone within `reach` metres of any of `points`, once each and in order of
+    // their index. Only people near the focus point are found: those are the ones simulated closely enough to push things.
+    void CollectPeopleAround(std::span<const glm::vec2> points, float reach, std::vector<PersonBody>& people) const;
     // The point the simulation level of detail is centred on, usually the camera position.
     void SetFocusPoint(glm::vec3 point);
     void Update(float deltaSeconds);

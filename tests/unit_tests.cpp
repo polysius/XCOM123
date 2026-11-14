@@ -288,6 +288,63 @@ void PropsFallOnTheGroundAndComeToRest() {
     Check(props.AwakeCount() < 15, "the heap has come to rest, awake " + std::to_string(props.AwakeCount()));
 }
 
+void LightPropsAreNotObstaclesAndHeavyOnesAre() {
+    physics::PropField props;
+    props.Spawn(CityWithASquare(), {.count = 80, .seed = 5});
+    // Dropped in the air, every prop is alone and the light ones can be pushed.
+    Check(props.Obstacles().size() + props.PushablePositions().size() == 80, "every prop is an obstacle or can be pushed, never both");
+    Check(!props.Obstacles().empty(), "the heavy crates are obstacles");
+    Check(!props.PushablePositions().empty(), "the barrels and balls can be pushed");
+}
+
+// People standing on a flat ground at the given indices in the crowd, a metre apart.
+std::vector<PersonBody> PeopleWithIndices(uint32_t first, uint32_t last) {
+    std::vector<PersonBody> people;
+    for (uint32_t agent = first; agent < last; ++agent) {
+        people.push_back({agent, {static_cast<float>(agent), 0.0f}, {1.0f, 0.0f}, 0.0f});
+    }
+    return people;
+}
+
+void PeopleTakeBodiesKeepThemAndAreCountedWhenThereAreNone() {
+    physics::PropField props;
+    props.Spawn(CityWithASquare(), {.count = 5, .seed = 2});
+    const std::vector<PersonBody> first = PeopleWithIndices(0, 70);
+    props.SetPeople(first);
+    Check(props.PeopleBodyCount() == 64 && props.PeopleOverflow() == 6, "64 people have bodies and the other 6 are counted");
+    Check(props.BodyOfPerson(0).has_value() && !props.BodyOfPerson(69).has_value(), "the lowest indices come first");
+    const uint32_t bodyOfTwenty = *props.BodyOfPerson(20);
+
+    // Some leave, some are new, and whoever stays keeps their body.
+    const std::vector<PersonBody> second = PeopleWithIndices(10, 80);
+    props.SetPeople(second);
+    Check(props.BodyOfPerson(20) == bodyOfTwenty, "someone who stays in the list keeps their body");
+    Check(!props.BodyOfPerson(5).has_value(), "someone who is gone has none");
+    Check(props.PeopleBodyCount() == 64, "and the bodies they left are given on");
+    Check(props.PeopleOverflow() == 6, "to the new ones as far as they go");
+
+    props.SetPeople({});
+    Check(props.PeopleBodyCount() == 0, "with nobody near, no body is in use");
+}
+
+void ABodyFollowsItsPersonAndStopsWhenTheyAreNotLookedAfter() {
+    physics::PropField props;
+    props.Spawn(CityWithASquare(), {.count = 3, .seed = 2});
+    std::vector<PersonBody> people = PeopleWithIndices(7, 8);
+    people[0].position = {-40.0f, 30.0f};  // far from the heap, on the ground
+    props.SetPeople(people);
+    const uint32_t body = *props.BodyOfPerson(7);
+    Check(glm::distance(props.World().GetBody(body).position, glm::vec3(-40.0f, 0.9f, 30.0f)) < 1e-4f, "a person's body stands where they do");
+
+    people[0].position.x += 0.02f;  // one frame of walking
+    props.SetPeople(people);
+    props.Update(1.0f / 60.0f);
+    Check(std::abs(props.World().GetBody(body).position.x - (-39.98f)) < 0.002f, "and walks with them");
+
+    props.Update(1.0f / 60.0f);  // nobody gave it a target this time
+    Check(std::abs(props.World().GetBody(body).position.x - (-39.98f)) < 0.002f, "and stays there when nobody says where to go next");
+}
+
 void PropsAreDroppedOverTheLargestSquare() {
     physics::PropField props;
     props.Spawn(CityWithASquare(), {.count = 10, .seed = 1});
@@ -870,6 +927,9 @@ int main() {
         {"ObstacleFollowsADiagonalTurn", ObstacleFollowsADiagonalTurn},
         {"ABodyIsDrawnWithTheLayoutOfABox", ABodyIsDrawnWithTheLayoutOfABox},
         {"PropsFallOnTheGroundAndComeToRest", PropsFallOnTheGroundAndComeToRest},
+        {"LightPropsAreNotObstaclesAndHeavyOnesAre", LightPropsAreNotObstaclesAndHeavyOnesAre},
+        {"PeopleTakeBodiesKeepThemAndAreCountedWhenThereAreNone", PeopleTakeBodiesKeepThemAndAreCountedWhenThereAreNone},
+        {"ABodyFollowsItsPersonAndStopsWhenTheyAreNotLookedAfter", ABodyFollowsItsPersonAndStopsWhenTheyAreNotLookedAfter},
         {"PropsAreDroppedOverTheLargestSquare", PropsAreDroppedOverTheLargestSquare},
         {"PropsAreTheSameEveryTime", PropsAreTheSameEveryTime},
         {"APropOnAHeightenedGroundIsDroppedOnItToo", APropOnAHeightenedGroundIsDroppedOnItToo},

@@ -67,6 +67,14 @@ public:
     // every step for a force that lasts, as buoyancy and drag do. A body that is asleep or static, or a force that
     // is not a finite number, is ignored.
     void AddForce(uint32_t index, glm::vec3 force, glm::vec3 worldPoint);
+    // Kinematic bodies (see BodyDescription::isKinematic). SetKinematicTarget gives the body the velocity that takes it to
+    // `target` in `seconds`, up to a top speed, so that it pushes what it meets as a mover would and does not jump through
+    // it. PlaceKinematic puts it at `position` at once and stops it, for a body that is given to something new: the contacts
+    // it had are forgotten, or their impulses would land at the place it left. A parked body is out of play and touches
+    // nothing, and costs nothing; park the bodies that are not in use rather than disabling them, which is for good.
+    void SetKinematicTarget(uint32_t index, glm::vec3 target, float seconds);
+    void PlaceKinematic(uint32_t index, glm::vec3 position);
+    void SetParked(uint32_t index, bool parked);
     // Takes a body out of the simulation for good: it stays where it is, as an immovable body, and costs
     // almost nothing. For bodies that have fallen out of the world.
     void Disable(uint32_t index);
@@ -75,6 +83,12 @@ public:
     void Update(float seconds);
     // Simulates exactly one fixed step.
     void Step();
+
+    // How many bodies are in the island of this one, itself included: the bodies that touch it, and those that touch
+    // them, and so on, as of the last step. A body that sleeps counts the bodies that sleep with it. An island sleeps
+    // and wakes as a whole, and stays awake while any of it moves, so this is how much one touch of a body costs. A
+    // static or kinematic body counts as an island of one.
+    size_t IslandSize(uint32_t index) const;
 
     // Statistics of the last step.
     size_t ContactPairCount() const { return manifolds.size(); }
@@ -96,6 +110,7 @@ private:
     void Integrate();
     void UpdateSleep();
     void RebuildStaticGrid();
+    void ForgetContactsOf(uint32_t index);
 
     PhysicsSettings settings;
     std::vector<Body> bodies;
@@ -110,6 +125,9 @@ private:
     // The grid of moving bodies, awake or asleep, rebuilt every step; and the moving bodies too big for it.
     std::unordered_map<uint64_t, std::vector<uint32_t>> movingGrid;
     std::vector<uint32_t> hugeMoving;
+
+    // Per body, how many bodies were in its island when the last step decided who sleeps.
+    std::vector<uint32_t> islandSizes;
 
     // Bodies that sleep together, by the group they were put to sleep as.
     std::unordered_map<uint32_t, std::vector<uint32_t>> sleepingGroups;

@@ -16,6 +16,7 @@ constexpr int64_t kMaxCellsPerBody = 4096;
 constexpr float kWarmStartDistance = 0.06f;
 constexpr float kDensityFloor = 1e-3f;
 constexpr float kMinSize = 0.005f;  // the smallest size of a shape: 5 mm
+constexpr float kMaxKinematicSpeed = 8.0f;  // metres per second: the fastest a kinematic body is driven
 
 uint64_t CellKey(const glm::ivec3& cell) {
     // 21 bits per axis, with an offset so that negative cells pack too. Cells that are very far apart
@@ -50,6 +51,11 @@ bool IsFinite(const glm::quat& q) {
 // Bodies whose position has gone wrong are left out of the grids, so that one bad number cannot spread.
 bool HasUsableBounds(const Body& body) {
     return IsFinite(body.boundsMin) && IsFinite(body.boundsMax);
+}
+
+// A body the solver can move: not static and not kinematic.
+bool IsDynamic(const Body& body) {
+    return !body.isStatic && !body.isKinematic;
 }
 
 uint64_t PairKey(uint32_t a, uint32_t b) {
@@ -130,7 +136,11 @@ uint32_t PhysicsWorld::AddBody(const BodyDescription& description) {
                            ? glm::normalize(description.orientation)
                            : glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
     body.isStatic = description.isStatic;
-    if (!description.isStatic) {
+    body.isKinematic = description.isKinematic && !description.isStatic;
+    if (body.isKinematic) {
+        // Infinite mass and no inertia: the zeros of a body that has no mass keep the solver from moving it.
+        body.linearVelocity = FiniteOr(description.linearVelocity, glm::vec3(0.0f));
+    } else if (!description.isStatic) {
         body.linearVelocity = FiniteOr(description.linearVelocity, glm::vec3(0.0f));
         body.angularVelocity = FiniteOr(description.angularVelocity, glm::vec3(0.0f));
         const float density = std::max(FiniteOr(description.density, 1000.0f), kDensityFloor);
@@ -160,7 +170,7 @@ uint32_t PhysicsWorld::AddBody(const BodyDescription& description) {
 
 void PhysicsWorld::ApplyImpulse(uint32_t index, glm::vec3 impulse, glm::vec3 worldPoint) {
     Body& body = bodies[index];
-    if (body.isStatic) {
+    if (body.isStatic || body.isKinematic) {
         return;
     }
     Wake(index);
@@ -171,6 +181,10 @@ void PhysicsWorld::ApplyImpulse(uint32_t index, glm::vec3 impulse, glm::vec3 wor
 void PhysicsWorld::SetVelocity(uint32_t index, glm::vec3 linear, glm::vec3 angular) {
     Body& body = bodies[index];
     if (body.isStatic) {
+        return;
+    }
+    if (body.isKinematic) {
+        body.linearVelocity = FiniteOr(linear, glm::vec3(0.0f));
         return;
     }
     Wake(index);
@@ -201,7 +215,7 @@ void PhysicsWorld::Wake(uint32_t index) {
 
 void PhysicsWorld::AddForce(uint32_t index, glm::vec3 force, glm::vec3 worldPoint) {
     Body& body = bodies[index];
-    if (body.isStatic || body.isAsleep || !IsFinite(force) || !IsFinite(worldPoint)) {
+    if (body.isStatic || body.isKinematic || body.isAsleep || !IsFinite(force) || !IsFinite(worldPoint)) {
         return;
     }
     body.externalForce += force;
@@ -210,7 +224,7 @@ void PhysicsWorld::AddForce(uint32_t index, glm::vec3 force, glm::vec3 worldPoin
 
 void PhysicsWorld::Disable(uint32_t index) {
     Body& body = bodies[index];
-    if (body.isStatic) {
+    if (body.isStatic || body.isKinematic) {
         return;
     }
     Wake(index);
@@ -223,14 +237,24 @@ void PhysicsWorld::Disable(uint32_t index) {
     staticGridIsStale = true;
 }
 
+size_t PhysicsWorld::IslandSize(uint32_t index) const {
+    const Body& body = bodies[index];
+    if (body.isAsleep) {
+        // Two bodies that sleep are not in contact as far as a step is concerned, so the group says who is with them.
+        const auto group = sleepingGroups.find(body.sleepGroup);
+        return group == sleepingGroups.end() ? 1 : group->second.size();
+    }
+    return index < islandSizes.size() ? std::max<size_t>(islandSizes[index], 1) : 1;
+}
+
 size_t PhysicsWorld::AwakeBodyCount() const {
-    return static_cast<size_t>(std::count_if(bodies.begin(), bodies.end(), [](const Body& b) { return !b.isStatic && !b.isAsleep; }));
+    return static_cast<size_t>(std::count_if(bodies.begin(), bodies.end(), [](const Body& b) { return IsDynamic(b) && !b.isAsleep; }));
 }
 
 float PhysicsWorld::KineticEnergy() const {
     float energy = 0.0f;
     for (const Body& body : bodies) {
-        if (body.isStatic) {
+        if (!IsDynamic(body)) {
             continue;
         }
         energy += 0.5f * glm::dot(body.linearVelocity, body.linearVelocity) / body.inverseMass;
@@ -276,6 +300,13 @@ void PhysicsWorld::Step() {
 // Applies gravity and brings the derived values of every awake body up to date.
 void PhysicsWorld::RefreshBodies() {
     for (Body& body : bodies) {
+        if (body.isKinematic) {
+            // No gravity and no forces: it goes where it was told to.
+            if (!body.isParked) {
+                UpdateBounds(body);
+            }
+            continue;
+        }
         if (body.isStatic || body.isAsleep) {
             continue;
         }
@@ -320,7 +351,7 @@ void PhysicsWorld::BuildMovingGrid() {
     hugeMoving.clear();
     for (uint32_t index = 0; index < static_cast<uint32_t>(bodies.size()); ++index) {
         const Body& body = bodies[index];
-        if (body.isStatic || !HasUsableBounds(body)) {
+        if (body.isStatic || body.isParked || !HasUsableBounds(body)) {
             continue;
         }
         const glm::ivec3 low = CellOf(body.boundsMin - kContactMargin, settings.dynamicCellSize);
@@ -346,7 +377,7 @@ void PhysicsWorld::CollectMovingCandidates(glm::vec3 low, glm::vec3 high, std::v
     const glm::ivec3 cellHigh = CellOf(high, settings.dynamicCellSize);
     if (CellCount(cellLow, cellHigh) > kMaxCellsPerBody) {
         for (uint32_t index = 0; index < static_cast<uint32_t>(bodies.size()); ++index) {
-            if (!bodies[index].isStatic && HasUsableBounds(bodies[index])) {
+            if (!bodies[index].isStatic && !bodies[index].isParked && HasUsableBounds(bodies[index])) {
                 candidates.push_back(index);
             }
         }
@@ -371,7 +402,7 @@ void PhysicsWorld::WakeSleepersTouchedByMovingBodies() {
     std::vector<uint32_t> candidates;
     for (uint32_t index = 0; index < static_cast<uint32_t>(bodies.size()); ++index) {
         const Body& body = bodies[index];
-        if (body.isStatic || body.isAsleep || !HasUsableBounds(body)) {
+        if (body.isStatic || body.isParked || body.isAsleep || !HasUsableBounds(body)) {
             continue;
         }
         // Gravity, and any forces from outside such as the lift of water, have changed the speed of every awake body
@@ -411,14 +442,14 @@ void PhysicsWorld::FindPairs(std::vector<std::pair<uint32_t, uint32_t>>& pairs) 
     // body that looks for it, and the search is widened by no more, so a heap at rest costs nothing extra.
     glm::vec3 longestReach(kContactMargin);
     for (const Body& body : bodies) {
-        if (!body.isStatic && !body.isAsleep && HasUsableBounds(body)) {
+        if (!body.isStatic && !body.isParked && !body.isAsleep && HasUsableBounds(body)) {
             longestReach = glm::max(longestReach, reachOf(body));
         }
     }
     std::vector<uint32_t> candidates;
     for (uint32_t index = 0; index < static_cast<uint32_t>(bodies.size()); ++index) {
         const Body& body = bodies[index];
-        if (body.isStatic || body.isAsleep || !HasUsableBounds(body)) {
+        if (body.isStatic || body.isParked || body.isAsleep || !HasUsableBounds(body)) {
             continue;
         }
         // A body that is moving fast looks ahead by the distance it covers in a step, up to a limit.
@@ -457,6 +488,9 @@ void PhysicsWorld::FindPairs(std::vector<std::pair<uint32_t, uint32_t>>& pairs) 
                 continue;
             }
             const Body& partner = bodies[other];
+            if (!IsDynamic(body) && !IsDynamic(partner)) {
+                continue;  // two bodies that nothing can move have no contact to solve
+            }
             const glm::vec3 partnerReach = partner.isStatic ? glm::vec3(kContactMargin) : reachOf(partner);
             if (BoundsOverlap(low, high, partner.boundsMin - partnerReach, partner.boundsMax + partnerReach)) {
                 pairs.emplace_back(std::min(index, other), std::max(index, other));
@@ -540,8 +574,8 @@ void PhysicsWorld::Solve() {
         const bool involvesSphere = bodyA.shape.type == ShapeType::Sphere || bodyB.shape.type == ShapeType::Sphere;
         const float rolling = std::sqrt(bodyA.material.rollingResistance * bodyB.material.rollingResistance) *
                               (involvesSphere ? 1.0f : settings.boxRollingShare);
-        const bool movesA = !bodyA.isStatic && !bodyA.isAsleep;
-        const bool movesB = !bodyB.isStatic && !bodyB.isAsleep;
+        const bool movesA = IsDynamic(bodyA) && !bodyA.isAsleep;
+        const bool movesB = IsDynamic(bodyB) && !bodyB.isAsleep;
         glm::vec3 tangents[2];
         TangentsOf(manifold.normal, tangents[0], tangents[1]);
 
@@ -727,7 +761,7 @@ void PhysicsWorld::RemoveOverlaps() {
 void PhysicsWorld::Integrate() {
     const float step = settings.fixedStep;
     for (Body& body : bodies) {
-        if (body.isStatic || body.isAsleep) {
+        if (body.isStatic || body.isParked || body.isAsleep) {
             continue;
         }
         const glm::vec3 previousPosition = body.position;
@@ -750,7 +784,7 @@ void PhysicsWorld::Integrate() {
 void PhysicsWorld::UpdateSleep() {
     const uint32_t count = static_cast<uint32_t>(bodies.size());
     for (Body& body : bodies) {
-        if (body.isStatic || body.isAsleep) {
+        if (!IsDynamic(body) || body.isAsleep) {
             continue;
         }
         body.quietSeconds = IsStill(body, settings) ? body.quietSeconds + settings.fixedStep : 0.0f;
@@ -767,13 +801,29 @@ void PhysicsWorld::UpdateSleep() {
         return index;
     };
     for (const Manifold& manifold : manifolds) {
-        if (!bodies[manifold.a].isStatic && !bodies[manifold.b].isStatic) {
+        // A kinematic body does not join the bodies it touches into a group: one that stands among a heap would
+        // otherwise keep it awake, and join two heaps that only have a person between them.
+        if (IsDynamic(bodies[manifold.a]) && IsDynamic(bodies[manifold.b])) {
             group[find(manifold.a)] = find(manifold.b);
+        }
+    }
+    islandSizes.assign(count, 1);
+    {
+        std::vector<uint32_t> members(count, 0);
+        for (uint32_t index = 0; index < count; ++index) {
+            if (IsDynamic(bodies[index])) {
+                ++members[find(index)];
+            }
+        }
+        for (uint32_t index = 0; index < count; ++index) {
+            if (IsDynamic(bodies[index])) {
+                islandSizes[index] = members[find(index)];
+            }
         }
     }
     std::vector<float> groupQuiet(count, std::numeric_limits<float>::max());
     for (uint32_t index = 0; index < count; ++index) {
-        if (!bodies[index].isStatic && !bodies[index].isAsleep) {
+        if (IsDynamic(bodies[index]) && !bodies[index].isAsleep) {
             const uint32_t root = find(index);
             groupQuiet[root] = std::min(groupQuiet[root], bodies[index].quietSeconds);
         }
@@ -782,7 +832,7 @@ void PhysicsWorld::UpdateSleep() {
     for (uint32_t index = 0; index < count; ++index) {
         Body& body = bodies[index];
         const uint32_t root = find(index);
-        if (body.isStatic || body.isAsleep || groupQuiet[root] < settings.sleepSeconds) {
+        if (!IsDynamic(body) || body.isAsleep || groupQuiet[root] < settings.sleepSeconds) {
             continue;
         }
         const auto known = sleepGroupOfRoot.find(root);
@@ -794,6 +844,45 @@ void PhysicsWorld::UpdateSleep() {
         body.angularVelocity = glm::vec3(0.0f);
         sleepingGroups[sleepGroup].push_back(index);
     }
+}
+
+void PhysicsWorld::SetKinematicTarget(uint32_t index, glm::vec3 target, float seconds) {
+    Body& body = bodies[index];
+    if (!body.isKinematic || !IsFinite(target) || !std::isfinite(seconds)) {
+        return;
+    }
+    glm::vec3 velocity = (target - body.position) / std::max(seconds, 1e-3f);
+    const float speed = glm::length(velocity);
+    if (speed > kMaxKinematicSpeed) {
+        velocity *= kMaxKinematicSpeed / speed;
+    }
+    body.linearVelocity = velocity;
+}
+
+void PhysicsWorld::PlaceKinematic(uint32_t index, glm::vec3 position) {
+    Body& body = bodies[index];
+    if (!body.isKinematic || !IsFinite(position)) {
+        return;
+    }
+    body.position = position;
+    body.linearVelocity = glm::vec3(0.0f);
+    UpdateBounds(body);
+    ForgetContactsOf(index);
+}
+
+void PhysicsWorld::SetParked(uint32_t index, bool parked) {
+    Body& body = bodies[index];
+    if (!body.isKinematic || body.isParked == parked) {
+        return;
+    }
+    body.isParked = parked;
+    body.linearVelocity = glm::vec3(0.0f);
+    ForgetContactsOf(index);
+}
+
+// Drops what the world remembers of the contacts of a body, which is the impulses that the next step starts from.
+void PhysicsWorld::ForgetContactsOf(uint32_t index) {
+    std::erase_if(previousManifolds, [index](const auto& entry) { return entry.second.a == index || entry.second.b == index; });
 }
 
 }  // namespace physics
