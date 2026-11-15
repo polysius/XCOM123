@@ -1,9 +1,11 @@
 #include "physics/PhysicsWorld.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <numeric>
 
+#include "core/JobSystem.h"
 #include "physics/Collision.h"
 
 namespace physics {
@@ -16,6 +18,9 @@ constexpr int64_t kMaxCellsPerBody = 4096;
 constexpr float kWarmStartDistance = 0.06f;
 constexpr float kDensityFloor = 1e-3f;
 constexpr float kMinSize = 0.005f;  // the smallest size of a shape: 5 mm
+constexpr size_t kBodiesPerBroadphaseChunk = 64;   // bodies that look for partners on one thread at a time
+constexpr size_t kPairsPerNarrowphaseChunk = 128;  // and pairs that get their contacts on one thread at a time
+constexpr size_t kMostRetainedCells = 1u << 16;    // cells of the grid of moving bodies kept between steps
 constexpr float kMaxKinematicSpeed = 8.0f;  // metres per second: the fastest a kinematic body is driven
 
 uint64_t CellKey(const glm::ivec3& cell) {
@@ -289,16 +294,31 @@ void PhysicsWorld::Update(float seconds) {
 }
 
 void PhysicsWorld::Step() {
+    using Clock = std::chrono::steady_clock;
+    Clock::time_point phaseStart = Clock::now();
+    // Adds the time since the last mark to `total` and starts the next phase.
+    const auto mark = [&phaseStart](double& total) {
+        const Clock::time_point now = Clock::now();
+        total += std::chrono::duration<double, std::milli>(now - phaseStart).count();
+        phaseStart = now;
+    };
     RefreshBodies();
     BuildMovingGrid();
     WakeSleepersTouchedByMovingBodies();
+    mark(timings.prepare);
     std::vector<std::pair<uint32_t, uint32_t>> pairs;
     FindPairs(pairs);
+    mark(timings.pairs);
     BuildManifolds(pairs);
+    mark(timings.manifolds);
     Solve();
+    mark(timings.solve);
     RemoveOverlaps();
+    mark(timings.overlaps);
     Integrate();
     UpdateSleep();
+    mark(timings.finish);
+    ++timings.steps;
 
     previousManifolds.clear();
     for (const Manifold& manifold : manifolds) {
@@ -356,7 +376,15 @@ void PhysicsWorld::RebuildStaticGrid() {
 
 // Moving bodies, awake or not, in a grid of their own for this step.
 void PhysicsWorld::BuildMovingGrid() {
-    movingGrid.clear();
+    // The lists of the cells are emptied and kept, so that the grid does not allocate them again every step. Cells that
+    // nothing visits for long would pile up, so a grid with too many of them is thrown away.
+    if (movingGrid.size() > kMostRetainedCells) {
+        movingGrid.clear();
+    } else {
+        for (auto& cell : movingGrid) {
+            cell.second.clear();
+        }
+    }
     hugeMoving.clear();
     for (uint32_t index = 0; index < static_cast<uint32_t>(bodies.size()); ++index) {
         const Body& body = bodies[index];
@@ -408,7 +436,10 @@ void PhysicsWorld::CollectMovingCandidates(glm::vec3 low, glm::vec3 high, std::v
 // found, so that the whole group takes part in this step: the body it hits, and the ones it rests on.
 // Something that is only settling does not.
 void PhysicsWorld::WakeSleepersTouchedByMovingBodies() {
-    std::vector<uint32_t> candidates;
+    if (std::none_of(bodies.begin(), bodies.end(), [](const Body& body) { return body.isAsleep; })) {
+        return;  // a heap that is still falling has nobody to wake
+    }
+    std::vector<uint32_t> moving;
     for (uint32_t index = 0; index < static_cast<uint32_t>(bodies.size()); ++index) {
         const Body& body = bodies[index];
         if (body.isStatic || body.isParked || body.isAsleep || !HasUsableBounds(body)) {
@@ -419,21 +450,35 @@ void PhysicsWorld::WakeSleepersTouchedByMovingBodies() {
         // among because of it.
         Body asBeforeForces = body;
         asBeforeForces.linearVelocity -= body.appliedVelocityStep;
-        if (IsStill(asBeforeForces, settings)) {
-            continue;
+        if (!IsStill(asBeforeForces, settings)) {
+            moving.push_back(index);
         }
-        const glm::vec3 reach =
-            glm::min(glm::abs(body.linearVelocity) * settings.fixedStep, glm::vec3(settings.maxLookAhead)) + kContactMargin;
-        candidates.clear();
-        CollectMovingCandidates(body.boundsMin - reach, body.boundsMax + reach, candidates);
-        std::sort(candidates.begin(), candidates.end());
-        candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
-        for (uint32_t other : candidates) {
-            const Body& partner = bodies[other];
-            if (partner.isAsleep && CanInteract(body, partner) &&
-                BoundsOverlap(body.boundsMin - reach, body.boundsMax + reach, partner.boundsMin, partner.boundsMax)) {
-                Wake(other);
+    }
+    // Each moving body looks for the sleepers it touches on its own, reading the grid and writing only its own list; the
+    // sleepers are woken afterwards, one at a time.
+    std::vector<std::vector<uint32_t>> touched(moving.size());
+    Jobs().ParallelFor(moving.size(), kBodiesPerBroadphaseChunk, [&](size_t begin, size_t end) {
+        std::vector<uint32_t> candidates;
+        for (size_t slot = begin; slot < end; ++slot) {
+            const Body& body = bodies[moving[slot]];
+            const glm::vec3 reach =
+                glm::min(glm::abs(body.linearVelocity) * settings.fixedStep, glm::vec3(settings.maxLookAhead)) + kContactMargin;
+            candidates.clear();
+            CollectMovingCandidates(body.boundsMin - reach, body.boundsMax + reach, candidates);
+            std::sort(candidates.begin(), candidates.end());
+            candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+            for (uint32_t other : candidates) {
+                const Body& partner = bodies[other];
+                if (partner.isAsleep && CanInteract(body, partner) &&
+                    BoundsOverlap(body.boundsMin - reach, body.boundsMax + reach, partner.boundsMin, partner.boundsMax)) {
+                    touched[slot].push_back(other);
+                }
             }
+        }
+    });
+    for (const std::vector<uint32_t>& sleepers : touched) {
+        for (uint32_t other : sleepers) {
+            Wake(other);
         }
     }
 }
@@ -448,125 +493,151 @@ void PhysicsWorld::FindPairs(std::vector<std::pair<uint32_t, uint32_t>>& pairs) 
     const auto reachOf = [this](const Body& body) {
         return glm::min(glm::abs(body.linearVelocity) * settings.fixedStep, glm::vec3(settings.maxLookAhead)) + kContactMargin;
     };
-    // The furthest any awake body reaches this step. A partner may come from that far beyond the reach of the
-    // body that looks for it, and the search is widened by no more, so a heap at rest costs nothing extra.
+    // The bodies that look for partners, and the furthest any of them reaches this step. A partner may come from that
+    // far beyond the reach of the body that looks for it, and the search is widened by no more, so a heap at rest costs
+    // nothing extra.
+    std::vector<uint32_t> searching;
     glm::vec3 longestReach(kContactMargin);
-    for (const Body& body : bodies) {
-        if (!body.isStatic && !body.isParked && !body.isAsleep && HasUsableBounds(body)) {
-            longestReach = glm::max(longestReach, reachOf(body));
-        }
-    }
-    std::vector<uint32_t> candidates;
     for (uint32_t index = 0; index < static_cast<uint32_t>(bodies.size()); ++index) {
         const Body& body = bodies[index];
-        if (body.isStatic || body.isParked || body.isAsleep || !HasUsableBounds(body)) {
-            continue;
+        if (!body.isStatic && !body.isParked && !body.isAsleep && HasUsableBounds(body)) {
+            longestReach = glm::max(longestReach, reachOf(body));
+            searching.push_back(index);
         }
-        // A body that is moving fast looks ahead by the distance it covers in a step, up to a limit.
-        const glm::vec3 reach = reachOf(body);
-        const glm::vec3 low = body.boundsMin - reach;
-        const glm::vec3 high = body.boundsMax + reach;
+    }
+    // Every body searches on its own, reading the grids and writing only the pairs it found, so the work is shared out
+    // between threads. The pairs are put in order afterwards, so the result is the same however it was shared.
+    std::vector<std::vector<std::pair<uint32_t, uint32_t>>> found(searching.size());
+    Jobs().ParallelFor(searching.size(), kBodiesPerBroadphaseChunk, [&](size_t begin, size_t end) {
+        std::vector<uint32_t> candidates;
+        for (size_t slot = begin; slot < end; ++slot) {
+            const uint32_t index = searching[slot];
+            const Body& body = bodies[index];
+            // A body that is moving fast looks ahead by the distance it covers in a step, up to a limit.
+            const glm::vec3 reach = reachOf(body);
+            const glm::vec3 low = body.boundsMin - reach;
+            const glm::vec3 high = body.boundsMax + reach;
 
-        candidates.assign(hugeStatics.begin(), hugeStatics.end());
-        const glm::ivec3 staticLow = CellOf(low, settings.staticCellSize);
-        const glm::ivec3 staticHigh = CellOf(high, settings.staticCellSize);
-        if (CellCount(staticLow, staticHigh) > kMaxCellsPerBody) {
-            for (uint32_t other = 0; other < static_cast<uint32_t>(bodies.size()); ++other) {
-                if (bodies[other].isStatic) {
-                    candidates.push_back(other);
+            candidates.assign(hugeStatics.begin(), hugeStatics.end());
+            const glm::ivec3 staticLow = CellOf(low, settings.staticCellSize);
+            const glm::ivec3 staticHigh = CellOf(high, settings.staticCellSize);
+            if (CellCount(staticLow, staticHigh) > kMaxCellsPerBody) {
+                for (uint32_t other = 0; other < static_cast<uint32_t>(bodies.size()); ++other) {
+                    if (bodies[other].isStatic) {
+                        candidates.push_back(other);
+                    }
                 }
-            }
-        } else {
-            for (int x = staticLow.x; x <= staticHigh.x; ++x) {
-                for (int y = staticLow.y; y <= staticHigh.y; ++y) {
-                    for (int z = staticLow.z; z <= staticHigh.z; ++z) {
-                        const auto cell = staticGrid.find(CellKey({x, y, z}));
-                        if (cell != staticGrid.end()) {
-                            candidates.insert(candidates.end(), cell->second.begin(), cell->second.end());
+            } else {
+                for (int x = staticLow.x; x <= staticHigh.x; ++x) {
+                    for (int y = staticLow.y; y <= staticHigh.y; ++y) {
+                        for (int z = staticLow.z; z <= staticHigh.z; ++z) {
+                            const auto cell = staticGrid.find(CellKey({x, y, z}));
+                            if (cell != staticGrid.end()) {
+                                candidates.insert(candidates.end(), cell->second.begin(), cell->second.end());
+                            }
                         }
                     }
                 }
             }
-        }
-        // A partner that is itself moving fast may come from beyond this body's reach.
-        CollectMovingCandidates(low - longestReach, high + longestReach, candidates);
+            // A partner that is itself moving fast may come from beyond this body's reach.
+            CollectMovingCandidates(low - longestReach, high + longestReach, candidates);
 
-        std::sort(candidates.begin(), candidates.end());
-        candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
-        for (uint32_t other : candidates) {
-            if (other == index) {
-                continue;
-            }
-            const Body& partner = bodies[other];
-            if (!CanInteract(body, partner)) {
-                continue;  // no contact to solve between two bodies that nothing can move, or that kinematic bodies pass through
-            }
-            const glm::vec3 partnerReach = partner.isStatic ? glm::vec3(kContactMargin) : reachOf(partner);
-            if (BoundsOverlap(low, high, partner.boundsMin - partnerReach, partner.boundsMax + partnerReach)) {
-                pairs.emplace_back(std::min(index, other), std::max(index, other));
+            std::sort(candidates.begin(), candidates.end());
+            candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+            for (uint32_t other : candidates) {
+                if (other == index) {
+                    continue;
+                }
+                const Body& partner = bodies[other];
+                if (!CanInteract(body, partner)) {
+                    continue;  // no contact to solve between two bodies that nothing can move, or that kinematic bodies pass through
+                }
+                const glm::vec3 partnerReach = partner.isStatic ? glm::vec3(kContactMargin) : reachOf(partner);
+                if (BoundsOverlap(low, high, partner.boundsMin - partnerReach, partner.boundsMax + partnerReach)) {
+                    found[slot].emplace_back(std::min(index, other), std::max(index, other));
+                }
             }
         }
+    });
+    for (const auto& list : found) {
+        pairs.insert(pairs.end(), list.begin(), list.end());
     }
     std::sort(pairs.begin(), pairs.end());
     pairs.erase(std::unique(pairs.begin(), pairs.end()), pairs.end());
 }
 
 void PhysicsWorld::BuildManifolds(const std::vector<std::pair<uint32_t, uint32_t>>& pairs) {
+    // Every pair is worked out on its own, reading the bodies and the contacts of the last step and writing its own
+    // slot, so the work is shared out between threads; the contacts are gathered in the order of the pairs.
+    std::vector<Manifold> results(pairs.size());
+    std::vector<uint8_t> touching(pairs.size(), 0);
+    Jobs().ParallelFor(pairs.size(), kPairsPerNarrowphaseChunk, [&](size_t begin, size_t end) {
+        for (size_t slot = begin; slot < end; ++slot) {
+            const auto [a, b] = pairs[slot];
+            // Bodies that are closing in on each other get contacts before they touch, as far apart as they
+            // will have travelled towards each other by the end of the step.
+            const float closing = glm::length(bodies[a].linearVelocity - bodies[b].linearVelocity) * settings.fixedStep;
+            const float margin = kContactMargin + std::min(closing, settings.maxLookAhead);
+
+            Manifold& manifold = results[slot];
+            manifold.a = a;
+            manifold.b = b;
+            if (!Collide(bodies[a], bodies[b], manifold, margin)) {
+                continue;
+            }
+            touching[slot] = 1;
+
+            // Start each point from the impulses of the nearest point of the last step.
+            const auto previous = previousManifolds.find(PairKey(a, b));
+            if (previous != previousManifolds.end()) {
+                bool used[kMaxContactsPerPair] = {};
+                for (int i = 0; i < manifold.count; ++i) {
+                    int nearest = -1;
+                    float nearestDistance = kWarmStartDistance;
+                    for (int j = 0; j < previous->second.count; ++j) {
+                        const float distance = glm::distance(manifold.points[i].position, previous->second.points[j].position);
+                        if (!used[j] && distance < nearestDistance) {
+                            nearestDistance = distance;
+                            nearest = j;
+                        }
+                    }
+                    if (nearest >= 0) {
+                        used[nearest] = true;
+                        const ContactPoint& old = previous->second.points[nearest];
+                        manifold.points[i].normalImpulse = old.normalImpulse;
+                        manifold.points[i].tangentImpulse[0] = old.tangentImpulse[0];
+                        manifold.points[i].tangentImpulse[1] = old.tangentImpulse[1];
+                        manifold.points[i].rollingImpulse = old.rollingImpulse;
+                    }
+                }
+            }
+            // The bounce of a point comes from the speed of the nearest point of the last step, which may have
+            // moved as far as the bodies closed in.
+            if (previous != previousManifolds.end()) {
+                const float radius = kWarmStartDistance + closing * 1.5f;
+                for (int i = 0; i < manifold.count; ++i) {
+                    float nearestDistance = radius;
+                    for (int j = 0; j < previous->second.count; ++j) {
+                        const float distance = glm::distance(manifold.points[i].position, previous->second.points[j].position);
+                        if (distance < nearestDistance) {
+                            nearestDistance = distance;
+                            manifold.points[i].carriedImpactSpeed = previous->second.points[j].impactSpeed;
+                        }
+                    }
+                }
+            }
+        }
+    });
     manifolds.clear();
-    for (const auto& [a, b] : pairs) {
-        // Bodies that are closing in on each other get contacts before they touch, as far apart as they
-        // will have travelled towards each other by the end of the step.
-        const float closing = glm::length(bodies[a].linearVelocity - bodies[b].linearVelocity) * settings.fixedStep;
-        const float margin = kContactMargin + std::min(closing, settings.maxLookAhead);
-
-        Manifold manifold;
-        manifold.a = a;
-        manifold.b = b;
-        if (!Collide(bodies[a], bodies[b], manifold, margin)) {
-            continue;
+    for (size_t slot = 0; slot < results.size(); ++slot) {
+        if (touching[slot] != 0) {
+            manifolds.push_back(results[slot]);
         }
-
-        // Start each point from the impulses of the nearest point of the last step.
-        const auto previous = previousManifolds.find(PairKey(a, b));
-        if (previous != previousManifolds.end()) {
-            bool used[kMaxContactsPerPair] = {};
-            for (int i = 0; i < manifold.count; ++i) {
-                int nearest = -1;
-                float nearestDistance = kWarmStartDistance;
-                for (int j = 0; j < previous->second.count; ++j) {
-                    const float distance = glm::distance(manifold.points[i].position, previous->second.points[j].position);
-                    if (!used[j] && distance < nearestDistance) {
-                        nearestDistance = distance;
-                        nearest = j;
-                    }
-                }
-                if (nearest >= 0) {
-                    used[nearest] = true;
-                    const ContactPoint& old = previous->second.points[nearest];
-                    manifold.points[i].normalImpulse = old.normalImpulse;
-                    manifold.points[i].tangentImpulse[0] = old.tangentImpulse[0];
-                    manifold.points[i].tangentImpulse[1] = old.tangentImpulse[1];
-                    manifold.points[i].rollingImpulse = old.rollingImpulse;
-                }
-            }
-        }
-        // The bounce of a point comes from the speed of the nearest point of the last step, which may have
-        // moved as far as the bodies closed in.
-        if (previous != previousManifolds.end()) {
-            const float radius = kWarmStartDistance + closing * 1.5f;
-            for (int i = 0; i < manifold.count; ++i) {
-                float nearestDistance = radius;
-                for (int j = 0; j < previous->second.count; ++j) {
-                    const float distance = glm::distance(manifold.points[i].position, previous->second.points[j].position);
-                    if (distance < nearestDistance) {
-                        nearestDistance = distance;
-                        manifold.points[i].carriedImpactSpeed = previous->second.points[j].impactSpeed;
-                    }
-                }
-            }
-        }
-        manifolds.push_back(manifold);
     }
+}
+
+JobSystem& PhysicsWorld::Jobs() const {
+    return jobs != nullptr ? *jobs : JobSystem::Shared();
 }
 
 void PhysicsWorld::Solve() {

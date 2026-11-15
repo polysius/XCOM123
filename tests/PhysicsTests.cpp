@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "core/JobSystem.h"
 #include "physics/Collision.h"
 #include "physics/PhysicsWorld.h"
 
@@ -416,6 +417,33 @@ void TheSameWorldAlwaysGivesTheSameResult() {
                     first.GetBody(i).orientation == second.GetBody(i).orientation;
     }
     Check(identical, "two runs of the same pile are identical to the last bit");
+}
+
+void TheResultDoesNotDependOnTheNumberOfThreads() {
+    // Big enough that the broadphase and the narrowphase are split into several chunks, and long enough that bodies fall
+    // asleep and a late ball wakes some of them.
+    JobSystem alone(0);
+    JobSystem many(6);
+    PhysicsWorld serial(PhysicsSettings{}, &alone);
+    PhysicsWorld parallel(PhysicsSettings{}, &many);
+    BuildPile(serial, 400);
+    BuildPile(parallel, 400);
+    for (PhysicsWorld* world : {&serial, &parallel}) {
+        Simulate(*world, 6.0f);
+        const uint32_t ball = AddSphere(*world, {0.0f, 6.0f, 0.0f}, 0.4f);
+        world->SetVelocity(ball, {0.0f, -8.0f, 0.0f}, glm::vec3(0.0f));
+        Simulate(*world, 3.0f);
+    }
+    bool identical = serial.BodyCount() == parallel.BodyCount();
+    size_t asleep = 0;
+    for (uint32_t i = 0; identical && i < serial.BodyCount(); ++i) {
+        identical = serial.GetBody(i).position == parallel.GetBody(i).position &&
+                    serial.GetBody(i).orientation == parallel.GetBody(i).orientation &&
+                    serial.GetBody(i).isAsleep == parallel.GetBody(i).isAsleep;
+        asleep += serial.GetBody(i).isAsleep ? 1 : 0;
+    }
+    Check(identical, "a pile of 400 comes out the same on one thread and on seven, to the last bit");
+    Check(asleep > 0, "and part of it was asleep, so that the waking was part of what was compared");
 }
 
 void APileSettlesDownAndNothingFallsThroughTheGround() {
@@ -1234,6 +1262,7 @@ int main() {
         {"AnImpulseWakesASleepingBody", AnImpulseWakesASleepingBody},
         {"ABallThatLandsOnASleepingBoxWakesIt", ABallThatLandsOnASleepingBoxWakesIt},
         {"TheSameWorldAlwaysGivesTheSameResult", TheSameWorldAlwaysGivesTheSameResult},
+        {"TheResultDoesNotDependOnTheNumberOfThreads", TheResultDoesNotDependOnTheNumberOfThreads},
         {"AWalkingPersonPushesABallAheadAndIsNotSlowedByIt", AWalkingPersonPushesABallAheadAndIsNotSlowedByIt},
         {"AFastPersonDoesNotRunThroughABall", AFastPersonDoesNotRunThroughABall},
         {"KinematicBodiesTouchingNothingThatMovesStayWhereTheyAre", KinematicBodiesTouchingNothingThatMovesStayWhereTheyAre},

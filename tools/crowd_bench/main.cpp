@@ -578,6 +578,13 @@ void RunBenchmark(const CityLayout& city, uint32_t agentCount, const BenchOption
     if (options.props > 0) {
         const double allSteps = static_cast<double>(kWarmupSteps + options.steps);
         PrintTiming("props", Summarize(propsMs));
+        const physics::PhaseTimings& phases = props.World().Timings();
+        const double physicsSteps = static_cast<double>(std::max<uint64_t>(phases.steps, 1));
+        std::cout << std::setprecision(3) << "  physics phases per step: prepare " << phases.prepare / physicsSteps << " ms, pairs "
+                  << phases.pairs / physicsSteps << ", manifolds " << phases.manifolds / physicsSteps << ", solve "
+                  << phases.solve / physicsSteps << ", overlaps " << phases.overlaps / physicsSteps << ", finish "
+                  << phases.finish / physicsSteps << " (" << phases.steps << " steps)\n"
+                  << std::setprecision(1);
         std::cout << "  props: " << props.Count() << " in the world, " << std::setprecision(0) << awakeProps / allSteps
                   << " awake per step on average, " << props.AwakeCount() << " awake at the end, " << bigWakes << " sudden wakes of 100 or more; " << peopleBodies / allSteps
                   << " people pushing per step, and " << peopleOverflow / allSteps << " more without a body for lack of one\n"
