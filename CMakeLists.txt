@@ -160,7 +160,7 @@ endif()
 add_test(NAME unit_tests COMMAND unit_tests)
 
 # physics_tests checks the rigid body physics: falling, resting, stacking, bouncing, friction, sleeping.
-add_executable(physics_tests tests/PhysicsTests.cpp ${PHYSICS_SOURCES} ${FLUID_SOURCES})
+add_executable(physics_tests tests/PhysicsTests.cpp src/core/JobSystem.cpp ${PHYSICS_SOURCES} ${FLUID_SOURCES})
 target_include_directories(physics_tests PRIVATE src)
 target_link_libraries(physics_tests PRIVATE glm::glm)
 target_compile_definitions(physics_tests PRIVATE GLM_FORCE_RADIANS GLM_FORCE_DEPTH_ZERO_TO_ONE)

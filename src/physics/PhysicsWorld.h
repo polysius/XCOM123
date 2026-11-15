@@ -23,6 +23,8 @@
 // The same bodies and the same calls always give the same result: pairs are processed in order of
 // their body indices and nothing depends on the order of a hash table.
 
+class JobSystem;
+
 namespace physics {
 
 struct PhysicsSettings {
@@ -46,9 +48,23 @@ struct PhysicsSettings {
     float dynamicCellSize = 4.0f;     // and of the grid of moving bodies
 };
 
+// Where the steps of a world spent their time, in milliseconds added up over every step so far.
+struct PhaseTimings {
+    double prepare = 0.0;    // gravity, the grid of moving bodies, waking sleepers
+    double pairs = 0.0;      // the broadphase
+    double manifolds = 0.0;  // the narrowphase
+    double solve = 0.0;      // the sequential impulses
+    double overlaps = 0.0;   // removing overlaps
+    double finish = 0.0;     // integrating and sleeping
+    uint64_t steps = 0;
+};
+
 class PhysicsWorld {
 public:
-    explicit PhysicsWorld(const PhysicsSettings& worldSettings = {}) : settings(worldSettings) {}
+    // The broadphase and the narrowphase run on `jobSystem`, or on the engine's shared pool when it is null. The result
+    // does not depend on how the work is shared out between threads.
+    explicit PhysicsWorld(const PhysicsSettings& worldSettings = {}, JobSystem* jobSystem = nullptr)
+        : settings(worldSettings), jobs(jobSystem) {}
 
     // Adds a body and returns its index, which stays valid for the life of the world. Sizes that are
     // not positive and numbers that are not finite are replaced by small safe values.
@@ -93,6 +109,9 @@ public:
     // static or kinematic body counts as an island of one.
     size_t IslandSize(uint32_t index) const;
 
+    // Time spent so far in each part of a step, for finding what costs the most.
+    const PhaseTimings& Timings() const { return timings; }
+
     // Statistics of the last step.
     size_t ContactPairCount() const { return manifolds.size(); }
     size_t AwakeBodyCount() const;
@@ -115,7 +134,11 @@ private:
     void RebuildStaticGrid();
     void ForgetContactsOf(uint32_t index);
 
+    JobSystem& Jobs() const;
+
     PhysicsSettings settings;
+    JobSystem* jobs = nullptr;
+    PhaseTimings timings;
     std::vector<Body> bodies;
     float leftoverSeconds = 0.0f;
 
