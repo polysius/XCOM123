@@ -998,6 +998,217 @@ void ForcesOnBodiesThatCannotMoveOrAreNotNumbersAreIgnored() {
 
 }  // namespace
 
+// Kinematic bodies -----------------------------------------------------------------------------
+
+// A person as the crowd gives one to the physics: a box 50 cm wide and 1.8 m tall, standing on y = 0 at `feet`.
+uint32_t AddPerson(PhysicsWorld& world, glm::vec3 feet) {
+    BodyDescription person;
+    person.shape = Shape::Box({0.25f, 0.9f, 0.25f});
+    person.position = feet + glm::vec3(0.0f, 0.9f, 0.0f);
+    person.isKinematic = true;
+    return world.AddBody(person);
+}
+
+// Walks the person along +X at `speed` for `seconds`, one step at a time, as the crowd does every frame.
+void WalkPerson(PhysicsWorld& world, uint32_t person, float speed, float seconds) {
+    const float step = world.Settings().fixedStep;
+    const int steps = static_cast<int>(std::lround(seconds / step));
+    for (int i = 0; i < steps; ++i) {
+        world.SetKinematicTarget(person, world.GetBody(person).position + glm::vec3(speed * step, 0.0f, 0.0f), step);
+        world.Step();
+    }
+}
+
+void AWalkingPersonPushesABallAheadAndIsNotSlowedByIt() {
+    PhysicsWorld world;
+    AddGround(world);
+    const uint32_t ball = AddSphere(world, {2.0f, 0.3f, 0.0f}, 0.3f);
+    const uint32_t person = AddPerson(world, {0.0f, 0.0f, 0.0f});
+    WalkPerson(world, person, 1.5f, 3.0f);
+    Check(Near(world.GetBody(person).position.x, 4.5f, 0.02f), "the person walks the same way with or without the ball");
+    Check(Near(world.GetBody(person).position.y, 0.9f, 1e-4f), "and does not rise or sink");
+    Check(world.GetBody(ball).position.x > world.GetBody(person).position.x, "the ball is ahead of the person");
+    Check(world.GetBody(ball).position.x < 7.0f, "and not thrown far ahead, it is at " + std::to_string(world.GetBody(ball).position.x));
+    Check(Near(world.GetBody(ball).position.z, 0.0f, 0.4f), "pushed in the way the person walks");
+}
+
+void AFastPersonDoesNotRunThroughABall() {
+    PhysicsWorld world;
+    AddGround(world);
+    const uint32_t ball = AddSphere(world, {0.7f, 0.3f, 0.0f}, 0.3f);
+    const uint32_t person = AddPerson(world, {0.0f, 0.0f, 0.0f});
+    WalkPerson(world, person, 6.0f, 1.0f);  // a runner, faster than the crowd goes
+    Check(world.GetBody(ball).position.x >= world.GetBody(person).position.x, "a ball is not run through by a fast person");
+}
+
+void KinematicBodiesTouchingNothingThatMovesStayWhereTheyAre() {
+    PhysicsWorld world;
+    AddGround(world);
+    const uint32_t first = AddPerson(world, {0.0f, 0.0f, 0.0f});
+    const uint32_t second = AddPerson(world, {0.1f, 0.0f, 0.0f});  // overlapping the first
+    Simulate(world, 2.0f);
+    for (uint32_t person : {first, second}) {
+        const glm::vec3 at = world.GetBody(person).position;
+        Check(std::isfinite(at.x) && std::isfinite(at.y) && std::isfinite(at.z), "a person on the ground has a position");
+        Check(Near(at.y, 0.9f, 1e-5f), "and has not sunk into it");
+    }
+    Check(Near(world.GetBody(first).position.x, 0.0f, 1e-5f) && Near(world.GetBody(second).position.x, 0.1f, 1e-5f),
+          "two people who overlap do not push each other");
+    Check(std::isfinite(world.KineticEnergy()), "energy of a world with people in it is a number");
+    Check(world.ContactPairCount() == 0, "nothing needs solving between people and the ground");
+}
+
+void NothingPushesAKinematicBody() {
+    PhysicsWorld world;
+    AddGround(world);
+    const uint32_t person = AddPerson(world, {0.0f, 0.0f, 0.0f});
+    const uint32_t crate = AddBox(world, {0.0f, 3.0f, 0.0f}, {0.4f, 0.4f, 0.4f});  // falls on the person's head
+    world.ApplyImpulse(person, {1000.0f, 0.0f, 0.0f}, {0.0f, 0.9f, 0.0f});
+    world.AddForce(person, {1000.0f, 0.0f, 0.0f}, {0.0f, 0.9f, 0.0f});
+    Simulate(world, 2.0f);
+    Check(Near(world.GetBody(person).position.x, 0.0f, 1e-5f) && Near(world.GetBody(person).position.y, 0.9f, 1e-5f),
+          "an impulse, a force and a falling crate do not move a person");
+    Check(glm::length(world.GetBody(person).linearVelocity) < 1e-5f, "or give them speed");
+    Check(world.GetBody(crate).position.y > 0.0f, "and the crate has not gone through anything");
+}
+
+void ACrateThatFallsOnAPersonLandsOnTheGroundBesideThemOrOnTheirHead() {
+    PhysicsWorld world;
+    AddGround(world);
+    AddPerson(world, {0.0f, 0.0f, 0.0f});
+    const uint32_t crate = AddBox(world, {0.3f, 3.0f, 0.0f}, {0.4f, 0.4f, 0.4f});
+    Simulate(world, 4.0f);
+    const Body& body = world.GetBody(crate);
+    const bool onTheGround = Near(body.position.y, 0.4f, 0.05f);
+    const bool onTheHead = Near(body.position.y, 1.8f + 0.4f, 0.06f);
+    Check(onTheGround || onTheHead, "the crate rests on the ground or on the head, at height " + std::to_string(body.position.y));
+    Check(body.isAsleep, "and sleeps");
+}
+
+void AHeapSleepsBesideAStillPersonWakesForAWalkingOneAndSleepsAgain() {
+    PhysicsWorld world;
+    AddGround(world);
+    const uint32_t ball = AddSphere(world, {0.0f, 0.3f, 0.0f}, 0.3f);
+    Simulate(world, 2.0f);
+    Check(world.GetBody(ball).isAsleep, "the ball is asleep");
+
+    const uint32_t person = AddPerson(world, {1.5f, 0.0f, 0.0f});
+    Simulate(world, 1.0f);
+    Check(world.GetBody(ball).isAsleep, "a person standing still some way off does not wake it");
+
+    // The person walks to the ball, which they push.
+    const float step = world.Settings().fixedStep;
+    bool woken = false;
+    for (int i = 0; i < 120; ++i) {
+        world.SetKinematicTarget(person, world.GetBody(person).position - glm::vec3(1.0f * step, 0.0f, 0.0f), step);
+        world.Step();
+        woken = woken || !world.GetBody(ball).isAsleep;
+    }
+    Check(woken, "a person walking up to the ball wakes it");
+
+    world.SetParked(person, true);
+    Simulate(world, 5.0f);
+    Check(world.GetBody(ball).isAsleep, "and when the person is gone the ball goes to sleep again, it is at speed " +
+                                              std::to_string(glm::length(world.GetBody(ball).linearVelocity)));
+}
+
+void AStillPersonInAHeapDoesNotKeepItAwakeOrJoinTwoHeaps() {
+    PhysicsWorld world;
+    AddGround(world);
+    const uint32_t left = AddBox(world, {-0.6f, 0.5f, 0.0f});
+    const uint32_t right = AddBox(world, {0.6f, 0.5f, 0.0f});
+    AddPerson(world, {0.0f, 0.0f, 0.0f});  // between the two boxes, touching both
+    Simulate(world, 3.0f);
+    Check(world.GetBody(left).isAsleep && world.GetBody(right).isAsleep, "boxes that touch a person who stands still go to sleep");
+    Check(world.GetBody(left).sleepGroup != world.GetBody(right).sleepGroup, "in groups of their own, the person does not join them");
+}
+
+void ACrateOnAPersonFallsWhenThePersonIsTakenAway() {
+    for (const bool parkThem : {true, false}) {
+        PhysicsWorld world;
+        AddGround(world);
+        const uint32_t person = AddPerson(world, {0.0f, 0.0f, 0.0f});
+        const uint32_t crate = AddBox(world, {0.0f, 1.8f + 0.4f + 0.01f, 0.0f}, {0.4f, 0.4f, 0.4f});
+        Simulate(world, 3.0f);
+        Check(world.GetBody(crate).isAsleep && Near(world.GetBody(crate).position.y, 2.2f, 0.05f), "a crate sleeps on a person's head");
+        if (parkThem) {
+            world.SetParked(person, true);
+        } else {
+            world.PlaceKinematic(person, {20.0f, 0.9f, 0.0f});
+        }
+        Simulate(world, 2.0f);
+        Check(Near(world.GetBody(crate).position.y, 0.4f, 0.05f), std::string("and falls to the ground when the person is ") +
+                                                                       (parkThem ? "parked" : "placed elsewhere"));
+    }
+}
+
+void BodiesThatCannotBePushedArePassedThroughByPeople() {
+    PhysicsWorld world;
+    AddGround(world);
+    const uint32_t heavy = AddBox(world, {2.0f, 0.5f, 0.0f});
+    world.SetPushable(heavy, false);
+    const uint32_t person = AddPerson(world, {0.0f, 0.0f, 0.0f});
+    Simulate(world, 1.0f);
+    Check(world.GetBody(heavy).isAsleep, "the crate sleeps");
+    WalkPerson(world, person, 1.5f, 3.0f);
+    Check(world.GetBody(heavy).isAsleep && Near(world.GetBody(heavy).position.x, 2.0f, 1e-4f), "and a person who walks through it neither wakes nor moves it");
+    Check(Near(world.GetBody(person).position.x, 4.5f, 0.02f), "and is not held up");
+}
+
+void AParkedPersonTouchesNothing() {
+    PhysicsWorld world;
+    AddGround(world);
+    const uint32_t ball = AddSphere(world, {0.0f, 0.3f, 0.0f}, 0.3f);
+    const uint32_t person = AddPerson(world, {0.0f, 0.0f, 0.0f});  // inside the ball
+    world.SetParked(person, true);
+    Simulate(world, 2.0f);
+    Check(Near(world.GetBody(ball).position.x, 0.0f, 1e-4f) && Near(world.GetBody(ball).position.z, 0.0f, 1e-4f),
+          "a ball is not moved by a person who is parked inside it");
+    Check(world.GetBody(ball).isAsleep, "and sleeps");
+    world.SetParked(person, false);
+    WalkPerson(world, person, 0.5f, 1.0f);
+    Check(glm::length(world.GetBody(ball).position - glm::vec3(0.0f, 0.3f, 0.0f)) > 0.1f, "but when they are called back and walk they push it out");
+}
+
+void APersonIsPlacedAtOnceAndStops() {
+    PhysicsWorld world;
+    AddGround(world);
+    const uint32_t person = AddPerson(world, {0.0f, 0.0f, 0.0f});
+    WalkPerson(world, person, 1.5f, 1.0f);
+    world.PlaceKinematic(person, {20.0f, 0.9f, 5.0f});
+    Check(glm::length(world.GetBody(person).linearVelocity) == 0.0f, "a person who is placed stands still");
+    world.Step();
+    Check(Near(world.GetBody(person).position.x, 20.0f, 1e-5f) && Near(world.GetBody(person).position.z, 5.0f, 1e-5f), "at the place");
+}
+
+void APersonIsDrivenNoFasterThanTheTopSpeed() {
+    PhysicsWorld world;
+    AddGround(world);
+    const uint32_t person = AddPerson(world, {0.0f, 0.0f, 0.0f});
+    world.SetKinematicTarget(person, {100.0f, 0.9f, 0.0f}, 0.01f);
+    Check(glm::length(world.GetBody(person).linearVelocity) <= 8.001f, "a target far away does not make a person fly");
+    world.SetKinematicTarget(person, {std::numeric_limits<float>::quiet_NaN(), 0.9f, 0.0f}, 0.01f);
+    Check(std::isfinite(world.GetBody(person).linearVelocity.x), "and a target that is not a number is ignored");
+}
+
+void TheSameWalkAlwaysGivesTheSameResult() {
+    const auto run = [] {
+        PhysicsWorld world;
+        AddGround(world);
+        for (int i = 0; i < 8; ++i) {
+            AddSphere(world, {1.0f + 0.7f * static_cast<float>(i), 0.3f + 0.1f * static_cast<float>(i % 3), 0.2f * static_cast<float>(i % 2)}, 0.3f);
+        }
+        const uint32_t person = AddPerson(world, {0.0f, 0.0f, 0.0f});
+        WalkPerson(world, person, 1.5f, 4.0f);
+        std::vector<glm::vec3> positions;
+        for (uint32_t i = 1; i <= 8; ++i) {
+            positions.push_back(world.GetBody(i).position);
+        }
+        return positions;
+    };
+    Check(run() == run(), "a person pushing a row of balls gives the same result every time, to the last bit");
+}
+
 int main() {
     struct Test {
         const char* name;
@@ -1023,6 +1234,19 @@ int main() {
         {"AnImpulseWakesASleepingBody", AnImpulseWakesASleepingBody},
         {"ABallThatLandsOnASleepingBoxWakesIt", ABallThatLandsOnASleepingBoxWakesIt},
         {"TheSameWorldAlwaysGivesTheSameResult", TheSameWorldAlwaysGivesTheSameResult},
+        {"AWalkingPersonPushesABallAheadAndIsNotSlowedByIt", AWalkingPersonPushesABallAheadAndIsNotSlowedByIt},
+        {"AFastPersonDoesNotRunThroughABall", AFastPersonDoesNotRunThroughABall},
+        {"KinematicBodiesTouchingNothingThatMovesStayWhereTheyAre", KinematicBodiesTouchingNothingThatMovesStayWhereTheyAre},
+        {"NothingPushesAKinematicBody", NothingPushesAKinematicBody},
+        {"ACrateThatFallsOnAPersonLandsOnTheGroundBesideThemOrOnTheirHead", ACrateThatFallsOnAPersonLandsOnTheGroundBesideThemOrOnTheirHead},
+        {"AHeapSleepsBesideAStillPersonWakesForAWalkingOneAndSleepsAgain", AHeapSleepsBesideAStillPersonWakesForAWalkingOneAndSleepsAgain},
+        {"AStillPersonInAHeapDoesNotKeepItAwakeOrJoinTwoHeaps", AStillPersonInAHeapDoesNotKeepItAwakeOrJoinTwoHeaps},
+        {"ACrateOnAPersonFallsWhenThePersonIsTakenAway", ACrateOnAPersonFallsWhenThePersonIsTakenAway},
+        {"BodiesThatCannotBePushedArePassedThroughByPeople", BodiesThatCannotBePushedArePassedThroughByPeople},
+        {"AParkedPersonTouchesNothing", AParkedPersonTouchesNothing},
+        {"APersonIsPlacedAtOnceAndStops", APersonIsPlacedAtOnceAndStops},
+        {"APersonIsDrivenNoFasterThanTheTopSpeed", APersonIsDrivenNoFasterThanTheTopSpeed},
+        {"TheSameWalkAlwaysGivesTheSameResult", TheSameWalkAlwaysGivesTheSameResult},
         {"APileSettlesDownAndNothingFallsThroughTheGround", APileSettlesDownAndNothingFallsThroughTheGround},
         {"ThePileNeverGainsEnergy", ThePileNeverGainsEnergy},
         {"ABoxOnABoxMakesFourContactsWithAnUpwardNormal", ABoxOnABoxMakesFourContactsWithAnUpwardNormal},

@@ -500,6 +500,13 @@ void PrintTiming(const char* label, const TimingSummary& timing) {
 void RunBenchmark(const CityLayout& city, uint32_t agentCount, const BenchOptions& options) {
     Crowd crowd;
     physics::PropField props;
+    std::vector<PersonBody> peopleNearProps;
+    std::vector<double> propsMs;
+    size_t awakeProps = 0;
+    size_t previousAwake = 0;
+    size_t bigWakes = 0;  // times that a hundred props or more woke in one step after the heap had settled
+    size_t peopleBodies = 0;
+    size_t peopleOverflow = 0;
     if (options.props > 0) {
         props.Spawn(city, {.count = options.props, .seed = options.seed});
     }
@@ -517,12 +524,26 @@ void RunBenchmark(const CityLayout& city, uint32_t agentCount, const BenchOption
     CameraPose camera{};
     for (uint32_t step = 0; step < kWarmupSteps + options.steps; ++step) {
         camera = CameraOnPath(city, bounds, static_cast<float>(step) * kStepSeconds);
-        // The physics of the props is not the crowd's cost, so it stays outside the timed part.
+        // The physics of the props is not the crowd's cost, so it stays outside the timed part, and is timed on its own.
         if (options.props > 0) {
+            const Clock::time_point physicsStart = Clock::now();
+            crowd.CollectPeopleAround(props.PushablePositions(), 1.2f, peopleNearProps);
+            props.SetPeople(peopleNearProps, kStepSeconds);
             props.Update(kStepSeconds);
+            propsMs.push_back(MillisecondsBetween(physicsStart, Clock::now()));
+            const size_t awakeNow = props.AwakeCount();
+            awakeProps += awakeNow;
+            if (step > 900 && awakeNow > previousAwake + 100) {
+                ++bigWakes;
+            }
+            previousAwake = awakeNow;
+            peopleBodies += props.PeopleBodyCount();
+            peopleOverflow += props.PeopleOverflow();
         }
         const Clock::time_point start = Clock::now();
-        SetFocusIfSupported(crowd, camera.position);
+        // With props the crowd is simulated closely round the heap, where people meet them, whatever the camera sees.
+        SetFocusIfSupported(crowd, options.props > 0 ? glm::vec3(props.DropCentre().x, camera.position.y, props.DropCentre().y)
+                                                     : camera.position);
         if (options.props > 0) {
             crowd.SetMovableObstacles(props.Obstacles());
         }
@@ -554,6 +575,14 @@ void RunBenchmark(const CityLayout& city, uint32_t agentCount, const BenchOption
     std::cout << "  visible per step: " << std::setprecision(0) << visibleSum / stepCount << "\n"
               << std::setprecision(1);
     PrintLevelOfDetailIfSupported(crowd);
+    if (options.props > 0) {
+        const double allSteps = static_cast<double>(kWarmupSteps + options.steps);
+        PrintTiming("props", Summarize(propsMs));
+        std::cout << "  props: " << props.Count() << " in the world, " << std::setprecision(0) << awakeProps / allSteps
+                  << " awake per step on average, " << props.AwakeCount() << " awake at the end, " << bigWakes << " sudden wakes of 100 or more; " << peopleBodies / allSteps
+                  << " people pushing per step, and " << peopleOverflow / allSteps << " more without a body for lack of one\n"
+                  << std::setprecision(1);
+    }
 
     const SanityReport sanity = CheckCrowd(crowd, city, camera.position, props.Obstacles());
     std::cout << "  sanity: read back " << sanity.readBack << ", non-finite " << sanity.nonFinite

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <random>
+#include <unordered_map>
 
 namespace physics {
 namespace {
@@ -22,6 +23,15 @@ constexpr float kSplashFullSpeedRange = 2.5f;  // and above which, by this much 
 constexpr float kMaxReaction = 0.3f;       // the most of the water's speed one prop's drag can take back in a step
 constexpr int kSamplesPerAxis = 3;         // a prop feels the water at this many points along each of its axes
 constexpr float kHighestFloor = 12.0f;     // a box with its top higher than this is not a floor: a tree or a roof
+constexpr float kPushableMass = 60.0f;     // props lighter than this, in kilograms, are pushed by people and not walked round
+constexpr size_t kMostWokenByAPerson = 4;  // a prop in a heap of more than this many is not pushed: moving a heap costs too much
+constexpr float kTouchReach = 0.3f;        // a prop within this distance (m) of one that is not pushable counts as touching it
+constexpr float kTouchCellSize = 2.0f;     // edge of the cells of the grid that finds such props
+constexpr size_t kPersonBodies = 64;       // how many people can push props at once
+constexpr glm::vec3 kPersonHalfSize{0.25f, 0.9f, 0.25f};  // a person is a box 50 cm wide and 1.8 m tall
+constexpr float kPersonDeadBand = 0.01f;   // a person who has moved less than this (metres) since the last call has not moved: the body stays
+constexpr float kPersonJump = 1.5f;        // a person further than this from their body (metres) is put down at once, not walked to
+constexpr uint32_t kNoPerson = 0xFFFFFFFFu;
 constexpr float kFallDepth = 80.0f;        // props this far below the ground under the heap have fallen out of the world
 
 const glm::vec3 kWoods[] = {{0.52f, 0.36f, 0.20f}, {0.45f, 0.30f, 0.16f}, {0.60f, 0.45f, 0.26f}, {0.38f, 0.26f, 0.15f}};
@@ -183,6 +193,20 @@ void PropField::Spawn(const CityLayout& city, const PropSettings& settings) {
             sphereBodies.push_back(world.AddBody(description));
         }
     }
+    // The bodies of people come last, parked until someone needs one.
+    personBodies.clear();
+    for (size_t i = 0; i < kPersonBodies; ++i) {
+        BodyDescription person;
+        person.shape = Shape::Box(kPersonHalfSize);
+        person.material = {0.5f, 0.0f, 0.05f};
+        person.position = {centre.x, groundHeight, centre.y};
+        person.isKinematic = true;
+        personBodies.push_back(world.AddBody(person));
+        world.SetParked(personBodies.back(), true);
+    }
+    personAgents.assign(kPersonBodies, kNoPerson);
+    personDriveSecondsLeft = 0.0f;
+    peopleOverflow = 0;
     submergedVolume.assign(boxBodies.size() + sphereBodies.size(), 0.0f);
     restarted.assign(boxBodies.size() + sphereBodies.size(), 0);
     pendingSeconds = 0.0f;
@@ -204,6 +228,13 @@ void PropField::Update(float seconds) {
         }
     } else {
         world.Update(seconds);
+    }
+    if (personDriveSecondsLeft > 0.0f) {
+        personDriveSecondsLeft -= seconds;
+        if (personDriveSecondsLeft <= 1e-6f) {
+            personDriveSecondsLeft = 0.0f;
+            StopPeople();
+        }
     }
     // A prop that has gone through the river, which has no floor, would fall for ever and never sleep.
     for (const std::vector<uint32_t>* bodies : {&boxBodies, &sphereBodies}) {
@@ -305,6 +336,79 @@ void PropField::ApplyWater(float seconds) {
     }
 }
 
+size_t PropField::PeopleBodyCount() const {
+    return static_cast<size_t>(std::count_if(personAgents.begin(), personAgents.end(), [](uint32_t agent) { return agent != kNoPerson; }));
+}
+
+std::optional<uint32_t> PropField::BodyOfPerson(uint32_t agent) const {
+    const auto found = std::find(personAgents.begin(), personAgents.end(), agent);
+    if (agent == kNoPerson || found == personAgents.end()) {
+        return std::nullopt;
+    }
+    return personBodies[static_cast<size_t>(found - personAgents.begin())];
+}
+
+void PropField::SetPeople(std::span<const PersonBody> people, float seconds) {
+    peopleOverflow = 0;
+    personDriveSecondsLeft = std::isfinite(seconds) ? std::max(seconds, 0.0f) : 0.0f;
+    const auto setTarget = [&](size_t slot, const PersonBody& person) {
+        const glm::vec3 target(person.position.x, person.feet + kPersonHalfSize.y, person.position.y);
+        const float distance = glm::distance(world.GetBody(personBodies[slot]).position, target);
+        // Someone who has gone far since their body last moved (the crowd moved them, or they changed level of detail)
+        // is not walked to: that would push everything on the way.
+        if (distance > kPersonJump) {
+            world.PlaceKinematic(personBodies[slot], target);
+        }
+        // Someone who hardly moves is not followed: a body that sways by a millimetre keeps a heap awake for good.
+        if (distance < kPersonDeadBand || personDriveSecondsLeft <= 0.0f) {
+            world.SetVelocity(personBodies[slot], glm::vec3(0.0f), glm::vec3(0.0f));
+        } else {
+            world.SetKinematicTarget(personBodies[slot], target, personDriveSecondsLeft);
+        }
+    };
+    const auto byAgent = [](const PersonBody& person, uint32_t agent) { return person.agent < agent; };
+
+    // Whoever has a body keeps it while they are in the list, so that a body never jumps from one person to another.
+    for (size_t slot = 0; slot < personBodies.size(); ++slot) {
+        if (personAgents[slot] == kNoPerson) {
+            continue;
+        }
+        const auto found = std::lower_bound(people.begin(), people.end(), personAgents[slot], byAgent);
+        if (found != people.end() && found->agent == personAgents[slot]) {
+            setTarget(slot, *found);
+        } else {
+            world.SetParked(personBodies[slot], true);
+            personAgents[slot] = kNoPerson;
+        }
+    }
+    // The others take the free bodies, the lowest index first, and what is left over is counted.
+    for (const PersonBody& person : people) {
+        if (std::find(personAgents.begin(), personAgents.end(), person.agent) != personAgents.end()) {
+            continue;
+        }
+        const auto free = std::find(personAgents.begin(), personAgents.end(), kNoPerson);
+        if (free == personAgents.end()) {
+            ++peopleOverflow;
+            continue;
+        }
+        const size_t slot = static_cast<size_t>(free - personAgents.begin());
+        personAgents[slot] = person.agent;
+        world.PlaceKinematic(personBodies[slot], glm::vec3(person.position.x, person.feet + kPersonHalfSize.y, person.position.y));
+        world.SetParked(personBodies[slot], false);
+        setTarget(slot, person);
+    }
+}
+
+// The bodies stand where they are until SetPeople gives them a speed again, so that a person who is no longer looked
+// after does not walk on for ever.
+void PropField::StopPeople() {
+    for (size_t slot = 0; slot < personBodies.size(); ++slot) {
+        if (personAgents[slot] != kNoPerson) {
+            world.SetVelocity(personBodies[slot], glm::vec3(0.0f), glm::vec3(0.0f));
+        }
+    }
+}
+
 void PropField::RefreshInstances() {
     const auto refresh = [this](const std::vector<uint32_t>& bodies, std::vector<BodyInstance>& instances) {
         for (size_t i = 0; i < bodies.size(); ++i) {
@@ -316,10 +420,75 @@ void PropField::RefreshInstances() {
     refresh(boxBodies, boxInstances);
     refresh(sphereBodies, sphereInstances);
 
-    obstacles.clear();
+    // A prop is pushable when it is light enough for a person to push, is not part of a heap that the person would stir and
+    // keep awake, and does not touch one: a prop that leans on a heap would hit it when pushed and wake it just the same.
+    // People walk into a pushable prop and go round the others, which are obstacles like the heavy ones.
+    std::vector<uint32_t> props;
     for (const std::vector<uint32_t>* bodies : {&boxBodies, &sphereBodies}) {
-        for (uint32_t index : *bodies) {
-            const Body& body = world.GetBody(index);
+        props.insert(props.end(), bodies->begin(), bodies->end());
+    }
+    std::vector<uint8_t> pushable(props.size(), 0);
+    for (size_t i = 0; i < props.size(); ++i) {
+        const Body& body = world.GetBody(props[i]);
+        pushable[i] = body.inverseMass * kPushableMass > 1.0f && world.IslandSize(props[i]) <= kMostWokenByAPerson;
+    }
+    // The props that are not pushable, by the cells of a grid that their bounds, grown by the reach of a touch, cover.
+    const auto cellOf = [](float coordinate) { return static_cast<int>(std::floor(coordinate / kTouchCellSize)); };
+    const auto cellKey = [](int x, int z) { return (static_cast<uint64_t>(static_cast<uint32_t>(x)) << 32) | static_cast<uint32_t>(z); };
+    const auto hasUsableBounds = [](const Body& body) {
+        return std::isfinite(body.boundsMin.x) && std::isfinite(body.boundsMin.z) && std::isfinite(body.boundsMax.x) &&
+               std::isfinite(body.boundsMax.z) && std::abs(body.boundsMin.x) < 1e6f && std::abs(body.boundsMin.z) < 1e6f &&
+               std::abs(body.boundsMax.x) < 1e6f && std::abs(body.boundsMax.z) < 1e6f;
+    };
+    std::unordered_map<uint64_t, std::vector<uint32_t>> fixedProps;
+    for (size_t i = 0; i < props.size(); ++i) {
+        const Body& body = world.GetBody(props[i]);
+        if (pushable[i] != 0 || !hasUsableBounds(body)) {
+            continue;
+        }
+        for (int x = cellOf(body.boundsMin.x - kTouchReach); x <= cellOf(body.boundsMax.x + kTouchReach); ++x) {
+            for (int z = cellOf(body.boundsMin.z - kTouchReach); z <= cellOf(body.boundsMax.z + kTouchReach); ++z) {
+                fixedProps[cellKey(x, z)].push_back(static_cast<uint32_t>(i));
+            }
+        }
+    }
+    for (size_t i = 0; i < props.size(); ++i) {
+        const Body& body = world.GetBody(props[i]);
+        if (pushable[i] == 0 || !hasUsableBounds(body)) {
+            pushable[i] = 0;
+            continue;
+        }
+        bool touchesFixedProp = false;
+        for (int x = cellOf(body.boundsMin.x); x <= cellOf(body.boundsMax.x) && !touchesFixedProp; ++x) {
+            for (int z = cellOf(body.boundsMin.z); z <= cellOf(body.boundsMax.z) && !touchesFixedProp; ++z) {
+                const auto cell = fixedProps.find(cellKey(x, z));
+                if (cell == fixedProps.end()) {
+                    continue;
+                }
+                for (uint32_t other : cell->second) {
+                    const Body& near = world.GetBody(props[other]);
+                    if (body.boundsMin.x - kTouchReach <= near.boundsMax.x && near.boundsMin.x - kTouchReach <= body.boundsMax.x &&
+                        body.boundsMin.y - kTouchReach <= near.boundsMax.y && near.boundsMin.y - kTouchReach <= body.boundsMax.y &&
+                        body.boundsMin.z - kTouchReach <= near.boundsMax.z && near.boundsMin.z - kTouchReach <= body.boundsMax.z) {
+                        touchesFixedProp = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if (touchesFixedProp) {
+            pushable[i] = 0;
+        }
+    }
+
+    obstacles.clear();
+    pushablePositions.clear();
+    for (size_t i = 0; i < props.size(); ++i) {
+        const Body& body = world.GetBody(props[i]);
+        world.SetPushable(props[i], pushable[i] != 0);
+        if (pushable[i] != 0) {
+            pushablePositions.emplace_back(body.position.x, body.position.z);
+        } else {
             obstacles.push_back({{body.boundsMin.x, body.boundsMin.z}, {body.boundsMax.x, body.boundsMax.z}, body.boundsMin.y, body.boundsMax.y});
         }
     }

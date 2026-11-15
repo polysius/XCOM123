@@ -47,6 +47,10 @@ struct BodyDescription {
     glm::vec3 angularVelocity{0.0f};
     float density = 1000.0f;  // kg per cubic metre, so a one metre cube weighs a tonne
     bool isStatic = false;    // static bodies never move and have infinite mass
+    // A kinematic body moves as it is told (PhysicsWorld::SetKinematicTarget) and nothing moves it: it has infinite mass,
+    // so it pushes the bodies it meets aside and is never pushed. For things that act in the world without being
+    // simulated by it, such as people. A body that is static is never kinematic.
+    bool isKinematic = false;
 };
 
 // Everything the simulation keeps about one body.
@@ -68,6 +72,9 @@ struct Body {
     float quietSeconds = 0.0f;                 // how long the body has hardly moved
     uint32_t sleepGroup = kInvalidBody;        // while asleep, the group of bodies that sleeps and wakes together
     bool isStatic = false;
+    bool isKinematic = false;
+    bool isPushable = true;  // false: kinematic bodies pass through it (see PhysicsWorld::SetPushable)
+    bool isParked = false;  // a kinematic body that is out of play: it touches nothing (see PhysicsWorld::SetParked)
     bool isAsleep = false;
 };
 

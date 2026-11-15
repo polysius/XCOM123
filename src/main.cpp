@@ -74,6 +74,7 @@ struct Engine {
     std::vector<NpcInstance> visibleNpcs;
     physics::PropField props;  // crates, barrels and balls under the physics engine; none unless --props is given
     fluid::RiverWater river;   // the water of the river near the props, simulated; unbuilt unless --river-sim is given
+    std::vector<PersonBody> peopleNearProps;  // who may push props this frame
 };
 
 // Returns 0 when the window is minimised.
@@ -107,11 +108,20 @@ double UpdateCrowd(Engine& engine, float deltaSeconds, FrameInput& frame) {
     return MillisecondsBetween(start, Clock::now());
 }
 
+// People within this distance of a prop that they can push get a body in the physics, so that they push it as they walk.
+constexpr float kPushReach = 1.2f;
+
+void GivePeopleToProps(Engine& engine, float deltaSeconds) {
+    engine.crowd.CollectPeopleAround(engine.props.PushablePositions(), kPushReach, engine.peopleNearProps);
+    engine.props.SetPeople(engine.peopleNearProps, deltaSeconds);
+}
+
 // Moves the props forward and puts them into the frame.
 void UpdateProps(Engine& engine, float deltaSeconds, FrameInput& frame) {
     if (engine.props.Count() == 0) {
         return;
     }
+    GivePeopleToProps(engine, deltaSeconds);
     engine.props.Update(deltaSeconds);
     frame.bodyBoxes = engine.props.Boxes();
     frame.bodySpheres = engine.props.Spheres();
@@ -320,6 +330,9 @@ void PreRollWorld(Engine& engine, float seconds) {
         const float step = std::min(seconds, kPreRollTimeStep);
         engine.crowd.SetMovableObstacles(engine.props.Obstacles());
         engine.crowd.Update(step);
+        if (engine.props.Count() > 0) {
+            GivePeopleToProps(engine, step);
+        }
         if (coupled) {
             // The props and the water act on each other, so they run together, in pieces of a frame, and only for the
             // last minute: whatever fell in before that has settled, and the heap starts to fall when the minute starts.

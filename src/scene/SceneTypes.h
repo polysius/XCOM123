@@ -79,6 +79,14 @@ struct MovableObstacle {
     float top;
 };
 
+// A person as the physics sees them: where they stand and how they move, so that they can push what they walk into.
+struct PersonBody {
+    uint32_t agent;     // the person's index in the crowd, which says who they are from one frame to the next
+    glm::vec2 position; // world X and Z
+    glm::vec2 velocity; // metres per second
+    float feet;         // height of the ground they stand on
+};
+
 // The simulated surface of the river near one place: for every cell of a grid, how far the water is above its
 // still level, or -1000 where the cell has no water. Cell (0, 0) has its corner at `origin` (world X and Z), and
 // the cells run along X first.

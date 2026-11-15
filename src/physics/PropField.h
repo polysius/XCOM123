@@ -52,7 +52,20 @@ public:
     size_t AwakeCount() const { return world.AwakeBodyCount(); }
     std::span<const BodyInstance> Boxes() const { return boxInstances; }
     std::span<const BodyInstance> Spheres() const { return sphereInstances; }
-    // The props as obstacles for the crowd: the box round each one seen from above, with its lowest and highest height.
+    // The people who may push props this frame, sorted by their index in the crowd. Each one near enough to a prop takes
+    // one of a limited number of kinematic bodies and keeps it while they stay in the list; people over the limit have
+    // none and walk through props, and PeopleOverflow counts them. Call it before Update, with the people the crowd
+    // found near PushablePositions.
+    // `seconds` is the time until the next call: the bodies walk to where their people are in that time, and stand
+    // still when it is over, however many Updates it takes.
+    void SetPeople(std::span<const PersonBody> people, float seconds);
+    // Where the props are that a person can push, on the ground. Heavier ones are obstacles, not pushed.
+    std::span<const glm::vec2> PushablePositions() const { return pushablePositions; }
+    size_t PeopleBodyCount() const;
+    // The body in the physics world (see World) that stands for this person, if they have one.
+    std::optional<uint32_t> BodyOfPerson(uint32_t agent) const;
+    uint32_t PeopleOverflow() const { return peopleOverflow; }
+    // The props as obstacles for the crowd, without the ones that people push: the box round each one seen from above, with its lowest and highest height.
     std::span<const MovableObstacle> Obstacles() const { return obstacles; }
     const PhysicsWorld& World() const { return world; }
     // The middle of the heap the props were dropped in, on the ground. The heap stands a little off the
@@ -61,6 +74,7 @@ public:
 
 private:
     void RefreshInstances();
+    void StopPeople();
     // Applies the forces of the water to every prop for one step of `seconds`, and the reaction of the props on the water.
     void ApplyWater(float seconds);
 
@@ -75,7 +89,12 @@ private:
     std::vector<uint32_t> sphereBodies;
     std::vector<BodyInstance> boxInstances;
     std::vector<BodyInstance> sphereInstances;
-    std::vector<MovableObstacle> obstacles;  // one for every prop, boxes first
+    std::vector<MovableObstacle> obstacles;  // one for every prop that is too heavy to push, boxes first
+    std::vector<glm::vec2> pushablePositions;
+    std::vector<uint32_t> personBodies;     // the pool of kinematic bodies, parked when not in use
+    std::vector<uint32_t> personAgents;     // per body, the person who has it, or kNoPerson
+    float personDriveSecondsLeft = 0.0f;    // how long the bodies of people keep the speed SetPeople gave them
+    uint32_t peopleOverflow = 0;
 };
 
 }  // namespace physics

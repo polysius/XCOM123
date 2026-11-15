@@ -337,12 +337,55 @@ void Walkways::SetMovableObstacles(std::span<const MovableObstacle> obstacles) {
                         movableCells.push_back(static_cast<uint32_t>(cell));
                     }
                     gridFlags[cell] = static_cast<uint8_t>(gridFlags[cell] | kMovableFlag);
-                    // The distance to the nearest edge, if the centre is inside, in cells; negative if it is in the margin.
-                    const float toEdge = std::min(std::min(cellCenter.x - obstacle.min.x, obstacle.max.x - cellCenter.x),
-                                                  std::min(cellCenter.y - obstacle.min.y, obstacle.max.y - cellCenter.y));
-                    const int depth = toEdge < 0.0f ? 1 : 2 + std::min(static_cast<int>(toEdge / gridCellSize), 200);
-                    movableDepth[cell] = std::max(movableDepth[cell], static_cast<uint8_t>(depth));
                 }
+            }
+        }
+    }
+    MeasureMovableDepth();
+}
+
+// Gives every closed cell the number of steps it takes to get out: 1 for a cell next to open ground, 2 for the next
+// ring, and so on, found by a search that starts at the open ground and spreads through the closed cells. Measured from
+// the nearest open ground and not within one crate, so that a gap between crates of a heap, which is closed on every
+// side, is no deeper than the crates round it.
+void Walkways::MeasureMovableDepth() {
+    constexpr uint8_t kNotReached = 255;
+    constexpr uint8_t kDeepest = 254;
+    const int offsets[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+    const auto isOpenGround = [this](int x, int y) {
+        if (x < 0 || y < 0 || x >= gridColumns || y >= gridRows) {
+            return false;
+        }
+        return (gridFlags[static_cast<size_t>(y) * static_cast<size_t>(gridColumns) + static_cast<size_t>(x)] &
+                (kNoStandingFlag | kMovableFlag)) == 0;
+    };
+    std::vector<uint32_t> queue;
+    for (uint32_t cell : movableCells) {
+        movableDepth[cell] = kNotReached;
+        const int x = static_cast<int>(cell % static_cast<uint32_t>(gridColumns));
+        const int y = static_cast<int>(cell / static_cast<uint32_t>(gridColumns));
+        for (const auto& offset : offsets) {
+            if (isOpenGround(x + offset[0], y + offset[1])) {
+                movableDepth[cell] = 1;
+                queue.push_back(cell);
+                break;
+            }
+        }
+    }
+    for (size_t head = 0; head < queue.size(); ++head) {
+        const uint32_t cell = queue[head];
+        const int x = static_cast<int>(cell % static_cast<uint32_t>(gridColumns));
+        const int y = static_cast<int>(cell / static_cast<uint32_t>(gridColumns));
+        for (const auto& offset : offsets) {
+            const int nx = x + offset[0];
+            const int ny = y + offset[1];
+            if (nx < 0 || ny < 0 || nx >= gridColumns || ny >= gridRows) {
+                continue;
+            }
+            const size_t next = static_cast<size_t>(ny) * static_cast<size_t>(gridColumns) + static_cast<size_t>(nx);
+            if ((gridFlags[next] & kMovableFlag) != 0 && movableDepth[next] == kNotReached) {
+                movableDepth[next] = static_cast<uint8_t>(std::min<int>(movableDepth[cell] + 1, kDeepest));
+                queue.push_back(static_cast<uint32_t>(next));
             }
         }
     }
