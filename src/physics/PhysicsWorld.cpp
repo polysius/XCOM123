@@ -76,6 +76,20 @@ uint64_t PairKey(uint32_t a, uint32_t b) {
     return (static_cast<uint64_t>(a) << 32) | b;
 }
 
+// The mass and the diagonal of the inertia tensor of a capsule: a cylinder along Y with a half sphere on each end.
+glm::vec3 CapsuleInertia(float radius, float halfHeight, float density, float& mass) {
+    const float pi = 3.14159265f;
+    const float r2 = radius * radius;
+    const float cylinderMass = density * pi * r2 * 2.0f * halfHeight;
+    const float sphereMass = density * (4.0f / 3.0f) * pi * r2 * radius;  // both half spheres together
+    mass = cylinderMass + sphereMass;
+    const float alongAxis = cylinderMass * 0.5f * r2 + sphereMass * 0.4f * r2;
+    // The half spheres sit with their centres of mass 3r/8 beyond the ends of the cylinder (parallel axis theorem).
+    const float acrossAxis = cylinderMass * (r2 / 4.0f + (2.0f * halfHeight) * (2.0f * halfHeight) / 12.0f) +
+                             sphereMass * (0.4f * r2 + halfHeight * halfHeight + 0.75f * halfHeight * radius);
+    return glm::vec3(acrossAxis, alongAxis, acrossAxis);
+}
+
 glm::mat3 InverseInertiaInWorld(const Body& body) {
     const glm::mat3 axes = glm::mat3_cast(body.orientation);
     return axes * glm::mat3(glm::vec3(body.inverseInertiaLocal.x, 0.0f, 0.0f), glm::vec3(0.0f, body.inverseInertiaLocal.y, 0.0f),
@@ -85,10 +99,12 @@ glm::mat3 InverseInertiaInWorld(const Body& body) {
 
 void UpdateBounds(Body& body) {
     glm::vec3 extent(body.shape.radius);
+    const glm::mat3 axes = glm::mat3_cast(body.orientation);
     if (body.shape.type == ShapeType::Box) {
-        const glm::mat3 axes = glm::mat3_cast(body.orientation);
         const glm::vec3 half = body.shape.halfExtents;
         extent = glm::abs(axes[0]) * half.x + glm::abs(axes[1]) * half.y + glm::abs(axes[2]) * half.z;
+    } else if (body.shape.type == ShapeType::Capsule) {
+        extent += glm::abs(axes[1]) * body.shape.halfHeight;
     }
     body.boundsMin = body.position - extent;
     body.boundsMax = body.position + extent;
@@ -144,6 +160,11 @@ uint32_t PhysicsWorld::AddBody(const BodyDescription& description) {
     body.shape = description.shape;
     body.shape.radius = std::max(FiniteOr(body.shape.radius, 0.5f), kMinSize);
     body.shape.halfExtents = glm::max(FiniteOr(body.shape.halfExtents, glm::vec3(0.5f)), glm::vec3(kMinSize));
+    body.shape.halfHeight = std::max(FiniteOr(body.shape.halfHeight, 0.0f), 0.0f);
+    if (body.shape.type == ShapeType::Capsule) {
+        // Keep the box around the capsule in step with its radius and length.
+        body.shape.halfExtents = glm::vec3(body.shape.radius, body.shape.halfHeight + body.shape.radius, body.shape.radius);
+    }
     body.material = description.material;
     body.position = FiniteOr(description.position, glm::vec3(0.0f));
     body.orientation = IsFinite(description.orientation) && glm::length(description.orientation) > 1e-6f
@@ -164,6 +185,8 @@ uint32_t PhysicsWorld::AddBody(const BodyDescription& description) {
             const float r = body.shape.radius;
             mass = density * (4.0f / 3.0f) * 3.14159265f * r * r * r;
             inertia = glm::vec3(0.4f * mass * r * r);
+        } else if (body.shape.type == ShapeType::Capsule) {
+            inertia = CapsuleInertia(body.shape.radius, body.shape.halfHeight, density, mass);
         } else {
             const glm::vec3 h = body.shape.halfExtents;
             mass = density * 8.0f * h.x * h.y * h.z;

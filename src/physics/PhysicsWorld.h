@@ -6,7 +6,7 @@
 
 #include "physics/PhysicsTypes.h"
 
-// A deterministic rigid body simulation of spheres and boxes.
+// A deterministic rigid body simulation of spheres, boxes and capsules.
 //
 // The world advances in fixed steps. Each step it applies gravity, finds the pairs of bodies that
 // may touch (a hash grid of static bodies and one of the moving ones), builds contacts for them, and

@@ -16,16 +16,24 @@ constexpr uint32_t kInvalidBody = std::numeric_limits<uint32_t>::max();
 enum class ShapeType : uint8_t {
     Sphere,
     Box,
+    Capsule,
 };
 
-// A convex shape centred on the body's position, in the body's own axes.
+// A convex shape centred on the body's position, in the body's own axes. A capsule stands along local Y.
 struct Shape {
     ShapeType type = ShapeType::Box;
     float radius = 0.5f;                       // spheres
     glm::vec3 halfExtents{0.5f, 0.5f, 0.5f};   // boxes: half the size along each axis
+    float halfHeight = 0.0f;                   // capsules: half the length of the straight part, along local Y
 
-    static Shape Sphere(float sphereRadius) { return {ShapeType::Sphere, sphereRadius, glm::vec3(sphereRadius)}; }
-    static Shape Box(glm::vec3 half) { return {ShapeType::Box, glm::length(half), half}; }
+    static Shape Sphere(float sphereRadius) { return {ShapeType::Sphere, sphereRadius, glm::vec3(sphereRadius), 0.0f}; }
+    static Shape Box(glm::vec3 half) { return {ShapeType::Box, glm::length(half), half, 0.0f}; }
+    // A cylinder of `capsuleRadius` and length 2 * `segmentHalfLength` along local Y, with a half sphere on each end.
+    // The half sizes of the box around it are kept in halfExtents.
+    static Shape Capsule(float capsuleRadius, float segmentHalfLength) {
+        return {ShapeType::Capsule, capsuleRadius, glm::vec3(capsuleRadius, segmentHalfLength + capsuleRadius, capsuleRadius),
+                segmentHalfLength};
+    }
 };
 
 // How a surface behaves when it touches another. Two bodies combine their values: friction and rolling
