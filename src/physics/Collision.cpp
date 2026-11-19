@@ -297,14 +297,51 @@ bool PointOfSegmentNearestBox(const Segment& segment, const Obb& obb, glm::vec3&
     return DistanceSquaredToBox(at(best), obb.half) > 1e-12f;
 }
 
+// Cuts the segment from `start` to `end` down to the part between the planes of the box on the axes that `useAxis`
+// selects (in the box's own axes). Returns false when nothing is left; otherwise the part is the points at
+// `start + (end - start) * t` for t from `from` to `to`.
+bool ClipSegmentToSlabs(glm::vec3 start, glm::vec3 end, glm::vec3 half, const bool useAxis[3], float& from, float& to) {
+    from = 0.0f;
+    to = 1.0f;
+    const glm::vec3 along = end - start;
+    for (int axis = 0; axis < 3; ++axis) {
+        if (!useAxis[axis]) {
+            continue;
+        }
+        if (std::abs(along[axis]) < 1e-9f) {
+            if (std::abs(start[axis]) > half[axis]) {
+                return false;
+            }
+            continue;
+        }
+        float enter = (-half[axis] - start[axis]) / along[axis];
+        float leave = (half[axis] - start[axis]) / along[axis];
+        if (enter > leave) {
+            std::swap(enter, leave);
+        }
+        from = std::max(from, enter);
+        to = std::min(to, leave);
+    }
+    return from <= to;
+}
+
 // The contact of a capsule whose straight part meets the box. Choosing the face to leave through by the deepest
 // point of the segment would be a guess (a capsule laid across a post has a whole stretch of equally deep points), so
 // each of the six faces is tried: the capsule has to move far enough along its normal that even its most
-// embedded end clears the face, and the face that asks for the least is the way out.
+// embedded end clears the face, and the face that asks for the least is the way out. Only the part of the segment
+// that is inside the box counts: a long capsule that clips a corner is not embedded by its far ends.
 RoundContact ExitFromBox(const Segment& segment, float radius, const Obb& obb) {
     const glm::mat3 toLocal = glm::transpose(obb.axes);
-    const glm::vec3 start = toLocal * (segment.start - obb.center);
-    const glm::vec3 end = toLocal * (segment.end - obb.center);
+    glm::vec3 start = toLocal * (segment.start - obb.center);
+    glm::vec3 end = toLocal * (segment.end - obb.center);
+    const bool allAxes[3] = {true, true, true};
+    float from;
+    float to;
+    if (ClipSegmentToSlabs(start, end, obb.half, allAxes, from, to)) {
+        const glm::vec3 along = end - start;
+        end = start + along * to;
+        start = start + along * from;
+    }
     float leastMove = std::numeric_limits<float>::max();
     int exitAxis = 0;
     float exitSign = 1.0f;
@@ -354,6 +391,22 @@ bool CapsuleBox(const Body& capsule, const Body& box, Manifold& manifold, float 
     // A capsule lying on a face touches it at both ends as well.
     tryCentre(segment.start);
     tryCentre(segment.end);
+    // A capsule longer than the face it lies across has both ends in the air, so also try the two places where it
+    // passes over the edges of the face. These are the ends of the stretch of the segment that is over the face.
+    const glm::mat3 toLocal = glm::transpose(obb.axes);
+    const glm::vec3 localStart = toLocal * (segment.start - obb.center);
+    const glm::vec3 localEnd = toLocal * (segment.end - obb.center);
+    const glm::vec3 localNearest = toLocal * (nearest - obb.center);
+    const glm::vec3 outside = glm::abs(localNearest - glm::clamp(localNearest, -obb.half, obb.half));
+    const int facingAxis = outside.x >= outside.y && outside.x >= outside.z ? 0 : (outside.y >= outside.z ? 1 : 2);
+    bool overFace[3] = {true, true, true};
+    overFace[facingAxis] = false;
+    float from;
+    float to;
+    if (ClipSegmentToSlabs(localStart, localEnd, obb.half, overFace, from, to)) {
+        tryCentre(segment.start + (segment.end - segment.start) * from);
+        tryCentre(segment.start + (segment.end - segment.start) * to);
+    }
     return collector.Finish();
 }
 

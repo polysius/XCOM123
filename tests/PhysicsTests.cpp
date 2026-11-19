@@ -769,6 +769,49 @@ void CapsulesMeetingSpheresAndBoxesAtTheirRoundEnds() {
 
 // What capsules do ------------------------------------------------------------------------------
 
+void ALongCapsuleClippingACornerIsPushedOutAlongTheCorner() {
+    // The straight part runs from (-1, 2.99, 0) to (2.99, -1, 0) and passes 7 mm inside the corner of a unit box.
+    Body box;
+    box.shape = Shape::Box({1.0f, 1.0f, 1.0f});
+    // The box covers -1 to 1 in x and y, and the segment lies on the line x + y = 1.99, 7 mm short of the corner (1, 1).
+    const glm::vec3 start(-1.0f, 2.99f, 0.0f);
+    const glm::vec3 end(2.99f, -1.0f, 0.0f);
+    const glm::vec3 middle = 0.5f * (start + end);
+    const glm::vec3 axis = glm::normalize(end - start);
+    Body capsule;
+    capsule.shape = Shape::Capsule(0.1f, 0.5f * glm::length(end - start));
+    capsule.position = middle;
+    // Turn local Y onto the segment: about Z, by the angle between the two.
+    capsule.orientation = glm::angleAxis(std::atan2(-axis.x, axis.y), glm::vec3(0.0f, 0.0f, 1.0f));
+    physics::Manifold manifold;
+    Check(physics::Collide(capsule, box, manifold), "a capsule clipping the corner of a box touches it");
+    Check(std::abs(manifold.normal.z) < 0.05f, "the push stays in the plane of the capsule and the box: z " + std::to_string(manifold.normal.z));
+    Check(Near(manifold.points[0].depth, 0.107f, 0.02f), "and about the radius plus 7 mm deep: " + std::to_string(manifold.points[0].depth));
+    Check(manifold.normal.x + manifold.normal.y < -0.9f, "leaving through the face on the capsule side, so the push is towards -x or -y");
+}
+
+void ACapsuleAcrossAPostNarrowerThanItRestsAndSleeps() {
+    for (const float offset : {0.0f, 0.1f, 0.3f}) {
+        PhysicsWorld world;
+        AddGround(world);
+        BodyDescription post;
+        post.shape = Shape::Box({0.5f, 0.5f, 0.5f});
+        post.position = {0.0f, 0.5f, 0.0f};
+        post.isStatic = true;
+        world.AddBody(post);
+        // The capsule is 2.4 m long and the post 1 m wide, so both ends hang in the air.
+        const uint32_t capsule = AddCapsule(world, {offset, 1.0f + 0.2f + 0.05f, 0.0f}, 0.2f, 1.0f, kLieAlongX);
+        Simulate(world, 15.0f);
+        Check(world.GetBody(capsule).isAsleep, "a capsule resting across a post with its middle " + std::to_string(offset) + " m off centre falls asleep");
+    }
+    Body post;
+    post.shape = Shape::Box({0.2f, 0.5f, 0.2f});
+    const Body capsule = CapsuleBody({0.0f, 0.5f + 0.3f - 0.005f, 0.0f}, kLieAlongX, 0.3f, 1.0f);
+    physics::Manifold manifold;
+    Check(physics::Collide(capsule, post, manifold), "a capsule lying on a narrow post touches it");
+    Check(manifold.count >= 2, "at two points, one each side of the post: " + std::to_string(manifold.count));
+}
+
 void ACapsuleThatIsNotQuiteUprightFallsOverAndLiesDown() {
     PhysicsWorld world;
     AddGround(world);
@@ -1678,6 +1721,8 @@ int main() {
         {"AnyOrderOfTwoShapesGivesTheSameContactTurnedRound", AnyOrderOfTwoShapesGivesTheSameContactTurnedRound},
         {"ACapsuleAcrossAPostLeavesTheWayItCameIn", ACapsuleAcrossAPostLeavesTheWayItCameIn},
         {"CapsulesMeetingSpheresAndBoxesAtTheirRoundEnds", CapsulesMeetingSpheresAndBoxesAtTheirRoundEnds},
+        {"ALongCapsuleClippingACornerIsPushedOutAlongTheCorner", ALongCapsuleClippingACornerIsPushedOutAlongTheCorner},
+        {"ACapsuleAcrossAPostNarrowerThanItRestsAndSleeps", ACapsuleAcrossAPostNarrowerThanItRestsAndSleeps},
         {"ACapsuleThatIsNotQuiteUprightFallsOverAndLiesDown", ACapsuleThatIsNotQuiteUprightFallsOverAndLiesDown},
         {"ACapsuleLyingOnASlopeRollsDownIt", ACapsuleLyingOnASlopeRollsDownIt},
         {"ACapsuleTurnedOnTheSpotOnTheGroundStopsAndSleeps", ACapsuleTurnedOnTheSpotOnTheGroundStopsAndSleeps},
