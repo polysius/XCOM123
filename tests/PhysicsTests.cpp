@@ -66,6 +66,16 @@ uint32_t AddSphere(PhysicsWorld& world, glm::vec3 position, float radius = 0.5f)
     return world.AddBody(sphere);
 }
 
+uint32_t AddCapsule(PhysicsWorld& world, glm::vec3 position, float radius = 0.3f, float halfHeight = 0.5f,
+                    glm::quat orientation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f)) {
+    BodyDescription capsule;
+    capsule.shape = Shape::Capsule(radius, halfHeight);
+    capsule.position = position;
+    capsule.orientation = orientation;
+    return world.AddBody(capsule);
+}
+
+
 // How far the closest of a box's three axes is from straight up, as a cosine: 1 when the box lies flat.
 float Flatness(const Body& body) {
     const glm::mat3 axes = glm::mat3_cast(body.orientation);
@@ -429,6 +439,13 @@ void TheResultDoesNotDependOnTheNumberOfThreads() {
     BuildPile(serial, 400);
     BuildPile(parallel, 400);
     for (PhysicsWorld* world : {&serial, &parallel}) {
+        for (int i = 0; i < 30; ++i) {
+            const float fi = static_cast<float>(i);
+            AddCapsule(*world, {std::sin(fi) * 2.0f, 3.0f + fi * 0.9f, std::cos(fi) * 2.0f}, 0.2f, 0.3f,
+                       glm::angleAxis(fi, glm::normalize(glm::vec3(1.0f, 0.5f * fi, 0.3f))));
+        }
+    }
+    for (PhysicsWorld* world : {&serial, &parallel}) {
         Simulate(*world, 6.0f);
         const uint32_t ball = AddSphere(*world, {0.0f, 6.0f, 0.0f}, 0.4f);
         world->SetVelocity(ball, {0.0f, -8.0f, 0.0f}, glm::vec3(0.0f));
@@ -544,6 +561,348 @@ bool IsFinite(const Body& body) {
     const auto finite = [](glm::vec3 v) { return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z); };
     return finite(body.position) && finite(body.linearVelocity) && finite(body.angularVelocity) &&
            std::isfinite(body.orientation.w);
+}
+
+// Capsules ----------------------------------------------------------------------------------
+
+Body CapsuleBody(glm::vec3 position, glm::quat orientation, float radius = 0.3f, float halfHeight = 0.5f) {
+    Body body;
+    body.shape = Shape::Capsule(radius, halfHeight);
+    body.position = position;
+    body.orientation = orientation;
+    return body;
+}
+
+// A capsule is stood along local Y. This turns it to lie along X or along Z.
+const glm::quat kLieAlongX = glm::angleAxis(glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+const glm::quat kLieAlongZ = glm::angleAxis(glm::radians(90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+
+glm::vec3 AxisOf(const Body& body) {
+    return glm::mat3_cast(body.orientation)[1];
+}
+
+// Adds up the mass and the second moments of a capsule by testing a fine grid of points, as an independent
+// check of the formulas in AddBody.
+void IntegrateCapsule(float radius, float halfHeight, float density, double& mass, double& acrossAxis, double& alongAxis) {
+    constexpr int kCells = 90;
+    const double reachY = halfHeight + radius;
+    const double cellVolume = (2.0 * radius / kCells) * (2.0 * radius / kCells) * (2.0 * reachY / kCells);
+    mass = acrossAxis = alongAxis = 0.0;
+    for (int ix = 0; ix < kCells; ++ix) {
+        for (int iy = 0; iy < kCells; ++iy) {
+            for (int iz = 0; iz < kCells; ++iz) {
+                const double x = (ix + 0.5) / kCells * 2.0 * radius - radius;
+                const double y = (iy + 0.5) / kCells * 2.0 * reachY - reachY;
+                const double z = (iz + 0.5) / kCells * 2.0 * radius - radius;
+                const double beyondEnd = std::max(std::abs(y) - halfHeight, 0.0);
+                if (x * x + z * z + beyondEnd * beyondEnd > radius * radius) {
+                    continue;
+                }
+                const double dm = density * cellVolume;
+                mass += dm;
+                acrossAxis += dm * (y * y + z * z);
+                alongAxis += dm * (x * x + z * z);
+            }
+        }
+    }
+}
+
+void ACapsuleHasTheMassAndInertiaOfItsVolume() {
+    const float radius = 0.3f;
+    const float halfHeight = 0.5f;
+    PhysicsWorld world;
+    const Body& body = world.GetBody(AddCapsule(world, glm::vec3(0.0f), radius, halfHeight));
+    double mass;
+    double across;
+    double along;
+    IntegrateCapsule(radius, halfHeight, 1000.0f, mass, across, along);
+    Check(Near(1.0f / body.inverseMass, static_cast<float>(mass), 0.015f * static_cast<float>(mass)), "its mass is that of the cylinder and the two half spheres");
+    Check(Near(1.0f / body.inverseInertiaLocal.x, static_cast<float>(across), 0.02f * static_cast<float>(across)), "its inertia across the axis matches the integral");
+    Check(Near(1.0f / body.inverseInertiaLocal.y, static_cast<float>(along), 0.02f * static_cast<float>(along)), "and along the axis");
+    Check(body.inverseInertiaLocal.x == body.inverseInertiaLocal.z, "and the two directions across the axis are the same");
+}
+
+void ACapsuleWithNoStraightPartIsASphere() {
+    PhysicsWorld world;
+    const Body& capsule = world.GetBody(AddCapsule(world, glm::vec3(0.0f), 0.4f, 0.0f));
+    const Body& sphere = world.GetBody(AddSphere(world, glm::vec3(5.0f, 0.0f, 0.0f), 0.4f));
+    Check(Near(capsule.inverseMass, sphere.inverseMass, 1e-4f * sphere.inverseMass), "it weighs what the sphere weighs");
+    Check(Near(capsule.inverseInertiaLocal.x, sphere.inverseInertiaLocal.x, 1e-4f * sphere.inverseInertiaLocal.x) &&
+              Near(capsule.inverseInertiaLocal.y, sphere.inverseInertiaLocal.y, 1e-4f * sphere.inverseInertiaLocal.y),
+          "and has its inertia");
+}
+
+void TheBoundsOfACapsuleFollowItsAxis() {
+    PhysicsWorld world;
+    const Body& standing = world.GetBody(AddCapsule(world, {1.0f, 2.0f, 3.0f}, 0.3f, 0.5f));
+    Check(Near(standing.boundsMax.y - standing.boundsMin.y, 1.6f, 1e-4f) && Near(standing.boundsMax.x - standing.boundsMin.x, 0.6f, 1e-4f),
+          "a standing capsule is as tall as its straight part and both ends");
+    const Body& lying = world.GetBody(AddCapsule(world, {1.0f, 2.0f, 3.0f}, 0.3f, 0.5f, kLieAlongX));
+    Check(Near(lying.boundsMax.x - lying.boundsMin.x, 1.6f, 1e-4f) && Near(lying.boundsMax.y - lying.boundsMin.y, 0.6f, 1e-4f),
+          "a capsule lying along X is long in X");
+}
+
+void BadCapsuleSizesAreCleanedUp() {
+    PhysicsWorld world;
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const uint32_t notANumber = AddCapsule(world, {0.0f, 1.0f, 0.0f}, 0.3f, nan);
+    const uint32_t negative = AddCapsule(world, {3.0f, 1.0f, 0.0f}, 0.3f, -2.0f);
+    AddGround(world);
+    Simulate(world, 2.0f);
+    Check(IsFinite(world.GetBody(notANumber)), "a half height that is not a number is replaced, and the capsule falls like a body");
+    Check(world.GetBody(negative).shape.halfHeight == 0.0f, "a negative half height is zero, which makes a ball");
+    Check(IsFinite(world.GetBody(negative)) && world.GetBody(negative).position.y > 0.2f, "and that capsule rests on the ground");
+}
+
+// What touches a capsule, and where -------------------------------------------------------------
+
+void ACapsuleLyingOnABoxTouchesItAtBothEnds() {
+    Body ground;
+    ground.shape = Shape::Box({5.0f, 0.5f, 5.0f});
+    ground.position = {0.0f, -0.5f, 0.0f};
+    const Body lying = CapsuleBody({0.0f, 0.29f, 0.0f}, kLieAlongX);
+    physics::Manifold manifold;
+    Check(physics::Collide(lying, ground, manifold), "a capsule lying on the ground touches it");
+    Check(manifold.count >= 2, "at two or more points, so it cannot rock on one: " + std::to_string(manifold.count));
+    Check(Near(manifold.normal.y, -1.0f, 1e-3f), "the normal points from the capsule down into the ground");
+    float widest = 0.0f;
+    for (int i = 0; i < manifold.count; ++i) {
+        widest = std::max(widest, std::abs(manifold.points[i].position.x));
+        Check(Near(manifold.points[i].depth, 0.01f, 2e-3f), "each point is 1 cm deep");
+    }
+    Check(widest > 0.4f, "and the points are spread along the length of the capsule");
+}
+
+void AStandingCapsuleTouchesTheGroundAtOnePoint() {
+    Body ground;
+    ground.shape = Shape::Box({5.0f, 0.5f, 5.0f});
+    ground.position = {0.0f, -0.5f, 0.0f};
+    const Body standing = CapsuleBody({0.0f, 0.5f + 0.3f - 0.01f, 0.0f}, glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+    physics::Manifold manifold;
+    Check(physics::Collide(standing, ground, manifold), "a capsule on its end touches the ground");
+    Check(manifold.count == 1, "at one point: " + std::to_string(manifold.count));
+    Check(Near(manifold.points[0].depth, 0.01f, 2e-3f), "1 cm deep");
+}
+
+void ACapsuleTiltedOnABoxTouchesAtTheLowEndOnly() {
+    Body ground;
+    ground.shape = Shape::Box({5.0f, 0.5f, 5.0f});
+    ground.position = {0.0f, -0.5f, 0.0f};
+    const glm::quat tilt = glm::angleAxis(glm::radians(40.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+    Body capsule = CapsuleBody({0.0f, 1.0f, 0.0f}, tilt);
+    const glm::vec3 axis = AxisOf(capsule);
+    capsule.position.y = 0.5f * std::abs(axis.y) + 0.3f - 0.005f;
+    physics::Manifold manifold;
+    Check(physics::Collide(capsule, ground, manifold), "a tilted capsule touches the ground");
+    Check(manifold.count == 1, "at its low end only: " + std::to_string(manifold.count));
+}
+
+void ParallelCapsulesTouchAlongTheirLengthAndCrossedOnesAtOnePoint() {
+    const Body below = CapsuleBody({0.0f, 0.0f, 0.0f}, kLieAlongX);
+    const Body above = CapsuleBody({0.0f, 0.59f, 0.0f}, kLieAlongX);
+    physics::Manifold manifold;
+    Check(physics::Collide(below, above, manifold), "two capsules lying one on the other touch");
+    Check(manifold.count >= 2, "along their length, at two points or more: " + std::to_string(manifold.count));
+    Check(Near(manifold.normal.y, 1.0f, 1e-3f), "with the normal from the lower to the upper");
+
+    const Body across = CapsuleBody({0.0f, 0.59f, 0.0f}, kLieAlongZ);
+    Check(physics::Collide(below, across, manifold), "a capsule laid across another touches it");
+    Check(manifold.count == 1, "at one point: " + std::to_string(manifold.count));
+    Check(Near(manifold.points[0].depth, 0.01f, 2e-3f), "1 cm deep");
+}
+
+void AnyOrderOfTwoShapesGivesTheSameContactTurnedRound() {
+    Body ground;
+    ground.shape = Shape::Box({5.0f, 0.5f, 5.0f});
+    ground.position = {0.0f, -0.5f, 0.0f};
+    Body ball;
+    ball.shape = Shape::Sphere(0.3f);
+    ball.position = {0.2f, 0.29f, 0.1f};
+    const Body capsule = CapsuleBody({0.1f, 0.29f, 0.0f}, kLieAlongX);
+    const Body otherCapsule = CapsuleBody({0.4f, 0.55f, 0.1f}, kLieAlongZ);
+    const Body* shapes[] = {&ground, &ball, &capsule, &otherCapsule};
+    for (const Body* first : shapes) {
+        for (const Body* second : shapes) {
+            if (first == second) {
+                continue;
+            }
+            physics::Manifold forward;
+            physics::Manifold backward;
+            const bool touching = physics::Collide(*first, *second, forward);
+            Check(touching == physics::Collide(*second, *first, backward), "the same pair touches whichever is named first");
+            if (touching) {
+                Check(forward.count == backward.count, "with the same number of points");
+                Check(glm::dot(forward.normal, backward.normal) < -0.999f, "and opposite normals");
+                Check(Near(forward.points[0].depth, backward.points[0].depth, 1e-4f), "and the same depth");
+            }
+        }
+    }
+}
+
+void ACapsuleAcrossAPostLeavesTheWayItCameIn() {
+    // The straight part passes through the post, so no end of the capsule is inside it.
+    Body post;
+    post.shape = Shape::Box({0.2f, 1.0f, 0.2f});
+    const Body capsule = CapsuleBody({0.0f, 0.0f, 0.1f}, kLieAlongX, 0.1f, 1.0f);
+    physics::Manifold manifold;
+    Check(physics::Collide(capsule, post, manifold), "a capsule through a post touches it");
+    Check(manifold.count >= 1 && manifold.points[0].depth > 0.1f, "and is deep in it");
+    Check(Near(glm::length(manifold.normal), 1.0f, 1e-4f), "with a normal of unit length");
+    // The nearest face is the +Z one: the capsule has to move towards +Z to get out, so the post moves towards -Z.
+    Check(manifold.normal.z < -0.9f, "pointing the short way out: " + std::to_string(manifold.normal.x) + " " + std::to_string(manifold.normal.y) + " " + std::to_string(manifold.normal.z) + " count " + std::to_string(manifold.count));
+}
+
+void CapsulesMeetingSpheresAndBoxesAtTheirRoundEnds() {
+    const Body capsule = CapsuleBody({0.0f, 0.0f, 0.0f}, glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+    Body ball;
+    ball.shape = Shape::Sphere(0.2f);
+    ball.position = {0.0f, 0.5f + 0.3f + 0.2f - 0.01f, 0.0f};
+    physics::Manifold manifold;
+    Check(physics::Collide(capsule, ball, manifold), "a ball sitting on the top of a capsule touches it");
+    Check(Near(manifold.normal.y, 1.0f, 1e-3f) && Near(manifold.points[0].depth, 0.01f, 2e-3f), "straight above, 1 cm deep");
+    ball.position = {0.3f + 0.2f - 0.01f, 0.2f, 0.0f};
+    Check(physics::Collide(capsule, ball, manifold), "a ball beside the straight part touches it");
+    Check(Near(manifold.normal.x, 1.0f, 1e-3f), "from the side");
+    ball.position = {0.3f + 0.2f + 0.1f, 0.2f, 0.0f};
+    Check(!physics::Collide(capsule, ball, manifold), "and a ball 10 cm further away is not");
+}
+
+// What capsules do ------------------------------------------------------------------------------
+
+void ACapsuleThatIsNotQuiteUprightFallsOverAndLiesDown() {
+    PhysicsWorld world;
+    AddGround(world);
+    const glm::quat lean = glm::angleAxis(glm::radians(4.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+    const uint32_t capsule = AddCapsule(world, {0.0f, 0.8f + 0.02f, 0.0f}, 0.3f, 0.5f, lean);
+    Simulate(world, 8.0f);
+    const Body& body = world.GetBody(capsule);
+    Check(std::abs(AxisOf(body).y) < 0.15f, "it ends up lying: axis height " + std::to_string(AxisOf(body).y));
+    Check(Near(body.position.y, 0.3f, 0.03f), "with its axis one radius above the ground: " + std::to_string(body.position.y));
+    Check(body.isAsleep, "and then falls asleep");
+}
+
+void ACapsuleLyingOnASlopeRollsDownIt() {
+    PhysicsWorld world;
+    BodyDescription slope;
+    slope.shape = Shape::Box({12.0f, 0.5f, 6.0f});
+    slope.orientation = glm::angleAxis(glm::radians(-15.0f), glm::vec3(0.0f, 0.0f, 1.0f));  // +X is downhill
+    slope.isStatic = true;
+    world.AddBody(slope);
+    const uint32_t capsule = AddCapsule(world, {0.0f, 1.0f, 0.0f}, 0.3f, 0.5f, kLieAlongZ);
+    Simulate(world, 2.5f);
+    const Body& body = world.GetBody(capsule);
+    Check(body.position.x > 1.0f, "it rolls downhill: x = " + std::to_string(body.position.x));
+    Check(std::abs(body.position.z) < 0.3f, "straight down, not sideways: z = " + std::to_string(body.position.z));
+    Check(std::abs(AxisOf(body).y) < 0.15f, "and stays lying across the slope");
+}
+
+void ACapsuleTurnedOnTheSpotOnTheGroundStopsAndSleeps() {
+    PhysicsWorld world;
+    AddGround(world);
+    const uint32_t capsule = AddCapsule(world, {0.0f, 0.3f, 0.0f}, 0.3f, 0.5f, kLieAlongX);
+    world.SetVelocity(capsule, glm::vec3(0.0f), {0.0f, 6.0f, 0.0f});
+    Simulate(world, 10.0f);
+    const Body& body = world.GetBody(capsule);
+    Check(body.isAsleep, "a spinning capsule comes to rest");
+    Check(glm::length(body.position - glm::vec3(0.0f, 0.3f, 0.0f)) < 0.3f, "close to where it was: " + std::to_string(body.position.x) + " " + std::to_string(body.position.y) + " " + std::to_string(body.position.z));
+}
+
+void ACapsuleRollsToAStopAcrossTheFloor() {
+    PhysicsWorld world;
+    AddGround(world);
+    const uint32_t capsule = AddCapsule(world, {0.0f, 0.3f, 0.0f}, 0.3f, 0.5f, kLieAlongZ);
+    world.SetVelocity(capsule, {4.0f, 0.0f, 0.0f}, {0.0f, 0.0f, -4.0f / 0.3f});  // rolling without slipping
+    Simulate(world, 20.0f);
+    const Body& body = world.GetBody(capsule);
+    Check(body.isAsleep, "it stops");
+    Check(body.position.x > 1.0f && body.position.x < 25.0f, "after rolling a while: " + std::to_string(body.position.x));
+}
+
+void CapsulesDroppedOnEachOtherAndOnABallSettleAndSleep() {
+    PhysicsWorld world;
+    AddGround(world);
+    const uint32_t first = AddCapsule(world, {0.0f, 0.5f, 0.0f}, 0.3f, 0.5f, kLieAlongX);
+    const uint32_t second = AddCapsule(world, {0.1f, 1.5f, 0.0f}, 0.3f, 0.5f, kLieAlongZ);
+    const uint32_t third = AddCapsule(world, {-0.2f, 2.5f, 0.1f}, 0.3f, 0.5f);
+    const uint32_t ball = AddSphere(world, {0.0f, 4.0f, 0.0f}, 0.3f);
+    Simulate(world, 15.0f);
+    for (const uint32_t index : {first, second, third, ball}) {
+        const Body& body = world.GetBody(index);
+        Check(IsFinite(body) && body.position.y > 0.25f, "nothing fell through the ground");
+        Check(body.isAsleep, "and everything came to rest");
+    }
+}
+
+float EnergyAboveTheFloor(const Body& body, float restingHeight) {
+    const float mass = 1.0f / body.inverseMass;
+    const glm::mat3 inertiaWorld = glm::inverse(body.inverseInertiaWorld);
+    return mass * 9.81f * (body.position.y - restingHeight) + 0.5f * mass * glm::dot(body.linearVelocity, body.linearVelocity) +
+           0.5f * glm::dot(body.angularVelocity, inertiaWorld * body.angularVelocity);
+}
+
+void AnElasticCapsuleDroppedAtAnyTiltNeverGainsEnergy() {
+    for (const float degrees : {0.0f, 20.0f, 45.0f, 70.0f, 90.0f}) {
+        PhysicsWorld world;
+        AddGround(world, 0.6f, 1.0f);
+        BodyDescription description;
+        description.shape = Shape::Capsule(0.3f, 0.5f);
+        description.position = {0.0f, 2.0f, 0.0f};
+        description.orientation = glm::angleAxis(glm::radians(degrees), glm::vec3(0.0f, 0.0f, 1.0f));
+        description.material = {0.6f, 1.0f};
+        const uint32_t capsule = world.AddBody(description);
+        const float start = EnergyAboveTheFloor(world.GetBody(capsule), 0.3f);
+        float most = start;
+        for (int i = 0; i < 900; ++i) {
+            world.Step();
+            most = std::max(most, EnergyAboveTheFloor(world.GetBody(capsule), 0.3f));
+        }
+        Check(most < start * 1.05f, "a capsule dropped at " + std::to_string(degrees) + " degrees keeps its energy at most: " +
+                                       std::to_string(most / start));
+    }
+}
+
+void AFastSmallCapsuleDoesNotPassThroughAThinPlate() {
+    int passedThrough = 0;
+    for (const float degrees : {0.0f, 30.0f, 90.0f}) {
+        for (int phase = 0; phase < 12; ++phase) {
+            PhysicsWorld world;
+            BodyDescription plate;
+            plate.shape = Shape::Box({5.0f, 0.05f, 5.0f});
+            plate.position = {0.0f, 5.0f, 0.0f};
+            plate.isStatic = true;
+            world.AddBody(plate);
+            BodyDescription description;
+            description.shape = Shape::Capsule(0.05f, 0.1f);
+            description.position = {0.0f, 6.0f + 0.01f * static_cast<float>(phase), 0.0f};
+            description.orientation = glm::angleAxis(glm::radians(degrees), glm::vec3(0.0f, 0.0f, 1.0f));
+            description.linearVelocity = {0.0f, -40.0f, 0.0f};
+            const uint32_t capsule = world.AddBody(description);
+            Simulate(world, 0.5f);
+            passedThrough += world.GetBody(capsule).position.y < 5.0f ? 1 : 0;
+        }
+    }
+    Check(passedThrough == 0, "a small capsule at 40 m/s stays above a 10 cm plate at every tilt and phase, passed " +
+                                  std::to_string(passedThrough));
+}
+
+void ACapsuleThrownOntoAHeapOfBoxesLeavesItAsleep() {
+    PhysicsWorld world;
+    AddGround(world);
+    for (int i = 0; i < 6; ++i) {
+        AddBox(world, {0.1f * static_cast<float>(i % 2), 0.5f + static_cast<float>(i), 0.0f});
+    }
+    const uint32_t capsule = AddCapsule(world, {0.3f, 9.0f, 0.0f}, 0.3f, 0.5f, kLieAlongZ);
+    world.SetVelocity(capsule, {0.0f, -3.0f, 0.0f}, glm::vec3(0.0f));
+    Simulate(world, 15.0f);
+    bool allAsleep = true;
+    for (uint32_t i = 0; i < world.BodyCount(); ++i) {
+        if (world.GetBody(i).isStatic) {
+            continue;
+        }
+        allAsleep = allAsleep && world.GetBody(i).isAsleep;
+        Check(IsFinite(world.GetBody(i)) && world.GetBody(i).position.y > 0.2f, "nothing fell through the ground");
+    }
+    Check(allAsleep, "the stack and the capsule come to rest");
 }
 
 void BadInputDoesNotPoisonTheWorld() {
@@ -1308,6 +1667,25 @@ int main() {
         {"AForceOffCentreSpinsTheBody", AForceOffCentreSpinsTheBody},
         {"AForceLastsOneStepOnly", AForceLastsOneStepOnly},
         {"ForcesOnBodiesThatCannotMoveOrAreNotNumbersAreIgnored", ForcesOnBodiesThatCannotMoveOrAreNotNumbersAreIgnored},
+        {"ACapsuleHasTheMassAndInertiaOfItsVolume", ACapsuleHasTheMassAndInertiaOfItsVolume},
+        {"ACapsuleWithNoStraightPartIsASphere", ACapsuleWithNoStraightPartIsASphere},
+        {"TheBoundsOfACapsuleFollowItsAxis", TheBoundsOfACapsuleFollowItsAxis},
+        {"BadCapsuleSizesAreCleanedUp", BadCapsuleSizesAreCleanedUp},
+        {"ACapsuleLyingOnABoxTouchesItAtBothEnds", ACapsuleLyingOnABoxTouchesItAtBothEnds},
+        {"AStandingCapsuleTouchesTheGroundAtOnePoint", AStandingCapsuleTouchesTheGroundAtOnePoint},
+        {"ACapsuleTiltedOnABoxTouchesAtTheLowEndOnly", ACapsuleTiltedOnABoxTouchesAtTheLowEndOnly},
+        {"ParallelCapsulesTouchAlongTheirLengthAndCrossedOnesAtOnePoint", ParallelCapsulesTouchAlongTheirLengthAndCrossedOnesAtOnePoint},
+        {"AnyOrderOfTwoShapesGivesTheSameContactTurnedRound", AnyOrderOfTwoShapesGivesTheSameContactTurnedRound},
+        {"ACapsuleAcrossAPostLeavesTheWayItCameIn", ACapsuleAcrossAPostLeavesTheWayItCameIn},
+        {"CapsulesMeetingSpheresAndBoxesAtTheirRoundEnds", CapsulesMeetingSpheresAndBoxesAtTheirRoundEnds},
+        {"ACapsuleThatIsNotQuiteUprightFallsOverAndLiesDown", ACapsuleThatIsNotQuiteUprightFallsOverAndLiesDown},
+        {"ACapsuleLyingOnASlopeRollsDownIt", ACapsuleLyingOnASlopeRollsDownIt},
+        {"ACapsuleTurnedOnTheSpotOnTheGroundStopsAndSleeps", ACapsuleTurnedOnTheSpotOnTheGroundStopsAndSleeps},
+        {"ACapsuleRollsToAStopAcrossTheFloor", ACapsuleRollsToAStopAcrossTheFloor},
+        {"CapsulesDroppedOnEachOtherAndOnABallSettleAndSleep", CapsulesDroppedOnEachOtherAndOnABallSettleAndSleep},
+        {"AnElasticCapsuleDroppedAtAnyTiltNeverGainsEnergy", AnElasticCapsuleDroppedAtAnyTiltNeverGainsEnergy},
+        {"AFastSmallCapsuleDoesNotPassThroughAThinPlate", AFastSmallCapsuleDoesNotPassThroughAThinPlate},
+        {"ACapsuleThrownOntoAHeapOfBoxesLeavesItAsleep", ACapsuleThrownOntoAHeapOfBoxesLeavesItAsleep},
     };
     for (const Test& test : tests) {
         const int failuresBefore = failureCount;

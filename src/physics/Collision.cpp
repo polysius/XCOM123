@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <vector>
 
 namespace physics {
@@ -25,29 +26,33 @@ float SignOf(float value) {
 
 // Spheres -------------------------------------------------------------------------------------
 
-bool SphereSphere(const Body& a, const Body& b, Manifold& manifold, float margin) {
-    const glm::vec3 between = b.position - a.position;
+// One point where a round shape touches another shape. The normal points from the round shape to the other shape.
+struct RoundContact {
+    glm::vec3 normal;
+    glm::vec3 position;
+    float depth;
+};
+
+// The contact between two spheres, found from their centres. The normal points from `centreA` to `centreB`.
+bool SpheresTouch(glm::vec3 centreA, float radiusA, glm::vec3 centreB, float radiusB, float margin, RoundContact& contact) {
+    const glm::vec3 between = centreB - centreA;
     const float distanceSquared = glm::dot(between, between);
-    const float radii = a.shape.radius + b.shape.radius;
+    const float radii = radiusA + radiusB;
     const float reach = radii + margin;
     if (distanceSquared > reach * reach) {
         return false;
     }
     const float distance = std::sqrt(distanceSquared);
-    const glm::vec3 normal = distance > 1e-6f ? between / distance : glm::vec3(0.0f, 1.0f, 0.0f);
-    manifold.normal = normal;
-    manifold.count = 1;
+    contact.normal = distance > 1e-6f ? between / distance : glm::vec3(0.0f, 1.0f, 0.0f);
     // Halfway between the two surfaces along the line through the centres.
-    manifold.points[0].position = a.position + normal * (0.5f * (a.shape.radius + distance - b.shape.radius));
-    manifold.points[0].depth = radii - distance;
+    contact.position = centreA + contact.normal * (0.5f * (radiusA + distance - radiusB));
+    contact.depth = radii - distance;
     return true;
 }
 
-// The contact between a sphere and a box. The normal points from the sphere to the box.
-bool SphereBox(const Body& sphere, const Body& box, Manifold& manifold, float margin) {
-    const Obb obb = ObbOf(box);
-    const float radius = sphere.shape.radius;
-    const glm::vec3 local = glm::transpose(obb.axes) * (sphere.position - obb.center);
+// The contact between a sphere, given by its centre and radius, and a box.
+bool SphereTouchesBox(glm::vec3 centre, float radius, const Obb& obb, float margin, RoundContact& contact) {
+    const glm::vec3 local = glm::transpose(obb.axes) * (centre - obb.center);
     const glm::vec3 closest = glm::clamp(local, -obb.half, obb.half);
     const glm::vec3 delta = local - closest;  // from the closest point of the box to the sphere's centre
     const float distanceSquared = glm::dot(delta, delta);
@@ -58,9 +63,9 @@ bool SphereBox(const Body& sphere, const Body& box, Manifold& manifold, float ma
             return false;
         }
         const float distance = std::sqrt(distanceSquared);
-        manifold.normal = -(obb.axes * (delta / distance));
-        manifold.points[0].position = obb.center + obb.axes * closest;
-        manifold.points[0].depth = radius - distance;
+        contact.normal = -(obb.axes * (delta / distance));
+        contact.position = obb.center + obb.axes * closest;
+        contact.depth = radius - distance;
     } else {
         // The centre is inside the box: leave through the nearest face.
         const glm::vec3 gaps = obb.half - glm::abs(local);
@@ -73,12 +78,283 @@ bool SphereBox(const Body& sphere, const Body& box, Manifold& manifold, float ma
         glm::vec3 outwardLocal(0.0f);
         outwardLocal[axis] = SignOf(local[axis]);
         const glm::vec3 outward = obb.axes * outwardLocal;
-        manifold.normal = -outward;
-        manifold.points[0].position = sphere.position + outward * gaps[axis];
-        manifold.points[0].depth = radius + gaps[axis];
+        contact.normal = -outward;
+        contact.position = centre + outward * gaps[axis];
+        contact.depth = radius + gaps[axis];
     }
-    manifold.count = 1;
     return true;
+}
+
+void SetSingleContact(const RoundContact& contact, Manifold& manifold) {
+    manifold.normal = contact.normal;
+    manifold.points[0].position = contact.position;
+    manifold.points[0].depth = contact.depth;
+    manifold.count = 1;
+}
+
+bool SphereSphere(const Body& a, const Body& b, Manifold& manifold, float margin) {
+    RoundContact contact;
+    if (!SpheresTouch(a.position, a.shape.radius, b.position, b.shape.radius, margin, contact)) {
+        return false;
+    }
+    SetSingleContact(contact, manifold);
+    return true;
+}
+
+// The contact between a sphere and a box. The normal points from the sphere to the box.
+bool SphereBox(const Body& sphere, const Body& box, Manifold& manifold, float margin) {
+    RoundContact contact;
+    if (!SphereTouchesBox(sphere.position, sphere.shape.radius, ObbOf(box), margin, contact)) {
+        return false;
+    }
+    SetSingleContact(contact, manifold);
+    return true;
+}
+
+// Capsules ------------------------------------------------------------------------------------
+
+// The straight part of a capsule in the world, from one end to the other.
+struct Segment {
+    glm::vec3 start;
+    glm::vec3 end;
+};
+
+Segment SegmentOf(const Body& capsule) {
+    const glm::vec3 along = AxesOf(capsule)[1] * capsule.shape.halfHeight;
+    return {capsule.position - along, capsule.position + along};
+}
+
+glm::vec3 ClosestPointOnSegment(const Segment& segment, glm::vec3 point) {
+    const glm::vec3 along = segment.end - segment.start;
+    const float lengthSquared = glm::dot(along, along);
+    if (lengthSquared < 1e-12f) {
+        return segment.start;
+    }
+    const float t = glm::clamp(glm::dot(point - segment.start, along) / lengthSquared, 0.0f, 1.0f);
+    return segment.start + along * t;
+}
+
+// The closest points of two segments, after Ericson, Real-Time Collision Detection, section 5.1.9.
+void ClosestPointsOfSegments(const Segment& first, const Segment& second, glm::vec3& onFirst, glm::vec3& onSecond) {
+    const glm::vec3 d1 = first.end - first.start;
+    const glm::vec3 d2 = second.end - second.start;
+    const glm::vec3 r = first.start - second.start;
+    const float a = glm::dot(d1, d1);
+    const float e = glm::dot(d2, d2);
+    const float f = glm::dot(d2, r);
+    float s = 0.0f;
+    float t = 0.0f;
+    if (a <= 1e-12f && e <= 1e-12f) {
+        // Both are points.
+    } else if (a <= 1e-12f) {
+        t = glm::clamp(f / e, 0.0f, 1.0f);
+    } else {
+        const float c = glm::dot(d1, r);
+        if (e <= 1e-12f) {
+            s = glm::clamp(-c / a, 0.0f, 1.0f);
+        } else {
+            const float b = glm::dot(d1, d2);
+            const float denominator = a * e - b * b;  // zero when the segments are parallel
+            s = denominator > 1e-9f * a * e ? glm::clamp((b * f - c * e) / denominator, 0.0f, 1.0f) : 0.0f;
+            t = (b * s + f) / e;
+            if (t < 0.0f) {
+                t = 0.0f;
+                s = glm::clamp(-c / a, 0.0f, 1.0f);
+            } else if (t > 1.0f) {
+                t = 1.0f;
+                s = glm::clamp((b - c) / a, 0.0f, 1.0f);
+            }
+        }
+    }
+    onFirst = first.start + d1 * s;
+    onSecond = second.start + d2 * t;
+}
+
+// A capsule is a segment with a radius, so every contact is a sphere centred on the segment touching something.
+// One such sphere is not enough: a capsule that lies on a face touches it along its length and would rock on a
+// single point. So the contact is tried at the closest point and at both ends, and the points that agree with the
+// deepest one in direction are kept.
+class ContactCollector {
+public:
+    explicit ContactCollector(Manifold& manifold) : manifold(manifold) {}
+
+    void Add(const RoundContact& contact) {
+        candidates[count++] = contact;
+    }
+
+    // Keeps the deepest contact, and the others that point the same way and lie apart from it and from each other.
+    bool Finish() {
+        if (count == 0) {
+            return false;
+        }
+        int deepest = 0;
+        for (int i = 1; i < count; ++i) {
+            if (candidates[i].depth > candidates[deepest].depth) {
+                deepest = i;
+            }
+        }
+        manifold.normal = candidates[deepest].normal;
+        manifold.count = 0;
+        AddPoint(candidates[deepest]);
+        for (int i = 0; i < count; ++i) {
+            const bool sameDirection = glm::dot(candidates[i].normal, manifold.normal) > kSameDirection;
+            if (i != deepest && sameDirection && IsApartFromKept(candidates[i].position)) {
+                AddPoint(candidates[i]);
+            }
+        }
+        return true;
+    }
+
+private:
+    static constexpr float kSameDirection = 0.9f;
+    static constexpr float kMinSpacing = 0.01f;  // contacts closer than 1 cm are one contact
+
+    void AddPoint(const RoundContact& contact) {
+        if (manifold.count < kMaxContactsPerPair) {
+            manifold.points[manifold.count].position = contact.position;
+            manifold.points[manifold.count].depth = contact.depth;
+            ++manifold.count;
+        }
+    }
+
+    bool IsApartFromKept(glm::vec3 position) const {
+        for (int i = 0; i < manifold.count; ++i) {
+            if (glm::distance(position, manifold.points[i].position) < kMinSpacing) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    Manifold& manifold;
+    RoundContact candidates[8];
+    int count = 0;
+};
+
+// The contact between a capsule and a sphere. The normal points from the capsule to the sphere.
+bool CapsuleSphere(const Body& capsule, const Body& sphere, Manifold& manifold, float margin) {
+    RoundContact contact;
+    const glm::vec3 nearest = ClosestPointOnSegment(SegmentOf(capsule), sphere.position);
+    if (!SpheresTouch(nearest, capsule.shape.radius, sphere.position, sphere.shape.radius, margin, contact)) {
+        return false;
+    }
+    SetSingleContact(contact, manifold);
+    return true;
+}
+
+// The contacts between two capsules. The normal points from `a` to `b`.
+bool CapsuleCapsule(const Body& a, const Body& b, Manifold& manifold, float margin) {
+    const Segment segmentA = SegmentOf(a);
+    const Segment segmentB = SegmentOf(b);
+    ContactCollector collector(manifold);
+    const auto tryCentres = [&](glm::vec3 centreA, glm::vec3 centreB) {
+        RoundContact contact;
+        if (SpheresTouch(centreA, a.shape.radius, centreB, b.shape.radius, margin, contact)) {
+            collector.Add(contact);
+        }
+    };
+    glm::vec3 closestA;
+    glm::vec3 closestB;
+    ClosestPointsOfSegments(segmentA, segmentB, closestA, closestB);
+    tryCentres(closestA, closestB);
+    // Parallel capsules side by side touch along their overlap: the ends of each give the two corners of it.
+    for (const glm::vec3 end : {segmentA.start, segmentA.end}) {
+        tryCentres(end, ClosestPointOnSegment(segmentB, end));
+    }
+    for (const glm::vec3 end : {segmentB.start, segmentB.end}) {
+        tryCentres(ClosestPointOnSegment(segmentA, end), end);
+    }
+    return collector.Finish();
+}
+
+// How far a point is from the box (zero inside), as a squared distance, with the point in the box's own axes.
+float DistanceSquaredToBox(glm::vec3 localPoint, glm::vec3 half) {
+    const glm::vec3 outside = localPoint - glm::clamp(localPoint, -half, half);
+    return glm::dot(outside, outside);
+}
+
+// The point of the segment that comes closest to the box. The distance to a convex shape is convex along a line,
+// so a ternary search finds it. Returns false when that point is inside the box, that is, the segment meets it.
+bool PointOfSegmentNearestBox(const Segment& segment, const Obb& obb, glm::vec3& nearest) {
+    const glm::mat3 toLocal = glm::transpose(obb.axes);
+    const glm::vec3 start = toLocal * (segment.start - obb.center);
+    const glm::vec3 end = toLocal * (segment.end - obb.center);
+    const auto at = [&](float t) { return start + (end - start) * t; };
+    constexpr int kIterations = 40;
+
+    float low = 0.0f;
+    float high = 1.0f;
+    for (int i = 0; i < kIterations; ++i) {
+        const float third = (high - low) / 3.0f;
+        if (DistanceSquaredToBox(at(low + third), obb.half) < DistanceSquaredToBox(at(high - third), obb.half)) {
+            high -= third;
+        } else {
+            low += third;
+        }
+    }
+    const float best = 0.5f * (low + high);
+    nearest = segment.start + (segment.end - segment.start) * best;
+    return DistanceSquaredToBox(at(best), obb.half) > 1e-12f;
+}
+
+// The contact of a capsule whose straight part meets the box. Choosing the face to leave through by the deepest
+// point of the segment would be a guess (a capsule laid across a post has a whole stretch of equally deep points), so
+// each of the six faces is tried: the capsule has to move far enough along its normal that even its most
+// embedded end clears the face, and the face that asks for the least is the way out.
+RoundContact ExitFromBox(const Segment& segment, float radius, const Obb& obb) {
+    const glm::mat3 toLocal = glm::transpose(obb.axes);
+    const glm::vec3 start = toLocal * (segment.start - obb.center);
+    const glm::vec3 end = toLocal * (segment.end - obb.center);
+    float leastMove = std::numeric_limits<float>::max();
+    int exitAxis = 0;
+    float exitSign = 1.0f;
+    glm::vec3 embeddedEnd = start;
+    for (int axis = 0; axis < 3; ++axis) {
+        for (const float sign : {-1.0f, 1.0f}) {
+            // The capsule leaves through the face on the `sign` side, so its end furthest to the other side is the
+            // one that has to travel the longest way.
+            const bool startIsFurther = sign * start[axis] < sign * end[axis];
+            const glm::vec3 furthest = startIsFurther ? start : end;
+            const float move = obb.half[axis] - sign * furthest[axis] + radius;
+            if (move < leastMove) {
+                leastMove = move;
+                exitAxis = axis;
+                exitSign = sign;
+                embeddedEnd = furthest;
+            }
+        }
+    }
+    glm::vec3 onFace = glm::clamp(embeddedEnd, -obb.half, obb.half);
+    onFace[exitAxis] = exitSign * obb.half[exitAxis];
+    RoundContact contact;
+    contact.normal = -(obb.axes[exitAxis] * exitSign);
+    contact.position = obb.center + obb.axes * onFace;
+    contact.depth = leastMove;
+    return contact;
+}
+
+// The contacts between a capsule and a box. The normal points from the capsule to the box.
+bool CapsuleBox(const Body& capsule, const Body& box, Manifold& manifold, float margin) {
+    const Obb obb = ObbOf(box);
+    const Segment segment = SegmentOf(capsule);
+    const float radius = capsule.shape.radius;
+    ContactCollector collector(manifold);
+    glm::vec3 nearest;
+    if (!PointOfSegmentNearestBox(segment, obb, nearest)) {
+        collector.Add(ExitFromBox(segment, radius, obb));
+        return collector.Finish();
+    }
+    const auto tryCentre = [&](glm::vec3 centre) {
+        RoundContact contact;
+        if (SphereTouchesBox(centre, radius, obb, margin, contact)) {
+            collector.Add(contact);
+        }
+    };
+    tryCentre(nearest);
+    // A capsule lying on a face touches it at both ends as well.
+    tryCentre(segment.start);
+    tryCentre(segment.end);
+    return collector.Finish();
 }
 
 // Boxes ---------------------------------------------------------------------------------------
@@ -331,20 +607,39 @@ bool BoxBox(const Body& bodyA, const Body& bodyB, Manifold& manifold, float marg
 
 bool Collide(const Body& a, const Body& b, Manifold& manifold, float margin) {
     manifold.count = 0;
-    if (a.shape.type == ShapeType::Sphere && b.shape.type == ShapeType::Sphere) {
-        return SphereSphere(a, b, manifold, margin);
-    }
-    if (a.shape.type == ShapeType::Sphere) {
-        return SphereBox(a, b, manifold, margin);
-    }
-    if (b.shape.type == ShapeType::Sphere) {
-        if (!SphereBox(b, a, manifold, margin)) {
+    // Each pair is written once with its shapes in a fixed order, and the other order swaps the bodies and turns the
+    // normal round. There is no default case: a new shape type must be handled here, not collided as a box.
+    const auto swapped = [&](bool (*collide)(const Body&, const Body&, Manifold&, float)) {
+        if (!collide(b, a, manifold, margin)) {
             return false;
         }
         manifold.normal = -manifold.normal;  // the normal must point from `a` to `b`
         return true;
+    };
+    switch (a.shape.type) {
+    case ShapeType::Sphere:
+        switch (b.shape.type) {
+        case ShapeType::Sphere: return SphereSphere(a, b, manifold, margin);
+        case ShapeType::Box: return SphereBox(a, b, manifold, margin);
+        case ShapeType::Capsule: return swapped(CapsuleSphere);
+        }
+        break;
+    case ShapeType::Box:
+        switch (b.shape.type) {
+        case ShapeType::Sphere: return swapped(SphereBox);
+        case ShapeType::Box: return BoxBox(a, b, manifold, margin);
+        case ShapeType::Capsule: return swapped(CapsuleBox);
+        }
+        break;
+    case ShapeType::Capsule:
+        switch (b.shape.type) {
+        case ShapeType::Sphere: return CapsuleSphere(a, b, manifold, margin);
+        case ShapeType::Box: return CapsuleBox(a, b, manifold, margin);
+        case ShapeType::Capsule: return CapsuleCapsule(a, b, manifold, margin);
+        }
+        break;
     }
-    return BoxBox(a, b, manifold, margin);
+    return false;
 }
 
 }  // namespace physics
