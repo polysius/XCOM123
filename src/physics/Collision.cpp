@@ -33,8 +33,10 @@ struct RoundContact {
     float depth;
 };
 
-// The contact between two spheres, found from their centres. The normal points from `centreA` to `centreB`.
-bool SpheresTouch(glm::vec3 centreA, float radiusA, glm::vec3 centreB, float radiusB, float margin, RoundContact& contact) {
+// The contact between two spheres, found from their centres. The normal points from `centreA` to `centreB`, or along
+// `coincidentNormal` when the centres coincide and have no direction between them.
+bool SpheresTouch(glm::vec3 centreA, float radiusA, glm::vec3 centreB, float radiusB, float margin, RoundContact& contact,
+                  glm::vec3 coincidentNormal = glm::vec3(0.0f, 1.0f, 0.0f)) {
     const glm::vec3 between = centreB - centreA;
     const float distanceSquared = glm::dot(between, between);
     const float radii = radiusA + radiusB;
@@ -43,7 +45,7 @@ bool SpheresTouch(glm::vec3 centreA, float radiusA, glm::vec3 centreB, float rad
         return false;
     }
     const float distance = std::sqrt(distanceSquared);
-    contact.normal = distance > 1e-6f ? between / distance : glm::vec3(0.0f, 1.0f, 0.0f);
+    contact.normal = distance > 1e-6f ? between / distance : coincidentNormal;
     // Halfway between the two surfaces along the line through the centres.
     contact.position = centreA + contact.normal * (0.5f * (radiusA + distance - radiusB));
     contact.depth = radii - distance;
@@ -231,11 +233,19 @@ private:
     int count = 0;
 };
 
+// Some unit vector at a right angle to `direction`, which must be a unit vector.
+glm::vec3 PerpendicularTo(glm::vec3 direction) {
+    const glm::vec3 helper = std::abs(direction.y) < 0.9f ? glm::vec3(0.0f, 1.0f, 0.0f) : glm::vec3(1.0f, 0.0f, 0.0f);
+    return glm::normalize(glm::cross(direction, helper));
+}
+
 // The contact between a capsule and a sphere. The normal points from the capsule to the sphere.
 bool CapsuleSphere(const Body& capsule, const Body& sphere, Manifold& manifold, float margin) {
     RoundContact contact;
     const glm::vec3 nearest = ClosestPointOnSegment(SegmentOf(capsule), sphere.position);
-    if (!SpheresTouch(nearest, capsule.shape.radius, sphere.position, sphere.shape.radius, margin, contact)) {
+    // A sphere centred on the segment leaves the capsule sideways, not along its length.
+    const glm::vec3 sidewaysNormal = PerpendicularTo(AxesOf(capsule)[1]);
+    if (!SpheresTouch(nearest, capsule.shape.radius, sphere.position, sphere.shape.radius, margin, contact, sidewaysNormal)) {
         return false;
     }
     SetSingleContact(contact, manifold);
@@ -247,9 +257,20 @@ bool CapsuleCapsule(const Body& a, const Body& b, Manifold& manifold, float marg
     const Segment segmentA = SegmentOf(a);
     const Segment segmentB = SegmentOf(b);
     ContactCollector collector(manifold);
+
+    // Crossing segments have no direction between their closest points. They part along the line at a right angle to
+    // both, on the side where `b` already lies.
+    const glm::vec3 axisA = AxesOf(a)[1];
+    const glm::vec3 axisB = AxesOf(b)[1];
+    glm::vec3 crossingNormal = glm::cross(axisA, axisB);
+    crossingNormal = glm::dot(crossingNormal, crossingNormal) > 1e-6f ? glm::normalize(crossingNormal) : PerpendicularTo(axisA);
+    if (glm::dot(crossingNormal, b.position - a.position) < 0.0f) {
+        crossingNormal = -crossingNormal;
+    }
+
     const auto tryCentres = [&](glm::vec3 centreA, glm::vec3 centreB) {
         RoundContact contact;
-        if (SpheresTouch(centreA, a.shape.radius, centreB, b.shape.radius, margin, contact)) {
+        if (SpheresTouch(centreA, a.shape.radius, centreB, b.shape.radius, margin, contact, crossingNormal)) {
             collector.Add(contact);
         }
     };

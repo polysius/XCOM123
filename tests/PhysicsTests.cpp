@@ -711,6 +711,24 @@ void ParallelCapsulesTouchAlongTheirLengthAndCrossedOnesAtOnePoint() {
     Check(Near(manifold.points[0].depth, 0.01f, 2e-3f), "1 cm deep");
 }
 
+void CapsulesCrossingEachOtherPartAtARightAngleToBoth() {
+    // Lying along X and standing along Y, the straight parts meet at the origin. Only Z is at a right angle to both.
+    const Body lying = CapsuleBody({0.0f, 0.0f, 0.0f}, kLieAlongX);
+    const Body standing = CapsuleBody({0.0f, 0.2f, 0.0f}, glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+    physics::Manifold manifold;
+    Check(physics::Collide(lying, standing, manifold), "crossed capsules touch");
+    Check(Near(std::abs(manifold.normal.z), 1.0f, 1e-3f), "and part along Z: " + std::to_string(manifold.normal.y));
+
+    const Body ball = [] {
+        Body body;
+        body.shape = Shape::Sphere(0.3f);
+        body.position = {0.1f, 0.0f, 0.0f};
+        return body;
+    }();
+    Check(physics::Collide(lying, ball, manifold), "a sphere centred on a capsule's axis touches it");
+    Check(Near(manifold.normal.x, 0.0f, 1e-3f), "and leaves sideways, not along the length");
+}
+
 void AnyOrderOfTwoShapesGivesTheSameContactTurnedRound() {
     Body ground;
     ground.shape = Shape::Box({5.0f, 0.5f, 5.0f});
@@ -1718,6 +1736,7 @@ int main() {
         {"AStandingCapsuleTouchesTheGroundAtOnePoint", AStandingCapsuleTouchesTheGroundAtOnePoint},
         {"ACapsuleTiltedOnABoxTouchesAtTheLowEndOnly", ACapsuleTiltedOnABoxTouchesAtTheLowEndOnly},
         {"ParallelCapsulesTouchAlongTheirLengthAndCrossedOnesAtOnePoint", ParallelCapsulesTouchAlongTheirLengthAndCrossedOnesAtOnePoint},
+        {"CapsulesCrossingEachOtherPartAtARightAngleToBoth", CapsulesCrossingEachOtherPartAtARightAngleToBoth},
         {"AnyOrderOfTwoShapesGivesTheSameContactTurnedRound", AnyOrderOfTwoShapesGivesTheSameContactTurnedRound},
         {"ACapsuleAcrossAPostLeavesTheWayItCameIn", ACapsuleAcrossAPostLeavesTheWayItCameIn},
         {"CapsulesMeetingSpheresAndBoxesAtTheirRoundEnds", CapsulesMeetingSpheresAndBoxesAtTheirRoundEnds},
