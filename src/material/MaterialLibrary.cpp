@@ -105,6 +105,23 @@ void PackLevel(const Level& level, uint8_t* albedoRoughness, uint8_t* normalOccl
 
 }  // namespace
 
+MaterialLibrary MakeNeutralLibrary() {
+    MaterialLibrary library;
+    library.size = 1;
+    library.layers = kMaterialKindCount;
+    library.mipLevels = 1;
+    library.tileMeters.assign(static_cast<size_t>(library.layers), 1.0f);
+    std::vector<uint8_t> colour;
+    std::vector<uint8_t> shape;
+    for (int layer = 0; layer < library.layers; ++layer) {
+        colour.insert(colour.end(), {128, 128, 128, 128});  // mid grey, medium rough
+        shape.insert(shape.end(), {128, 128, 255, 0});      // a flat normal, open to the sky, not metallic
+    }
+    library.albedoRoughness.push_back(colour);
+    library.normalOcclusion.push_back(shape);
+    return library;
+}
+
 MaterialLibrary BuildMaterialLibrary(const LibrarySettings& settings, JobSystem* jobs) {
     MaterialLibrary library;
     library.size = std::clamp(settings.size, 128, 2048);

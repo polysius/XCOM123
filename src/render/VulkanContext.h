@@ -25,6 +25,8 @@ public:
     // How many bits of a GPU timestamp are meaningful on our queue; 0 means no timestamps.
     uint32_t timestampValidBits = 0;
     bool supportsDepthClamp = false;
+    // Anisotropic filtering keeps textures sharp on surfaces seen at a slant, such as streets and long walls.
+    bool supportsSamplerAnisotropy = false;
 
     VkSwapchainKHR swapchain = VK_NULL_HANDLE;
     VkFormat swapchainFormat = VK_FORMAT_UNDEFINED;

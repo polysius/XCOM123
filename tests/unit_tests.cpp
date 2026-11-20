@@ -101,6 +101,18 @@ void CommandLineCanSwitchTerracesOff() {
     Check(!Parse({"--no-terraces"}).terraces, "and --no-terraces turns them off");
 }
 
+void CommandLineReadsMaterialOptions() {
+    const Options defaults = Parse({});
+    Check(defaults.scanMaterials && defaults.materialSize == 512, "scanned materials are on at 512 pixels by default");
+    Check(!Parse({"--no-scan-materials"}).scanMaterials, "and --no-scan-materials turns them off");
+    Check(Parse({"--material-size", "1024"}).materialSize == 1024, "a material size is read");
+    Check(Parse({"--material-size", "128"}).materialSize == 128 && Parse({"--material-size", "2048"}).materialSize == 2048, "the ends of the range are allowed");
+    Check(IsRejected({"--material-size", "64"}), "a material size under 128");
+    Check(IsRejected({"--material-size", "4096"}), "a material size over 2048");
+    Check(IsRejected({"--material-size", "500"}), "a material size that is not a power of two");
+    Check(IsRejected({"--material-size"}), "a missing material size");
+}
+
 void CommandLineReadsSatellites() {
     Check(!Parse({}).satelliteCount.has_value(), "unset by default");
     Check(Parse({"--satellites", "0"}).satelliteCount == 0, "zero is allowed");
@@ -938,6 +950,7 @@ int main() {
         {"CommandLineRejectsBadInput", CommandLineRejectsBadInput},
         {"CommandLineRejectsConflictingModes", CommandLineRejectsConflictingModes},
         {"CommandLineCanSwitchTerracesOff", CommandLineCanSwitchTerracesOff},
+        {"CommandLineReadsMaterialOptions", CommandLineReadsMaterialOptions},
         {"CommandLineReadsSatellites", CommandLineReadsSatellites},
         {"CommandLineReadsProps", CommandLineReadsProps},
         {"CommandLineReadsTheRiverSimulation", CommandLineReadsTheRiverSimulation},

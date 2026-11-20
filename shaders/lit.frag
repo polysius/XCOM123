@@ -20,6 +20,11 @@ layout(std430, set = 0, binding = 2) readonly buffer WaterField {
     float offsets[];  // cell by cell, along X first
 } waterField;
 
+// The scanned materials, one layer of each array per kind of material (the order of MaterialKind in
+// src/material/MaterialGenerator.h). The size in metres of a tile of each is in frame.scanTiles.
+layout(set = 0, binding = 3) uniform sampler2DArray scanColor;  // rgb: albedo, a: roughness
+layout(set = 0, binding = 4) uniform sampler2DArray scanShape;  // rg: normal x and y, b: occlusion, a: metallic
+
 layout(location = 0) in vec3 inWorldPosition;
 layout(location = 1) in vec3 inNormal;
 layout(location = 2) in vec3 inAlbedo;
@@ -43,6 +48,19 @@ const int MATERIAL_GRASS = 8;
 const int MATERIAL_GLASS = 9;
 const int MATERIAL_METAL = 10;
 const int MATERIAL_LAMP = 11;
+const int MATERIAL_RUBBER = 12;
+
+// Layers of the scanned materials.
+const int SCAN_STONE = 0;
+const int SCAN_BRICK = 1;
+const int SCAN_CONCRETE = 2;
+const int SCAN_PLASTER = 3;
+const int SCAN_WOOD = 4;
+const int SCAN_METAL = 5;
+const int SCAN_LEATHER = 6;
+const int SCAN_FABRIC = 7;
+const int SCAN_ASPHALT = 8;
+const int SCAN_SOIL = 9;
 
 // The whole-number part of a box's seed holds pattern flags and its fraction a random number.
 // The flags match the ones in src/world/CityBuild.h.
@@ -83,6 +101,7 @@ struct Surface {
     float metallic;
     float reflectance;  // head-on reflectance of the non-metallic part
     float wrap;         // how far diffuse light wraps past the terminator (leaves let light through)
+    vec2 detailNormal;  // slope of fine relief from a scanned material, in the axes of the face (see ApplyScan)
 };
 
 // Coordinates for the procedural patterns, and how quickly each one changes from pixel to pixel.
@@ -102,6 +121,11 @@ struct Pattern {
     float tileSharpness;
     float metresPerPixel;
     float detailFade;     // 1 up close, 0 when fine noise would be smaller than a pixel
+    vec2 scanCoord;       // metres across the face, with y running down walls so that textures stand upright
+    vec2 scanDx;          // how scanCoord changes from one pixel to the next, along the screen's x and y
+    vec2 scanDy;
+    vec3 scanTangent;     // the directions in the world of scanCoord's x and y, unit length (a cotangent frame)
+    vec3 scanBitangent;
 };
 
 float Hash(vec2 p) {
@@ -188,7 +212,97 @@ Pattern ComputePattern(vec3 normal, uint flags) {
     pattern.tileSharpness = PatternSharpness(tileRate);
     pattern.metresPerPixel = length(fwidth(inWorldPosition));
     pattern.detailFade = 1.0 - smoothstep(0.1, 0.4, pattern.metresPerPixel);
+
+    // The frame in which a scanned material's normals are given. It is found from how the position and the texture
+    // coordinate change over the screen (Schuler's cotangent frame), so it needs no tangents from the vertex shader.
+    pattern.scanCoord = vec2(pattern.face.x, facesUp ? pattern.face.y : -pattern.face.y);
+    pattern.scanDx = dFdx(pattern.scanCoord);
+    pattern.scanDy = dFdy(pattern.scanCoord);
+    vec3 positionDx = dFdx(inWorldPosition);
+    vec3 positionDy = dFdy(inWorldPosition);
+    vec3 dyPerpendicular = cross(positionDy, normal);
+    vec3 dxPerpendicular = cross(normal, positionDx);
+    vec3 tangent = dyPerpendicular * pattern.scanDx.x + dxPerpendicular * pattern.scanDy.x;
+    vec3 bitangent = dyPerpendicular * pattern.scanDx.y + dxPerpendicular * pattern.scanDy.y;
+    float longest = max(max(dot(tangent, tangent), dot(bitangent, bitangent)), 1e-20);
+    pattern.scanTangent = tangent * inversesqrt(longest);
+    pattern.scanBitangent = bitangent * inversesqrt(longest);
     return pattern;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Scanned materials
+// ---------------------------------------------------------------------------------------------
+
+// What one layer of the scanned materials holds at a point.
+struct Scan {
+    vec3 albedo;
+    vec3 meanAlbedo;   // the average colour of the whole layer
+    float roughness;
+    vec2 normal;       // x and y of the normal in the surface's own axes: the slope of the relief
+    float occlusion;
+};
+
+float Luminance(vec3 color) {
+    return dot(color, vec3(0.2126, 0.7152, 0.0722));
+}
+
+// The scan of material `layer` at the position of this pixel on its face. Mip levels are chosen from derivatives worked
+// out before the material branches (the pattern holds them), so the texture fades to its average at a distance.
+Scan SampleScan(int layer, Pattern pattern) {
+    float inverseTile = 1.0 / max(frame.scanTiles[layer >> 2][layer & 3], 0.01);
+    vec3 coordinate = vec3(pattern.scanCoord * inverseTile, float(layer));
+    vec2 dx = pattern.scanDx * inverseTile;
+    vec2 dy = pattern.scanDy * inverseTile;
+    vec4 color = textureGrad(scanColor, coordinate, dx, dy);
+    vec4 shape = textureGrad(scanShape, coordinate, dx, dy);
+    Scan scan;
+    scan.albedo = color.rgb;
+    scan.meanAlbedo = textureLod(scanColor, vec3(0.5, 0.5, float(layer)), 16.0).rgb;  // the last mip level is one texel
+    scan.roughness = color.a;
+    scan.normal = shape.rg * 2.0 - 1.0;
+    scan.occlusion = shape.b;
+
+    // A tile that repeats shows: the same crack or stain turns up every metre. Materials without a pattern of their
+    // own (bricks, planks and weaves have one, and brushed metal a direction) are laid over themselves a second time,
+    // turned and at another scale, so that the repeat is hidden. The second layer only adds its variation to the first.
+    bool hasPattern = layer == SCAN_BRICK || layer == SCAN_WOOD || layer == SCAN_FABRIC || layer == SCAN_METAL;
+    if (!hasPattern) {
+        const mat2 turn = mat2(0.7986, 0.6018, -0.6018, 0.7986);  // 37 degrees
+        const float scale = 0.71;
+        vec3 coordinate2 = vec3(turn * (coordinate.xy * scale) + vec2(0.37, 0.61), float(layer));
+        vec2 dx2 = turn * (dx * scale);
+        vec2 dy2 = turn * (dy * scale);
+        vec4 color2 = textureGrad(scanColor, coordinate2, dx2, dy2);
+        vec4 shape2 = textureGrad(scanShape, coordinate2, dx2, dy2);
+        scan.albedo *= clamp(color2.rgb / max(scan.meanAlbedo, vec3(0.02)), 0.3, 3.0);
+        scan.roughness = 0.5 * (scan.roughness + color2.a);
+        // The slope of the second layer, turned back into the axes of the first.
+        scan.normal = (scan.normal + (shape2.rg * 2.0 - 1.0) * turn) * 0.8;
+        scan.occlusion = 0.5 * (scan.occlusion + shape2.b);
+    }
+    return scan;
+}
+
+// Lays a scanned material over a surface the city has already coloured. How much of each part of the scan is used:
+//   colour:    0 keeps the colour of the box and only makes it lighter or darker where the scan is, 1 takes the scan's colour
+//   relief:    how strongly the scan tilts the surface normal (1 is the real relief)
+//   roughness: how much of the scan's roughness replaces the surface's
+//   occlusion: how much the scan's cavities darken the ambient light
+// The relief is applied in main, once the material has said what else it wants to do with the normal.
+Surface ApplyScan(Surface surface, Pattern pattern, int layer, float colour, float relief, float roughness, float occlusion) {
+    float strength = frame.settings.z;
+    if (strength <= 0.0) {
+        return surface;
+    }
+    Scan scan = SampleScan(layer, pattern);
+    float lightness = clamp(Luminance(scan.albedo) / max(Luminance(scan.meanAlbedo), 0.01), 0.3, 2.5);
+    vec3 target = mix(surface.albedo * lightness, scan.albedo, colour);
+    surface.albedo = mix(surface.albedo, target, strength);
+    surface.roughness = mix(surface.roughness, scan.roughness, roughness * strength);
+    surface.occlusion *= mix(1.0, scan.occlusion, occlusion * strength);
+    surface.detailNormal += scan.normal * (relief * strength);
+    return surface;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -239,6 +353,7 @@ Surface FacadeSurface(Surface surface, vec3 normal, Pattern pattern, uint flags,
         surface.albedo *= 0.55;  // flat top of a building, mostly hidden under its roof
         return surface;
     }
+    vec3 baseColour = surface.albedo;
     bool arched = (flags & FACADE_ARCHED) != 0u;
     float archRing = 0.0;
     // The width of one window bay in metres, found the same way as in ComputePattern.
@@ -316,6 +431,12 @@ Surface FacadeSurface(Surface surface, vec3 normal, Pattern pattern, uint flags,
     if ((flags & FACADE_STUCCO) != 0u) {
         surface = StuccoFinish(surface, pattern, height, seedRandom);
     }
+    // Walls the city painted brick red are laid in brick, ground floors cut in rustication are stone, the rest is plaster.
+    bool brickWall = smoothstep(1.2, 1.5, baseColour.r / max(baseColour.g, 0.001)) * smoothstep(1.35, 1.8, baseColour.r / max(baseColour.b, 0.001)) > 0.5;
+    bool stoneBase = (flags & FACADE_RUSTICATED) != 0u && hasGroundFloor && height < GROUND_FLOOR_HEIGHT;
+    surface = stoneBase ? ApplyScan(surface, pattern, SCAN_STONE, 0.3, 0.9, 0.5, 0.7)
+            : brickWall ? ApplyScan(surface, pattern, SCAN_BRICK, 0.55, 1.0, 0.5, 0.7)
+                        : ApplyScan(surface, pattern, SCAN_PLASTER, 0.12, 2.5, 0.5, 0.7);
     // Little sky reaches the bottom of a narrow street, and walls are dirtier there.
     surface.occlusion *= mix(0.55, 1.0, smoothstep(0.0, 9.0, inWorldPosition.y));
 
@@ -328,6 +449,7 @@ Surface FacadeSurface(Surface surface, vec3 normal, Pattern pattern, uint flags,
     surface.albedo = mix(surface.albedo, glass, windowMask);
     surface.roughness = mix(surface.roughness, 0.05, windowMask);
     surface.emissive += interiorLight * windowMask;
+    surface.detailNormal *= 1.0 - windowMask;  // glass is smooth, whatever the wall around it is made of
     return surface;
 }
 
@@ -347,7 +469,7 @@ Surface StoneSurface(Surface surface, vec3 normal, Pattern pattern, float seedRa
         surface.albedo *= mix(1.0, mix(0.82, 1.0, streaks), pattern.detailFade);
         surface.occlusion *= mix(0.6, 1.0, smoothstep(-4.0, 6.0, inWorldPosition.y));
     }
-    return surface;
+    return ApplyScan(surface, pattern, SCAN_STONE, 0.3, 0.9, 0.5, 0.7);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -369,6 +491,7 @@ Surface RoofSurface(Surface surface, vec3 normal, Pattern pattern, uint flags, f
     float moss = smoothstep(0.6, 0.9, ValueNoise(pattern.face * 0.25 + seedRandom * 41.0));
     surface.albedo = mix(surface.albedo * tile * tone, vec3(0.12, 0.14, 0.08), moss * 0.35);
     surface.roughness = mix(surface.roughness, 0.9, moss);
+    surface = ApplyScan(surface, pattern, SCAN_STONE, 0.1, 0.6, 0.3, 0.5);  // slate and clay are fine grained stone
 
     if (abs(normal.y) < 0.5 && (flags & ROOF_DORMERS) != 0u) {
         // One dormer per window bay of the facade below, with a painted frame and a lit window.
@@ -399,7 +522,7 @@ Surface GroundSurface(Surface surface, vec3 normal, vec3 position, Pattern patte
         float grain = ValueNoise(pattern.face * vec2(1.5, 6.0));
         surface.albedo = mix(surface.albedo, vec3(0.46, 0.45, 0.43), 0.6) * mix(0.85, 1.05, grain);
         surface.roughness = 0.7;
-        return surface;
+        return ApplyScan(surface, pattern, SCAN_STONE, 0.3, 0.8, 0.5, 0.7);
     }
 
     float coarse = ValueNoise(position.xz * 0.6);
@@ -435,7 +558,24 @@ Surface GroundSurface(Surface surface, vec3 normal, vec3 position, Pattern patte
         float patches = smoothstep(0.62, 0.7, ValueNoise(position.xz * 0.08 + 13.0));
         surface.albedo *= mix(1.0, 0.8, patches);
     }
-    return surface;
+    // Slabs and cobbles are stone, and the procedural joints and domes stay on top of it. Gravel is grit and earth.
+    int layer = SCAN_ASPHALT;
+    float colour = 0.6;
+    float relief = 1.0;
+    if (groundPattern == GROUND_SLABS) {
+        layer = SCAN_STONE;
+        colour = 0.3;
+        relief = 0.8;
+    } else if (groundPattern == GROUND_COBBLES) {
+        layer = SCAN_STONE;
+        colour = 0.25;
+        relief = 0.5;
+    } else if (groundPattern == GROUND_GRAVEL) {
+        layer = SCAN_SOIL;
+        colour = 0.3;
+        relief = 0.8;
+    }
+    return ApplyScan(surface, pattern, layer, colour, relief, 0.7, 0.7);
 }
 
 Surface GrassSurface(Surface surface, vec3 normal, vec3 position, Pattern pattern, float seedRandom) {
@@ -609,7 +749,7 @@ Surface MetalSurface(Surface surface, vec3 normal, Pattern pattern, uint flags, 
             surface.albedo *= mix(1.0, 0.8, seam);
         }
     }
-    return surface;
+    return ApplyScan(surface, pattern, SCAN_METAL, 0.1, 0.8, 0.5, 0.5);
 }
 
 // Lanterns and clock faces: pale glass by day, glowing once the sun is low.
@@ -622,7 +762,7 @@ Surface LampSurface(Surface surface) {
 // Painted wood, cloth and plain trim: only a little soft weathering.
 Surface PlainSurface(Surface surface, Pattern pattern, float seedRandom) {
     surface.albedo *= mix(0.92, 1.05, ValueNoise(pattern.face * 0.8 + seedRandom * 13.0));
-    return surface;
+    return ApplyScan(surface, pattern, SCAN_WOOD, 0.15, 0.9, 0.6, 0.6);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -707,6 +847,7 @@ void main() {
     surface.metallic = 0.0;
     surface.reflectance = 0.04;  // most non-metals reflect about 4% of light head-on
     surface.wrap = 0.0;
+    surface.detailNormal = vec2(0.0);
 
     int material = int(inSurface.y + 0.5);
     if (material == MATERIAL_FACADE) {
@@ -734,6 +875,18 @@ void main() {
         surface = LampSurface(surface);
     } else if (material == MATERIAL_PLAIN) {
         surface = PlainSurface(surface, pattern, seedRandom);
+    } else if (material == MATERIAL_RUBBER) {
+        // The colour of the ball is kept; the pebbled grain gives it the feel of a football.
+        surface = ApplyScan(surface, pattern, SCAN_LEATHER, 0.0, 1.2, 0.4, 0.8);
+    }
+
+    // Fine relief from the scanned materials tilts the normal in the frame of the face. The image's y axis points up the
+    // picture, which is against the direction of the texture coordinate.
+    if (dot(surface.detailNormal, surface.detailNormal) > 0.0) {
+        vec2 slope = surface.detailNormal;
+        slope *= min(1.0, 0.95 * inversesqrt(dot(slope, slope)));  // never past a right angle to the face
+        vec3 tilted = pattern.scanTangent * slope.x - pattern.scanBitangent * slope.y + N * sqrt(1.0 - dot(slope, slope));
+        N = normalize(tilted);
     }
 
     float roughness = clamp(surface.roughness, 0.04, 1.0);

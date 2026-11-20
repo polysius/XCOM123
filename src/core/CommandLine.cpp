@@ -128,6 +128,14 @@ Options ParseCommandLine(int argc, char** argv) {
             options.rainPerSecond = drops;
         } else if (option == "--no-terraces") {
             options.terraces = false;
+        } else if (option == "--no-scan-materials") {
+            options.scanMaterials = false;
+        } else if (option == "--material-size") {
+            const uint32_t size = ParseUnsigned(option, arguments.ValueFor(option));
+            if (size < 128 || size > 2048 || (size & (size - 1)) != 0) {
+                throw std::invalid_argument(option + " must be a power of two from 128 to 2048");
+            }
+            options.materialSize = size;
         } else if (option == "--novsync") {
             options.vsync = false;
         } else if (option == "--benchmark") {
@@ -180,6 +188,10 @@ void PrintUsage() {
         "  --time SECONDS           world clock of the screenshot (0 to 3600); the crowd is simulated\n"
         "                           up to it\n"
         "  --camera x,y,z,yaw,pitch start camera, angles in degrees (yaw 0 looks along +Z)\n"
+        "Materials:\n"
+        "  --material-size N        pixels along a side of each generated material (128 to 2048, a power of two;\n"
+        "                           default 512)\n"
+        "  --no-scan-materials      draw only the procedural patterns of the city, without the generated materials\n"
         "Display:\n"
         "  --novsync                do not wait for the display's refresh\n"
         "  --render-scale X         draw the scene at a fixed X (0.5 to 1.0) of the window size\n"

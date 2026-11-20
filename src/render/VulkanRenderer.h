@@ -9,6 +9,7 @@
 
 #include "render/DynamicResolution.h"
 #include "render/GpuProfiler.h"
+#include "render/MaterialTextures.h"
 #include "render/IRenderModule.h"
 #include "render/RenderTargets.h"
 #include "render/SceneGeometry.h"
@@ -41,6 +42,7 @@ public:
     void SetResolution(int width, int height) override;
     void SetResolutionSettings(const ResolutionSettings& settings) override;
     void UploadStaticScene(std::span<const BoxInstance> boxes) override;
+    void UploadMaterials(const material::MaterialLibrary& library) override;
     void ReserveNpcCapacity(size_t npcCount) override;
     void Render(const FrameInput& frame) override;
     bool RenderAndCapture(const FrameInput& frame, const std::string& pngPath) override;
@@ -68,6 +70,8 @@ private:
     void CreateFrameResources();
     void CreateSceneLayouts();
     void CreateSceneDescriptors();
+    // Points the descriptor sets of every frame at the material textures, and notes their tile sizes for the shaders.
+    void WriteMaterialDescriptors();
     void CreateSwapchainSemaphores();
     void DestroySwapchainSemaphores();
     bool RecreateSwapchain();
@@ -97,6 +101,9 @@ private:
     VkDescriptorPool sceneDescriptorPool = VK_NULL_HANDLE;
     VkPipelineLayout scenePipelineLayout = VK_NULL_HANDLE;
 
+    MaterialTextures materials;
+    float scanStrength = 0.0f;                // 0 until UploadMaterials: how much the shaders use the scanned materials
+    std::array<glm::vec4, 3> scanTiles{};     // the real size of each material tile, four to a vector
     RenderTargets targets;
     SceneGeometry geometry;
     ShadowPass shadowPass;

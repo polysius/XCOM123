@@ -32,7 +32,8 @@ struct FrameUniforms {
     glm::vec4 cameraPosition;  // w: time in seconds
     glm::vec4 sunDirection;
     glm::vec4 sunColor;
-    glm::vec4 settings;        // x: shadow map texel size, y: fog density
+    glm::vec4 settings;        // x: shadow map texel size, y: fog density, z: how much the scanned materials count
+    glm::vec4 scanTiles[3];    // the size in metres of one tile of each scanned material, four to a vector
 };
 
 // Sun colour and brightness by height: warm and dim near the horizon, white and bright higher up.
@@ -61,6 +62,7 @@ bool VulkanRenderer::Initialize(EngineContext& engine) {
         context.Create(engine.window, engine.vsync);
         CreateFrameResources();
         CreateSceneLayouts();
+        materials.Create(context, material::MakeNeutralLibrary());
         targets.Create(context, context.swapchainExtent, ChooseMsaaSamples(context.deviceProperties));
         geometry.Create(context, kFramesInFlight);
         shadowPass.Create(context, scenePipelineLayout);
@@ -91,6 +93,7 @@ void VulkanRenderer::Shutdown() {
     scenePass.Destroy(device);
     shadowPass.Destroy(device);
     geometry.Destroy(device);
+    materials.Destroy(device);
     targets.Destroy(device);
     DestroySwapchainSemaphores();
 
@@ -143,8 +146,9 @@ void VulkanRenderer::CreateFrameResources() {
 }
 
 void VulkanRenderer::CreateSceneLayouts() {
-    // Scene and shadow shaders read the per-frame uniforms and the shadow map.
-    VkDescriptorSetLayoutBinding bindings[3]{};
+    // Scene and shadow shaders read the per-frame uniforms and the shadow map, and the scene shader the water field
+    // and the two arrays of scanned material textures.
+    VkDescriptorSetLayoutBinding bindings[5]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
@@ -157,9 +161,15 @@ void VulkanRenderer::CreateSceneLayouts() {
     bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     bindings[2].descriptorCount = 1;
     bindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    for (uint32_t binding = 3; binding <= 4; ++binding) {
+        bindings[binding].binding = binding;
+        bindings[binding].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[binding].descriptorCount = 1;
+        bindings[binding].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    }
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    layoutInfo.bindingCount = 3;
+    layoutInfo.bindingCount = 5;
     layoutInfo.pBindings = bindings;
     VkCheck(vkCreateDescriptorSetLayout(context.device, &layoutInfo, nullptr, &sceneSetLayout),
             "vkCreateDescriptorSetLayout");
@@ -173,7 +183,7 @@ void VulkanRenderer::CreateSceneLayouts() {
 void VulkanRenderer::CreateSceneDescriptors() {
     const VkDescriptorPoolSize poolSizes[] = {
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kFramesInFlight},
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kFramesInFlight},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3 * kFramesInFlight},
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kFramesInFlight},
     };
     VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
@@ -214,6 +224,29 @@ void VulkanRenderer::CreateSceneDescriptors() {
         writes[2].pBufferInfo = &waterInfo;
         vkUpdateDescriptorSets(context.device, 3, writes, 0, nullptr);
     }
+    WriteMaterialDescriptors();
+}
+
+void VulkanRenderer::WriteMaterialDescriptors() {
+    const VkDescriptorImageInfo albedoInfo{materials.Sampler(), materials.AlbedoRoughnessView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    const VkDescriptorImageInfo normalInfo{materials.Sampler(), materials.NormalOcclusionView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    for (const FrameResources& frame : frames) {
+        VkWriteDescriptorSet writes[2]{};
+        for (uint32_t i = 0; i < 2; ++i) {
+            writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[i].dstSet = frame.sceneDescriptors;
+            writes[i].dstBinding = 3 + i;
+            writes[i].descriptorCount = 1;
+            writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[i].pImageInfo = i == 0 ? &albedoInfo : &normalInfo;
+        }
+        vkUpdateDescriptorSets(context.device, 2, writes, 0, nullptr);
+    }
+    scanTiles = {};
+    const std::vector<float>& tiles = materials.TileMeters();
+    for (size_t layer = 0; layer < tiles.size() && layer < 12; ++layer) {
+        scanTiles[layer / 4][static_cast<int>(layer % 4)] = tiles[layer];
+    }
 }
 
 // One "render finished" semaphore per swapchain image rather than per frame in flight: the
@@ -241,6 +274,14 @@ void VulkanRenderer::DestroySwapchainSemaphores() {
 void VulkanRenderer::UploadStaticScene(std::span<const BoxInstance> boxes) {
     vkDeviceWaitIdle(context.device);  // the old buffer may still be in use
     geometry.UploadBoxes(context, boxes);
+}
+
+void VulkanRenderer::UploadMaterials(const material::MaterialLibrary& library) {
+    vkDeviceWaitIdle(context.device);  // the descriptors may still point at the old textures
+    materials.Destroy(context.device);
+    materials.Create(context, library);
+    WriteMaterialDescriptors();
+    scanStrength = 1.0f;
 }
 
 void VulkanRenderer::ReserveNpcCapacity(size_t npcCount) {
@@ -421,7 +462,8 @@ void VulkanRenderer::WriteFrameUniforms(FrameResources& frame, const FrameInput&
     uniforms.cameraPosition = glm::vec4(input.cameraPosition, input.timeSeconds);
     uniforms.sunDirection = glm::vec4(sun, 0.0f);
     uniforms.sunColor = glm::vec4(SunRadiance(sun.y), 0.0f);
-    uniforms.settings = glm::vec4(1.0f / static_cast<float>(ShadowPass::kMapSize), kFogDensity, 0.0f, 0.0f);
+    uniforms.settings = glm::vec4(1.0f / static_cast<float>(ShadowPass::kMapSize), kFogDensity, scanStrength, 0.0f);
+    std::copy(scanTiles.begin(), scanTiles.end(), uniforms.scanTiles);
     std::memcpy(frame.uniforms.mapped, &uniforms, sizeof(uniforms));
 }
 

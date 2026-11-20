@@ -23,6 +23,7 @@ enum class SurfaceMaterial : uint32_t {
     Glass = 9,      // leaded or framed glazing, stained glass when flagged in the seed
     Metal = 10,     // painted iron and lead: railings, lamp posts, domes
     Lamp = 11,      // street lamp lanterns that glow after sunset
+    Rubber = 12,    // balls: pebbled rubber or leather
 };
 
 // A box turned about the vertical axis. Almost all static city geometry is made of these.

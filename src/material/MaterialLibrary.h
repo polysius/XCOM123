@@ -40,6 +40,10 @@ struct MaterialLibrary {
     int LevelSize(int level) const { return size >> level > 0 ? size >> level : 1; }
 };
 
+// A library of one flat grey texel per layer: no pattern, no relief. It stands in until the real materials are built,
+// so that the textures can always be bound.
+MaterialLibrary MakeNeutralLibrary();
+
 // Generates every kind of material and packs them. `jobs` may be null; the result is the same either way.
 MaterialLibrary BuildMaterialLibrary(const LibrarySettings& settings, JobSystem* jobs = nullptr);
 

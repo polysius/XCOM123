@@ -189,7 +189,7 @@ void PropField::Spawn(const CityLayout& city, const PropSettings& settings) {
             description.shape = Shape::Sphere(radius);
             description.density = 300.0f;
             description.material = {0.5f, 0.65f, 0.05f};
-            sphereInstances.push_back(MakeInstance(glm::vec3(radius), kBallColours[i % 4], SurfaceMaterial::Plain, 0.4f, seed));
+            sphereInstances.push_back(MakeInstance(glm::vec3(radius), kBallColours[i % 4], SurfaceMaterial::Rubber, 0.4f, seed));
             sphereBodies.push_back(world.AddBody(description));
         }
     }

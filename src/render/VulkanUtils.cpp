@@ -95,8 +95,8 @@ GpuImage CreateImage(VkDevice device, VkPhysicalDevice physicalDevice, const Ima
     createInfo.imageType = VK_IMAGE_TYPE_2D;
     createInfo.format = desc.format;
     createInfo.extent = {desc.extent.width, desc.extent.height, 1};
-    createInfo.mipLevels = 1;
-    createInfo.arrayLayers = 1;
+    createInfo.mipLevels = desc.mipLevels;
+    createInfo.arrayLayers = desc.arrayLayers;
     createInfo.samples = desc.samples;
     createInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     createInfo.usage = desc.usage;
@@ -111,9 +111,9 @@ GpuImage CreateImage(VkDevice device, VkPhysicalDevice physicalDevice, const Ima
 
     VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     viewInfo.image = result.image;
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.viewType = desc.arrayLayers > 1 ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
     viewInfo.format = desc.format;
-    viewInfo.subresourceRange = {desc.aspect, 0, 1, 0, 1};
+    viewInfo.subresourceRange = {desc.aspect, 0, desc.mipLevels, 0, desc.arrayLayers};
     VkCheck(vkCreateImageView(device, &viewInfo, nullptr, &result.view), "vkCreateImageView");
     return result;
 }
