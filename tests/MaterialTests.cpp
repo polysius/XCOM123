@@ -14,6 +14,7 @@
 
 #include "core/JobSystem.h"
 #include "material/MaterialGenerator.h"
+#include "material/MaterialLibrary.h"
 #include "material/MaterialNoise.h"
 
 namespace {
@@ -430,6 +431,111 @@ void ASmallMaterialAlsoTiles() {
     });
 }
 
+// The packed library -----------------------------------------------------------------------------
+
+float SrgbByteToLinear(uint8_t byte) {
+    const float value = static_cast<float>(byte) / 255.0f;
+    return value <= 0.04045f ? value / 12.92f : std::pow((value + 0.055f) / 1.055f, 2.4f);
+}
+
+material::MaterialLibrary MakeLibrary(uint32_t seed = 1, int size = 128, JobSystem* jobs = nullptr) {
+    material::LibrarySettings settings;
+    settings.seed = seed;
+    settings.size = size;
+    return material::BuildMaterialLibrary(settings, jobs);
+}
+
+// The mean of one channel (0 to 3) of one layer at one mip level, from the bytes, with sRGB decoded for colour channels.
+float LayerMean(const material::MaterialLibrary& library, bool albedoArray, int layer, int level, int channel) {
+    const std::vector<uint8_t>& bytes = albedoArray ? library.albedoRoughness[level] : library.normalOcclusion[level];
+    const size_t texels = static_cast<size_t>(library.LevelSize(level)) * library.LevelSize(level);
+    double sum = 0.0;
+    for (size_t i = 0; i < texels; ++i) {
+        const uint8_t byte = bytes[(texels * layer + i) * 4 + channel];
+        sum += (albedoArray && channel < 3) ? SrgbByteToLinear(byte) : static_cast<float>(byte) / 255.0f;
+    }
+    return static_cast<float>(sum / static_cast<double>(texels));
+}
+
+void TheLibraryHasALayerPerKindAndAFullMipChain() {
+    const material::MaterialLibrary library = MakeLibrary();
+    Check(library.size == 128 && library.layers == material::kMaterialKindCount, "one layer for each kind of material");
+    Check(library.mipLevels == 8, "and mip levels from 128 down to 1: " + std::to_string(library.mipLevels));
+    Check(library.tileMeters.size() == static_cast<size_t>(library.layers), "with the real size of every tile");
+    bool sizesRight = library.albedoRoughness.size() == 8 && library.normalOcclusion.size() == 8;
+    for (int level = 0; sizesRight && level < library.mipLevels; ++level) {
+        const size_t bytes = static_cast<size_t>(library.LevelSize(level)) * library.LevelSize(level) * 4 * library.layers;
+        sizesRight = library.albedoRoughness[level].size() == bytes && library.normalOcclusion[level].size() == bytes;
+    }
+    Check(sizesRight, "every level of both arrays holds all layers, 4 bytes a texel");
+    Check(library.LevelSize(7) == 1 && library.LevelSize(0) == 128, "the last level is one texel");
+
+    material::LibrarySettings settings;
+    settings.size = 10;
+    Check(material::BuildMaterialLibrary(settings).size == 128, "a size under 128 is raised to 128");
+}
+
+void LayersAreInTheOrderOfTheKinds() {
+    const material::MaterialLibrary library = MakeLibrary();
+    const int metal = static_cast<int>(MaterialKind::Metal);
+    Check(LayerMean(library, false, metal, 0, 3) > 0.4f, "the metal layer is where the metallic bytes are high");
+    for (int layer = 0; layer < library.layers; ++layer) {
+        if (layer != metal) {
+            Check(LayerMean(library, false, layer, 0, 3) < 0.02f, "and no other layer is metallic: layer " + std::to_string(layer));
+        }
+    }
+    // The bricks are red: the red byte of their albedo is above the blue one.
+    const int brick = static_cast<int>(MaterialKind::Brick);
+    Check(LayerMean(library, true, brick, 0, 0) > LayerMean(library, true, brick, 0, 2), "the brick layer is red");
+}
+
+void MipLevelsKeepTheAverageColour() {
+    const material::MaterialLibrary library = MakeLibrary();
+    for (int layer = 0; layer < library.layers; ++layer) {
+        const float top = LayerMean(library, true, layer, 0, 1);
+        for (int level = 1; level < library.mipLevels; ++level) {
+            const float mean = LayerMean(library, true, layer, level, 1);
+            Check(std::abs(mean - top) < 0.04f * top + 0.002f, "layer " + std::to_string(layer) + " keeps its average colour at level " +
+                                                                    std::to_string(level) + ": " + std::to_string(top) + " and " + std::to_string(mean));
+        }
+    }
+}
+
+void PackedNormalsAreUnitAndFarAwayBumpsMakeRoughness() {
+    const material::MaterialLibrary library = MakeLibrary();
+    for (int layer = 0; layer < library.layers; ++layer) {
+        for (int level = 0; level < library.mipLevels; ++level) {
+            const std::vector<uint8_t>& bytes = library.normalOcclusion[level];
+            const size_t texels = static_cast<size_t>(library.LevelSize(level)) * library.LevelSize(level);
+            bool unit = true;
+            for (size_t i = 0; i < texels; ++i) {
+                const float x = static_cast<float>(bytes[(texels * layer + i) * 4 + 0]) / 255.0f * 2.0f - 1.0f;
+                const float y = static_cast<float>(bytes[(texels * layer + i) * 4 + 1]) / 255.0f * 2.0f - 1.0f;
+                unit = unit && x * x + y * y <= 1.02f;  // a little over 1 is rounding to bytes
+            }
+            Check(unit, "the x and y of the normals of layer " + std::to_string(layer) + " leave room for z at level " + std::to_string(level));
+        }
+    }
+    // Bumps smaller than a texel can no longer be seen as bumps, so they must make the surface rougher.
+    for (const MaterialKind kind : {MaterialKind::Stone, MaterialKind::Leather, MaterialKind::Asphalt, MaterialKind::Brick}) {
+        const int layer = static_cast<int>(kind);
+        const float near = LayerMean(library, true, layer, 0, 3);
+        const float far = LayerMean(library, true, layer, 4, 3);
+        Check(far > near + 0.005f, Name(kind) + ": roughness grows with distance, from " + std::to_string(near) + " to " + std::to_string(far));
+        Check(LayerMean(library, true, layer, 7, 3) >= far - 0.02f, Name(kind) + ": and does not fall again at the last level");
+    }
+}
+
+void TheLibraryIsTheSameEveryTimeAndOnAnyNumberOfThreads() {
+    const material::MaterialLibrary first = MakeLibrary(4);
+    const material::MaterialLibrary second = MakeLibrary(4);
+    JobSystem many(5);
+    const material::MaterialLibrary threaded = MakeLibrary(4, 128, &many);
+    Check(first.albedoRoughness == second.albedoRoughness && first.normalOcclusion == second.normalOcclusion, "the same settings give the same bytes");
+    Check(first.albedoRoughness == threaded.albedoRoughness && first.normalOcclusion == threaded.normalOcclusion, "on one thread and on six");
+    Check(first.albedoRoughness != MakeLibrary(5).albedoRoughness, "and another seed gives another library");
+}
+
 }  // namespace
 
 int main() {
@@ -455,6 +561,11 @@ int main() {
         {"GrainReachesThePixelAtLargeSizes", GrainReachesThePixelAtLargeSizes},
         {"NeighbouringSeedsGiveUnrelatedSurfaces", NeighbouringSeedsGiveUnrelatedSurfaces},
         {"ASmallMaterialAlsoTiles", ASmallMaterialAlsoTiles},
+        {"TheLibraryHasALayerPerKindAndAFullMipChain", TheLibraryHasALayerPerKindAndAFullMipChain},
+        {"LayersAreInTheOrderOfTheKinds", LayersAreInTheOrderOfTheKinds},
+        {"MipLevelsKeepTheAverageColour", MipLevelsKeepTheAverageColour},
+        {"PackedNormalsAreUnitAndFarAwayBumpsMakeRoughness", PackedNormalsAreUnitAndFarAwayBumpsMakeRoughness},
+        {"TheLibraryIsTheSameEveryTimeAndOnAnyNumberOfThreads", TheLibraryIsTheSameEveryTimeAndOnAnyNumberOfThreads},
     };
     for (const Test& test : tests) {
         const int failuresBefore = failureCount;
