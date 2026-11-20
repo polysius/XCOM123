@@ -8,23 +8,22 @@ namespace {
 
 constexpr float kTwoPi = 6.28318530718f;
 
-// Wraps a lattice index into [0, period).
-int Wrap(int index, int period) {
-    const int remainder = index % period;
-    return remainder < 0 ? remainder + period : remainder;
-}
-
 float Quintic(float t) {
     return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
 }
 
 float CornerContribution(int cellX, int cellY, float offsetX, float offsetY, int periodX, int periodY, uint32_t seed) {
-    const uint32_t hash = Hash(static_cast<uint32_t>(Wrap(cellX, periodX)), static_cast<uint32_t>(Wrap(cellY, periodY)), seed);
+    const uint32_t hash = Hash(static_cast<uint32_t>(WrapIndex(cellX, periodX)), static_cast<uint32_t>(WrapIndex(cellY, periodY)), seed);
     const float angle = kTwoPi * HashToUnit(hash);
     return std::cos(angle) * offsetX + std::sin(angle) * offsetY;
 }
 
 }  // namespace
+
+int WrapIndex(int index, int count) {
+    const int remainder = index % count;
+    return remainder < 0 ? remainder + count : remainder;
+}
 
 uint32_t Hash(uint32_t a, uint32_t b, uint32_t c) {
     uint32_t h = a * 0x9E3779B1u ^ (b + 0x7F4A7C15u) * 0x85EBCA6Bu ^ (c + 0x165667B1u) * 0xC2B2AE35u;
@@ -105,7 +104,7 @@ Cellular CellularNoise(float u, float v, int periodX, int periodY, uint32_t seed
         for (int offsetX = -1; offsetX <= 1; ++offsetX) {
             const int neighbourX = cellX + offsetX;
             const int neighbourY = cellY + offsetY;
-            const uint32_t hash = Hash(static_cast<uint32_t>(Wrap(neighbourX, periodX)), static_cast<uint32_t>(Wrap(neighbourY, periodY)), seed);
+            const uint32_t hash = Hash(static_cast<uint32_t>(WrapIndex(neighbourX, periodX)), static_cast<uint32_t>(WrapIndex(neighbourY, periodY)), seed);
             const float pointX = static_cast<float>(neighbourX) + HashToUnit(hash);
             const float pointY = static_cast<float>(neighbourY) + HashToUnit(Hash(hash, 1u, seed));
             const float distance = std::sqrt((pointX - x) * (pointX - x) + (pointY - y) * (pointY - y));

@@ -37,7 +37,7 @@ bool ParseKind(const std::string& name, MaterialKind& kind);
 struct MaterialSettings {
     MaterialKind kind = MaterialKind::Stone;
     uint32_t seed = 1;
-    int size = 1024;          // pixels along each side, 32 to 4096
+    int size = 1024;          // pixels along each side, 128 to 4096 (below 128 the fine features are narrower than a pixel)
     float wear = 0.5f;        // 0 = new, 1 = old: bright worn edges, dirt in the pits, stains and chips
     float scanDetail = 0.6f;  // 0 = smooth, 1 = the finest grain and the most scanner noise
 };

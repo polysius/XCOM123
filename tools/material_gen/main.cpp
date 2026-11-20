@@ -111,6 +111,22 @@ bool WritePreview(const std::filesystem::path& path, const MaterialMaps& maps) {
     return WritePng(path.string(), static_cast<uint32_t>(side), static_cast<uint32_t>(side), rgba);
 }
 
+// Reads a number for an option, or says what is wrong and ends the program with a usage error.
+double NumberOrExit(const std::string& option, const std::string& text, double lowest, double highest) {
+    double value = 0.0;
+    size_t used = 0;
+    try {
+        value = std::stod(text, &used);
+    } catch (const std::exception&) {
+        used = 0;
+    }
+    if (used != text.size() || text.empty() || !(value >= lowest && value <= highest)) {
+        std::cerr << option << " needs a number from " << lowest << " to " << highest << ", not \"" << text << "\"\n";
+        std::exit(2);
+    }
+    return value;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -131,13 +147,13 @@ int main(int argc, char** argv) {
         if (argument == "--kind") {
             kindName = next();
         } else if (argument == "--seed") {
-            settings.seed = static_cast<uint32_t>(std::stoul(next()));
+            settings.seed = static_cast<uint32_t>(NumberOrExit(argument, next(), 0.0, 4294967295.0));
         } else if (argument == "--size") {
-            settings.size = std::stoi(next());
+            settings.size = static_cast<int>(NumberOrExit(argument, next(), 128.0, 4096.0));
         } else if (argument == "--wear") {
-            settings.wear = std::stof(next());
+            settings.wear = static_cast<float>(NumberOrExit(argument, next(), 0.0, 1.0));
         } else if (argument == "--detail") {
-            settings.scanDetail = std::stof(next());
+            settings.scanDetail = static_cast<float>(NumberOrExit(argument, next(), 0.0, 1.0));
         } else if (argument == "--out") {
             folder = next();
         } else {

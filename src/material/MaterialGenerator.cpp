@@ -24,6 +24,7 @@ struct Context {
     uint32_t seed;
     float wear;
     float detail;
+    int microCells;  // cells across the tile of the coarsest layer of fine grain; it grows with the size, so the grain stays at pixel scale
 };
 
 // How big the tile really is and how deep its surface is, per kind.
@@ -58,11 +59,16 @@ glm::vec3 Srgb(float r, float g, float b) {
     return {toLinear(r), toLinear(g), toLinear(b)};
 }
 
+// Limits a setting to 0..1. A number that is not a number counts as 0, which glm::clamp would pass on.
+float ClampUnit(float value) {
+    return std::isnan(value) ? 0.0f : std::clamp(value, 0.0f, 1.0f);
+}
+
 float Unit(float noise) {  // noise in -1..1 to 0..1
     return 0.5f + 0.5f * noise;
 }
 
-float Step(float low, float high, float value) {
+float Smooth(float low, float high, float value) {
     return glm::smoothstep(low, high, value);
 }
 
@@ -70,18 +76,18 @@ float Mix(float a, float b, float t) {
     return a + (b - a) * t;
 }
 
-int WrapIndex(int index, int count) {
-    const int remainder = index % count;
-    return remainder < 0 ? remainder + count : remainder;
-}
-
 float Fraction(float value) {
     return value - std::floor(value);
 }
 
-// The finest detail, laid over every kind: grain at the scale of the scan's pixels.
+// The finest detail, laid over every kind: grain over the last three octaves, down to two pixels.
 float MicroDetail(const Context& c, float u, float v) {
-    return c.detail * Fbm(u, v, 128, 128, 3, c.seed + 9001u, 0.6f);
+    return c.detail * Fbm(u, v, c.microCells, c.microCells, 3, c.seed + 9001u, 0.6f);
+}
+
+// An index below `count` from the seed, to pick between variants of a material.
+int PickIndex(const Context& c, uint32_t salt, int count) {
+    return std::min(count - 1, static_cast<int>(HashToUnit(Hash(c.seed, salt, 77u)) * static_cast<float>(count)));
 }
 
 // A value between 0 and 1 from the seed, to pick between variants of a material.
@@ -92,7 +98,7 @@ float SeedChoice(const Context& c, uint32_t salt) {
 // Recipes ----------------------------------------------------------------------------------------
 
 Sample StoneSample(const Context& c, float u, float v) {
-    const uint32_t s = c.seed;
+    const uint32_t s = c.seed * 977u;  // far apart, so the noise of neighbouring seeds shares no layer
     const float warpedU = u + 0.03f * Fbm(u, v, 4, 4, 3, s + 1);
     const float warpedV = v + 0.03f * Fbm(u, v, 4, 4, 3, s + 2);
     const float bulk = Fbm(warpedU, warpedV, 3, 3, 5, s + 3);
@@ -102,14 +108,14 @@ Sample StoneSample(const Context& c, float u, float v) {
     // Plates of stone with cracks along some of their borders.
     const Cellular plates = CellularNoise(warpedU, warpedV, 5, 5, s + 5);
     const float edgeDistance = plates.second - plates.nearest;
-    const float crackAllowed = Step(0.15f, 0.5f, Fbm(u, v, 3, 3, 3, s + 6)) * (0.3f + 0.7f * c.wear);
-    const float crack = (1.0f - Step(0.0f, 0.05f, edgeDistance)) * crackAllowed;
+    const float crackAllowed = Smooth(0.15f, 0.5f, Fbm(u, v, 3, 3, 3, s + 6)) * (0.3f + 0.7f * c.wear);
+    const float crack = (1.0f - Smooth(0.0f, 0.05f, edgeDistance)) * crackAllowed;
     const float plateTone = HashToUnit(plates.cellHash);
 
     Sample sample;
     // Broken rock has sharp facets (ridged noise) on top of the rounded bulk, and weathering pits the surface.
     const float facets = RidgedFbm(warpedU, warpedV, 6, 5, s + 10);
-    const float pitting = Step(0.35f, 0.6f, Fbm(warpedU, warpedV, 24, 24, 3, s + 11));
+    const float pitting = Smooth(0.35f, 0.6f, Fbm(warpedU, warpedV, 24, 24, 3, s + 11));
     sample.height = 0.5f + 0.20f * bulk + 0.10f * strata + 0.08f * grain + 0.22f * facets + (plateTone - 0.5f) * 0.08f - 0.35f * crack -
                     0.06f * pitting * (0.5f + c.wear) + 0.04f * MicroDetail(c, u, v);
 
@@ -129,7 +135,7 @@ Sample BrickSample(const Context& c, float u, float v) {
     constexpr int kRows = 8;  // an even number of rows, so the offset of every second row also tiles
     constexpr int kColumns = 4;
     constexpr float kMortarHalfWidth = 0.006f;  // in tile sizes, about 5 mm
-    const uint32_t s = c.seed;
+    const uint32_t s = c.seed * 977u;  // far apart, so the noise of neighbouring seeds shares no layer
 
     const float warpedU = u + 0.004f * Fbm(u, v, 24, 24, 2, s + 1);
     const float warpedV = v + 0.004f * Fbm(u, v, 24, 24, 2, s + 2);
@@ -142,8 +148,8 @@ Sample BrickSample(const Context& c, float u, float v) {
 
     // The distance from the nearest brick border, in tile sizes.
     const float borderDistance = std::min(std::min(insideX, 1.0f - insideX) / kColumns, std::min(insideY, 1.0f - insideY) / kRows);
-    const float brickRound = Step(kMortarHalfWidth, kMortarHalfWidth + 0.012f, borderDistance);
-    const float brickMask = Step(kMortarHalfWidth, kMortarHalfWidth + 0.004f, borderDistance);
+    const float brickRound = Smooth(kMortarHalfWidth, kMortarHalfWidth + 0.012f, borderDistance);
+    const float brickMask = Smooth(kMortarHalfWidth, kMortarHalfWidth + 0.004f, borderDistance);
 
     const uint32_t brickHash = Hash(static_cast<uint32_t>(row), static_cast<uint32_t>(column), s);
     const float brickTone = HashToUnit(brickHash);
@@ -164,27 +170,27 @@ Sample BrickSample(const Context& c, float u, float v) {
 }
 
 Sample ConcreteSample(const Context& c, float u, float v) {
-    const uint32_t s = c.seed;
+    const uint32_t s = c.seed * 977u;  // far apart, so the noise of neighbouring seeds shares no layer
     const float base = Fbm(u, v, 3, 3, 5, s + 1);
     const float pores = Fbm(u, v, 80, 80, 2, s + 2, 0.6f);
-    const float pit = Step(0.30f, 0.45f, pores);
+    const float pit = Smooth(0.30f, 0.45f, pores);
 
     // Air bubbles trapped against the formwork leave round bowls, in some of the cells only.
     const Cellular bubbles = CellularNoise(u, v, 36, 36, s + 3);
     const float bubbleRadius = 0.10f + 0.15f * HashToUnit(bubbles.cellHash);
     const bool hasBubble = HashToUnit(Hash(bubbles.cellHash, 5u, s)) > 0.82f;
-    const float bowl = hasBubble ? 1.0f - Step(0.0f, bubbleRadius, bubbles.nearest) : 0.0f;
+    const float bowl = hasBubble ? 1.0f - Smooth(0.0f, bubbleRadius, bubbles.nearest) : 0.0f;
 
     // Seams where the formwork boards met.
     const float seamPosition = Fraction(v * 4.0f);
-    const float groove = 1.0f - Step(0.0f, 0.008f, std::min(seamPosition, 1.0f - seamPosition));
+    const float groove = 1.0f - Smooth(0.0f, 0.008f, std::min(seamPosition, 1.0f - seamPosition));
 
     Sample sample;
     sample.height = 0.6f + 0.18f * base + 0.05f * Fbm(u, v, 256, 256, 3, s + 4) - 0.12f * pit - 0.35f * bowl - 0.2f * groove +
                     0.03f * MicroDetail(c, u, v);
 
     glm::vec3 colour = Srgb(0.55f, 0.55f, 0.53f) * (0.85f + 0.25f * Unit(base));
-    const float stain = Step(0.1f, 0.6f, Fbm(u, v, 12, 3, 4, s + 5)) * c.wear;  // water runs down the wall
+    const float stain = Smooth(0.1f, 0.6f, Fbm(u, v, 12, 3, 4, s + 5)) * c.wear;  // water runs down the wall
     colour *= 1.0f - 0.3f * stain;
     colour *= 1.0f - 0.3f * pit - 0.3f * bowl;
     sample.albedo = colour;
@@ -193,22 +199,22 @@ Sample ConcreteSample(const Context& c, float u, float v) {
 }
 
 Sample PlasterSample(const Context& c, float u, float v) {
-    const uint32_t s = c.seed;
+    const uint32_t s = c.seed * 977u;  // far apart, so the noise of neighbouring seeds shares no layer
     const float trowel = Fbm(u, v, 3, 10, 3, s + 1);
 
     // Paint comes off where the noise is high, and more of it the older the wall.
     const float chipThreshold = 0.62f - 0.25f * c.wear;
-    const float chip = Step(chipThreshold, chipThreshold + 0.08f, Fbm(u, v, 5, 5, 4, s + 2));
+    const float chip = Smooth(chipThreshold, chipThreshold + 0.08f, Fbm(u, v, 5, 5, 4, s + 2));
 
     const Cellular cracks = CellularNoise(u, v, 4, 4, s + 3);
-    const float crack = (1.0f - Step(0.0f, 0.02f, cracks.second - cracks.nearest)) * Step(0.1f, 0.4f, Fbm(u, v, 3, 3, 3, s + 4)) * c.wear;
+    const float crack = (1.0f - Smooth(0.0f, 0.02f, cracks.second - cracks.nearest)) * Smooth(0.1f, 0.4f, Fbm(u, v, 3, 3, 3, s + 4)) * c.wear;
 
     Sample sample;
     sample.height = 0.7f + 0.05f * trowel + 0.015f * Fbm(u, v, 128, 128, 3, s + 5) - 0.25f * chip - 0.1f * crack +
                     0.03f * MicroDetail(c, u, v);
 
     const glm::vec3 paints[4] = {Srgb(0.82f, 0.76f, 0.64f), Srgb(0.72f, 0.78f, 0.74f), Srgb(0.80f, 0.62f, 0.50f), Srgb(0.88f, 0.87f, 0.82f)};
-    const glm::vec3 paint = paints[static_cast<int>(SeedChoice(c, 2) * 3.99f)] * (0.95f + 0.1f * Unit(trowel));
+    const glm::vec3 paint = paints[PickIndex(c, 2, 4)] * (0.95f + 0.1f * Unit(trowel));
     const glm::vec3 undercoat = glm::mix(Srgb(0.55f, 0.50f, 0.45f), Srgb(0.50f, 0.30f, 0.25f), Unit(Fbm(u, v, 8, 8, 2, s + 6)));
     sample.albedo = glm::mix(paint, undercoat, chip) * (1.0f - 0.5f * crack);
     sample.roughness = Mix(0.75f, 0.95f, chip);
@@ -217,7 +223,7 @@ Sample PlasterSample(const Context& c, float u, float v) {
 
 Sample WoodSample(const Context& c, float u, float v) {
     constexpr int kPlanks = 4;
-    const uint32_t s = c.seed;
+    const uint32_t s = c.seed * 977u;  // far apart, so the noise of neighbouring seeds shares no layer
     const int plank = WrapIndex(static_cast<int>(std::floor(u * kPlanks)), kPlanks);
     const float acrossPlank = Fraction(u * kPlanks);
     const uint32_t plankHash = Hash(static_cast<uint32_t>(plank), s, 11u);
@@ -231,11 +237,11 @@ Sample WoodSample(const Context& c, float u, float v) {
     const float lateWood = ring * ring * ring;
 
     // Pores: short dark dashes along the grain.
-    const float pore = Step(0.35f, 0.5f, Fbm(u, v, kPlanks * 120, 6, 2, s + 6, 0.6f));
+    const float pore = Smooth(0.35f, 0.5f, Fbm(u, v, kPlanks * 120, 6, 2, s + 6, 0.6f));
 
     // Gaps between the planks.
     const float edgeDistance = std::min(acrossPlank, 1.0f - acrossPlank) / kPlanks;
-    const float groove = 1.0f - Step(0.0015f, 0.004f, edgeDistance);
+    const float groove = 1.0f - Smooth(0.0015f, 0.004f, edgeDistance);
 
     Sample sample;
     sample.height = 0.6f + 0.04f * lateWood - 0.08f * pore - 0.35f * groove + 0.01f * Fbm(u, v, 200, 8, 2, s + 8) +
@@ -251,16 +257,16 @@ Sample WoodSample(const Context& c, float u, float v) {
 }
 
 Sample MetalSample(const Context& c, float u, float v) {
-    const uint32_t s = c.seed;
+    const uint32_t s = c.seed * 977u;  // far apart, so the noise of neighbouring seeds shares no layer
     // Brushing leaves fine lines along one direction, scratches are longer and sparser.
     const float brushed = Fbm(u, v, 8, 300, 2, s + 1);
-    const float scratch = Step(0.55f, 0.75f, Fbm(u, v, 6, 500, 1, s + 2)) * Step(0.0f, 0.4f, Fbm(u, v, 3, 3, 2, s + 3));
+    const float scratch = Smooth(0.55f, 0.75f, Fbm(u, v, 6, 500, 1, s + 2)) * Smooth(0.0f, 0.4f, Fbm(u, v, 3, 3, 2, s + 3));
     const float dent = Fbm(u, v, 3, 3, 4, s + 4);
 
     // Rust spreads from a few places over the metal, further with age, and eats pits into it.
     const float rustThreshold = 0.55f - 0.5f * c.wear;
     const float rustField = Fbm(u, v, 4, 4, 5, s + 5) + 0.35f * Fbm(u, v, 24, 24, 3, s + 6);
-    const float rust = Step(rustThreshold, rustThreshold + 0.12f, rustField);
+    const float rust = Smooth(rustThreshold, rustThreshold + 0.12f, rustField);
     const float rustPits = Unit(Fbm(u, v, 64, 64, 4, s + 7));
 
     Sample sample;
@@ -276,21 +282,21 @@ Sample MetalSample(const Context& c, float u, float v) {
 }
 
 Sample LeatherSample(const Context& c, float u, float v) {
-    const uint32_t s = c.seed;
+    const uint32_t s = c.seed * 977u;  // far apart, so the noise of neighbouring seeds shares no layer
     // Small pebbled cells with creases between them, and a few deeper folds.
     const Cellular grain = CellularNoise(u + 0.01f * Fbm(u, v, 8, 8, 2, s + 8), v, 24, 24, s + 1);
     const float cellSize = 0.12f + 0.2f * HashToUnit(grain.cellHash);  // cells differ in how soft their crease is
-    const float pebble = Step(0.0f, cellSize + 0.15f, grain.second - grain.nearest);
+    const float pebble = Smooth(0.0f, cellSize + 0.15f, grain.second - grain.nearest);
     const Cellular folds = CellularNoise(u, v, 5, 5, s + 2);
-    const float fold = 1.0f - Step(0.0f, 0.06f, folds.second - folds.nearest);
-    const float pore = Step(0.4f, 0.55f, Fbm(u, v, 200, 200, 2, s + 3));
+    const float fold = 1.0f - Smooth(0.0f, 0.06f, folds.second - folds.nearest);
+    const float pore = Smooth(0.4f, 0.55f, Fbm(u, v, 200, 200, 2, s + 3));
 
     Sample sample;
     sample.height = 0.55f + 0.25f * pebble - 0.2f * fold * (0.4f + 0.6f * c.wear) - 0.05f * pore + 0.03f * Fbm(u, v, 3, 3, 3, s + 4) +
                     0.02f * MicroDetail(c, u, v);
 
     const glm::vec3 hides[3] = {Srgb(0.30f, 0.17f, 0.10f), Srgb(0.10f, 0.08f, 0.07f), Srgb(0.55f, 0.38f, 0.22f)};
-    glm::vec3 colour = hides[static_cast<int>(SeedChoice(c, 4) * 2.99f)];
+    glm::vec3 colour = hides[PickIndex(c, 4, 3)];
     colour *= 0.8f + 0.3f * pebble;
     colour *= 1.0f - 0.3f * fold - 0.2f * pore;
     sample.albedo = colour;
@@ -300,7 +306,7 @@ Sample LeatherSample(const Context& c, float u, float v) {
 
 Sample FabricSample(const Context& c, float u, float v) {
     constexpr int kThreads = 64;
-    const uint32_t s = c.seed;
+    const uint32_t s = c.seed * 977u;  // far apart, so the noise of neighbouring seeds shares no layer
     const float x = u * kThreads;
     const float y = v * kThreads;
     const int column = WrapIndex(static_cast<int>(std::floor(x)), kThreads);
@@ -333,7 +339,7 @@ Sample FabricSample(const Context& c, float u, float v) {
     const Palette palettes[3] = {{Srgb(0.12f, 0.18f, 0.35f), Srgb(0.70f, 0.72f, 0.75f)},   // denim
                                  {Srgb(0.75f, 0.68f, 0.55f), Srgb(0.72f, 0.65f, 0.52f)},   // linen
                                  {Srgb(0.45f, 0.10f, 0.10f), Srgb(0.40f, 0.09f, 0.09f)}};  // red wool
-    const Palette& palette = palettes[static_cast<int>(SeedChoice(c, 5) * 2.99f)];
+    const Palette& palette = palettes[PickIndex(c, 5, 3)];
     const glm::vec3 warpColour = palette.warp * (0.85f + 0.3f * warpTone);
     const glm::vec3 weftColour = palette.weft * (0.85f + 0.3f * weftTone);
     sample.albedo = warpOnTop ? warpColour : weftColour;
@@ -357,7 +363,7 @@ float StoneLayer(const Context& c, float u, float v, int cells, float density, f
 }
 
 Sample AsphaltSample(const Context& c, float u, float v) {
-    const uint32_t s = c.seed;
+    const uint32_t s = c.seed * 977u;  // far apart, so the noise of neighbouring seeds shares no layer
     float largeTone;
     float smallTone;
     const float large = StoneLayer(c, u, v, 20, 0.5f, 0.25f, 0.55f, s + 1, largeTone);
@@ -365,7 +371,7 @@ Sample AsphaltSample(const Context& c, float u, float v) {
     const float stone = std::max(large, small);
     const float tone = large >= small ? largeTone : smallTone;
 
-    const float crack = Step(0.93f, 0.97f, RidgedFbm(u, v, 3, 4, s + 9)) * c.wear;
+    const float crack = Smooth(0.93f, 0.97f, RidgedFbm(u, v, 3, 4, s + 9)) * c.wear;
 
     Sample sample;
     sample.height = 0.3f + 0.05f * Fbm(u, v, 200, 200, 2, s + 3) + stone * 0.35f - 0.25f * crack + 0.03f * MicroDetail(c, u, v);
@@ -374,16 +380,16 @@ Sample AsphaltSample(const Context& c, float u, float v) {
     const glm::vec3 binder = Srgb(0.10f, 0.10f, 0.10f) * (1.0f + 0.8f * c.wear) * (0.9f + 0.2f * Unit(Fbm(u, v, 12, 12, 3, s + 4)));
     const float stoneTone = 0.25f + 0.3f * tone;
     const glm::vec3 stoneColour = Srgb(stoneTone * 1.05f, stoneTone, stoneTone * 0.92f);
-    const float visible = Step(0.0f, 0.3f, stone);  // the edge of a stone is still coated in binder
+    const float visible = Smooth(0.0f, 0.3f, stone);  // the edge of a stone is still coated in binder
     sample.albedo = glm::mix(binder, stoneColour, visible * (0.6f + 0.4f * c.wear)) * (1.0f - 0.5f * crack);
     sample.roughness = Mix(0.92f, 0.75f, visible);
     return sample;
 }
 
 Sample SoilSample(const Context& c, float u, float v) {
-    const uint32_t s = c.seed;
+    const uint32_t s = c.seed * 977u;  // far apart, so the noise of neighbouring seeds shares no layer
     const Cellular clods = CellularNoise(u, v, 9, 9, s + 1);
-    const float clod = 1.0f - Step(0.0f, 0.8f, clods.nearest);
+    const float clod = 1.0f - Smooth(0.0f, 0.8f, clods.nearest);
     const float mid = Fbm(u, v, 12, 12, 4, s + 2);
 
     const Cellular pebbles = CellularNoise(u, v, 14, 14, s + 3);
@@ -393,7 +399,7 @@ Sample SoilSample(const Context& c, float u, float v) {
 
     // Dry earth cracks into plates.
     const Cellular plates = CellularNoise(u, v, 5, 5, s + 4);
-    const float crack = (1.0f - Step(0.0f, 0.03f, plates.second - plates.nearest)) * Step(-0.2f, 0.3f, Fbm(u, v, 3, 3, 3, s + 5)) *
+    const float crack = (1.0f - Smooth(0.0f, 0.03f, plates.second - plates.nearest)) * Smooth(-0.2f, 0.3f, Fbm(u, v, 3, 3, 3, s + 5)) *
                         (0.3f + 0.7f * c.wear);
 
     Sample sample;
@@ -504,10 +510,10 @@ bool ParseKind(const std::string& name, MaterialKind& kind) {
 }
 
 MaterialMaps GenerateMaterial(const MaterialSettings& settings, JobSystem* jobs) {
-    const int size = std::clamp(settings.size, 32, 4096);
+    const int size = std::clamp(settings.size, 128, 4096);
     const size_t pixels = static_cast<size_t>(size) * size;
     const Dimensions dimensions = DimensionsOf(settings.kind);
-    const Context context{settings.seed, glm::clamp(settings.wear, 0.0f, 1.0f), glm::clamp(settings.scanDetail, 0.0f, 1.0f)};
+    const Context context{settings.seed, ClampUnit(settings.wear), ClampUnit(settings.scanDetail), size / 8};
 
     MaterialMaps maps;
     maps.size = size;

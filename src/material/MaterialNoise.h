@@ -10,6 +10,9 @@
 
 namespace material {
 
+// Wraps an index into [0, count), also when it is negative.
+int WrapIndex(int index, int count);
+
 // A 32 bit hash of three integers, and its value as a number in [0, 1).
 uint32_t Hash(uint32_t a, uint32_t b, uint32_t c);
 float HashToUnit(uint32_t hash);

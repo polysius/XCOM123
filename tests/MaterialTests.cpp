@@ -8,6 +8,7 @@
 #include <cmath>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -288,7 +289,7 @@ void ASurfaceIsRoughAtEveryScale() {
 }
 
 void MoreScanDetailMeansMoreFineGrain() {
-    for (const MaterialKind kind : {MaterialKind::Stone, MaterialKind::Concrete, MaterialKind::Soil}) {
+    for (const MaterialKind kind : {MaterialKind::Stone, MaterialKind::Plaster, MaterialKind::Soil}) {
         const float smooth = FineDetail(Make(kind, 2, 0.5f, 0.0f));
         const float detailed = FineDetail(Make(kind, 2, 0.5f, 1.0f));
         Check(detailed > smooth, Name(kind) + ": a higher scan detail adds grain: " + std::to_string(smooth) + " to " + std::to_string(detailed));
@@ -372,10 +373,10 @@ void KindNamesRoundTripAndBadNamesAreRefused() {
 void TheSizeIsKeptInRange() {
     MaterialSettings settings;
     settings.size = 3;
-    Check(material::GenerateMaterial(settings).size == 32, "a size under 32 is raised to 32");
-    settings.size = 64;
+    Check(material::GenerateMaterial(settings).size == 128, "a size under 128 is raised to 128");
+    settings.size = 130;
     const MaterialMaps maps = material::GenerateMaterial(settings);
-    Check(maps.size == 64 && maps.height.size() == 64u * 64u && maps.albedo.size() == 64u * 64u && maps.normal.size() == 64u * 64u, "and every map has size * size values");
+    Check(maps.size == 130 && maps.height.size() == 130u * 130u && maps.albedo.size() == 130u * 130u && maps.normal.size() == 130u * 130u, "and every map has size * size values, for a size that is no power of two too");
     settings.wear = 7.0f;
     settings.scanDetail = -3.0f;
     const MaterialMaps clamped = material::GenerateMaterial(settings);
@@ -384,13 +385,48 @@ void TheSizeIsKeptInRange() {
         finite = finite && std::isfinite(clamped.height[i]) && std::isfinite(clamped.albedo[i].r) && std::isfinite(clamped.normal[i].z);
     }
     Check(finite, "wear and detail outside 0 to 1 are clamped, not passed on");
+    settings.wear = std::numeric_limits<float>::quiet_NaN();
+    settings.scanDetail = std::numeric_limits<float>::quiet_NaN();
+    const MaterialMaps notNumbers = material::GenerateMaterial(settings);
+    bool stillFinite = true;
+    for (size_t i = 0; i < notNumbers.height.size(); ++i) {
+        stillFinite = stillFinite && std::isfinite(notNumbers.height[i]) && std::isfinite(notNumbers.albedo[i].r) &&
+                      std::isfinite(notNumbers.roughness[i]) && std::isfinite(notNumbers.normal[i].z);
+    }
+    Check(stillFinite, "wear and detail that are not numbers do not poison the maps");
+}
+
+void GrainReachesThePixelAtLargeSizes() {
+    // The fine grain is tied to the size of the tile in pixels, so it must not fade as the tile gets bigger.
+    for (const MaterialKind kind : {MaterialKind::Stone, MaterialKind::Concrete, MaterialKind::Soil}) {
+        const float small = FineDetail(Make(kind, 3, 0.5f, 1.0f, 256));
+        const float large = FineDetail(Make(kind, 3, 0.5f, 1.0f, 1024));
+        Check(large > 0.25f * small, Name(kind) + ": grain at 1024 px is not much weaker than at 256 px: " + std::to_string(small) + " and " + std::to_string(large));
+    }
+}
+
+void NeighbouringSeedsGiveUnrelatedSurfaces() {
+    // Each seed must be a surface of its own, not a shifted copy of the one before.
+    const MaterialMaps a = Make(MaterialKind::Stone, 10);
+    const MaterialMaps b = Make(MaterialKind::Stone, 11);
+    double correlation = 0.0;
+    double varA = 0.0;
+    double varB = 0.0;
+    const float meanA = Mean(a.height);
+    const float meanB = Mean(b.height);
+    for (size_t i = 0; i < a.height.size(); ++i) {
+        correlation += static_cast<double>(a.height[i] - meanA) * (b.height[i] - meanB);
+        varA += static_cast<double>(a.height[i] - meanA) * (a.height[i] - meanA);
+        varB += static_cast<double>(b.height[i] - meanB) * (b.height[i] - meanB);
+    }
+    Check(std::abs(correlation / std::sqrt(varA * varB)) < 0.3, "the heights of seeds 10 and 11 are not alike");
 }
 
 void ASmallMaterialAlsoTiles() {
     // The finishing steps use blurs that scale with the size, so check a small one separately.
     ForEachKind([](MaterialKind kind) {
-        const MaterialMaps maps = Make(kind, 8, 0.5f, 0.6f, 64);
-        Check(SeamRatio(maps.height, maps.size) < 1.0f, Name(kind) + ": a 64 pixel tile has no seam, ratio " + std::to_string(SeamRatio(maps.height, maps.size)));
+        const MaterialMaps maps = Make(kind, 8, 0.5f, 0.6f, 130);
+        Check(SeamRatio(maps.height, maps.size) < 1.0f, Name(kind) + ": a 130 pixel tile has no seam, ratio " + std::to_string(SeamRatio(maps.height, maps.size)));
     });
 }
 
@@ -416,6 +452,8 @@ int main() {
         {"PitsAreDarkerThanTheSurfaceAround", PitsAreDarkerThanTheSurfaceAround},
         {"KindNamesRoundTripAndBadNamesAreRefused", KindNamesRoundTripAndBadNamesAreRefused},
         {"TheSizeIsKeptInRange", TheSizeIsKeptInRange},
+        {"GrainReachesThePixelAtLargeSizes", GrainReachesThePixelAtLargeSizes},
+        {"NeighbouringSeedsGiveUnrelatedSurfaces", NeighbouringSeedsGiveUnrelatedSurfaces},
         {"ASmallMaterialAlsoTiles", ASmallMaterialAlsoTiles},
     };
     for (const Test& test : tests) {
