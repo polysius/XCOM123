@@ -144,6 +144,17 @@ if(MSVC)
     target_compile_options(material_gen PRIVATE /W4 /permissive- /MP)
 endif()
 
+# character_gen makes a character and writes a contact sheet and an OBJ file. It builds only the character sources,
+# the PNG writer and the job system.
+file(GLOB CHARACTER_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/character/*.cpp)
+add_executable(character_gen tools/character_gen/main.cpp ${CHARACTER_SOURCES} src/core/PngWriter.cpp src/core/JobSystem.cpp)
+target_include_directories(character_gen PRIVATE src)
+target_link_libraries(character_gen PRIVATE glm::glm)
+target_compile_definitions(character_gen PRIVATE GLM_FORCE_RADIANS GLM_FORCE_DEPTH_ZERO_TO_ONE)
+if(MSVC)
+    target_compile_options(character_gen PRIVATE /W4 /permissive- /MP)
+endif()
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -200,6 +211,17 @@ if(MSVC)
     target_compile_options(material_tests PRIVATE /W4 /permissive- /MP)
 endif()
 add_test(NAME material_tests COMMAND material_tests)
+
+# character_tests checks the character generator: a closed surface, the stature and mass asked for, human proportions,
+# symmetry, skin weights, skinning and bad parameters.
+add_executable(character_tests tests/CharacterTests.cpp src/core/JobSystem.cpp ${CHARACTER_SOURCES})
+target_include_directories(character_tests PRIVATE src)
+target_link_libraries(character_tests PRIVATE glm::glm)
+target_compile_definitions(character_tests PRIVATE GLM_FORCE_RADIANS GLM_FORCE_DEPTH_ZERO_TO_ONE)
+if(MSVC)
+    target_compile_options(character_tests PRIVATE /W4 /permissive- /MP)
+endif()
+add_test(NAME character_tests COMMAND character_tests)
 
 # ---------------------------------------------------------------------------
 # City generator tests
