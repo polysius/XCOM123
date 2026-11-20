@@ -133,6 +133,17 @@ if(MSVC)
     target_compile_options(crowd_bench PRIVATE /W4 /permissive- /MP)
 endif()
 
+# material_gen writes the maps of a procedural material as PNG files. It builds only the material sources, the PNG
+# writer and the job system.
+file(GLOB MATERIAL_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/material/*.cpp)
+add_executable(material_gen tools/material_gen/main.cpp ${MATERIAL_SOURCES} src/core/PngWriter.cpp src/core/JobSystem.cpp)
+target_include_directories(material_gen PRIVATE src)
+target_link_libraries(material_gen PRIVATE glm::glm)
+target_compile_definitions(material_gen PRIVATE GLM_FORCE_RADIANS GLM_FORCE_DEPTH_ZERO_TO_ONE)
+if(MSVC)
+    target_compile_options(material_gen PRIVATE /W4 /permissive- /MP)
+endif()
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -178,6 +189,17 @@ if(MSVC)
     target_compile_options(fluid_tests PRIVATE /W4 /permissive- /MP)
 endif()
 add_test(NAME fluid_tests COMMAND fluid_tests)
+
+# material_tests checks the procedural materials: they are repeatable, tile without a seam, have unit normals that
+# follow the height, stay within physical ranges and carry detail at every scale.
+add_executable(material_tests tests/MaterialTests.cpp src/core/JobSystem.cpp ${MATERIAL_SOURCES})
+target_include_directories(material_tests PRIVATE src)
+target_link_libraries(material_tests PRIVATE glm::glm)
+target_compile_definitions(material_tests PRIVATE GLM_FORCE_RADIANS GLM_FORCE_DEPTH_ZERO_TO_ONE)
+if(MSVC)
+    target_compile_options(material_tests PRIVATE /W4 /permissive- /MP)
+endif()
+add_test(NAME material_tests COMMAND material_tests)
 
 # ---------------------------------------------------------------------------
 # City generator tests
