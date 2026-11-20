@@ -24,6 +24,7 @@ layout(location = 3) out vec3 outSurface;        // x: roughness, y: material id
 layout(location = 4) out vec3 outLocalPosition;  // metres from the body's minimum corner
 layout(location = 5) out vec3 outBoxSize;        // full size of the body in metres
 layout(location = 6) out vec3 outLocalNormal;    // the normal before the body turns, to tell faces apart
+layout(location = 7) out float outFreeBody;      // 1: a body lies at any angle, so its faces are mapped in its own axes
 
 // Turns a vector by a unit quaternion.
 vec3 Rotate(vec3 v, vec4 q) {
@@ -37,6 +38,7 @@ void main() {
     outWorldPosition = worldPosition;
     outNormal = Rotate(inNormal, inOrientation);
     outLocalNormal = inNormal;
+    outFreeBody = 1.0;
     outAlbedo = inColorSeed.rgb;
     outSurface = vec3(inHalfSizeRoughness.w, inCenterMaterial.w, inColorSeed.w);
     outLocalPosition = (inPosition + 1.0) * halfSize;

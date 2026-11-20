@@ -244,7 +244,10 @@ void VulkanRenderer::WriteMaterialDescriptors() {
     }
     scanTiles = {};
     const std::vector<float>& tiles = materials.TileMeters();
-    for (size_t layer = 0; layer < tiles.size() && layer < 12; ++layer) {
+    if (tiles.size() > scanTiles.size() * 4) {
+        throw std::runtime_error("There are more scanned materials than FrameUniforms::scanTiles has room for");
+    }
+    for (size_t layer = 0; layer < tiles.size(); ++layer) {
         scanTiles[layer / 4][static_cast<int>(layer % 4)] = tiles[layer];
     }
 }
