@@ -22,7 +22,7 @@ class JobSystem;
 namespace character {
 
 struct MeshSettings {
-    float voxelMeters = 0.022f;  // the size of the grid the surface is cut from; 2.2 cm gives 20000 to 40000 triangles
+    float voxelMeters = 0.024f;  // the size of the grid the surface is cut from, 6 mm to 4 cm; 2.4 cm gives 16000 to 50000 triangles
 };
 
 struct CharacterMesh {
@@ -43,6 +43,17 @@ CharacterMesh GenerateCharacter(const CharacterParameters& parameters, const Mes
 
 // The positions of the vertices in a pose, by linear blend skinning.
 std::vector<glm::vec3> SkinPositions(const CharacterMesh& mesh, const Pose& pose);
+
+// The shape of a mesh as a surface. A body is a closed sphere: no edge in other than two triangles, one piece, and an
+// Euler characteristic (vertices minus edges plus triangles) of 2. A handle, a tunnel through the body, makes it 0.
+struct MeshTopology {
+    int badEdges = 0;
+    int pieces = 0;
+    long long eulerCharacteristic = 0;
+
+    bool IsClosedSphere() const { return badEdges == 0 && pieces == 1 && eulerCharacteristic == 2; }
+};
+MeshTopology MeasureTopology(const CharacterMesh& mesh);
 
 // The signed volume enclosed by a closed triangle mesh: positive when the triangles face outwards.
 float MeshVolume(const std::vector<glm::vec3>& positions, const std::vector<uint32_t>& indices);

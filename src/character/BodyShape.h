@@ -9,8 +9,8 @@
 
 // The surface of a body as an implicit function: a negative number inside the body, a positive one outside, and about
 // zero on the skin. The body is built from parts (tapered capsules and ellipsoids, each owned by a bone) that are
-// merged with smooth unions where they grow into one another and with plain unions where they must stay apart, so
-// that an upper arm joins the shoulder but never the ribs, and one thigh never fuses with the other.
+// merged with smooth unions where they grow into one another (a limb into its joint and into the trunk) and with plain
+// unions where they must stay apart: the two legs are only ever joined through the body, never to each other.
 
 namespace character {
 
@@ -43,7 +43,7 @@ public:
     glm::vec3 BoundsMax() const { return boundsMax; }
 
 private:
-    friend BodyShape BuildBodyShape(const Skeleton&, const CharacterParameters&, float);
+    friend BodyShape BuildBodyShape(const Skeleton&, const CharacterParameters&, float, float);
 
     // A node of the tree that combines the parts: a part, or two nodes joined with smoothing of size k (0 for none).
     struct Node {
@@ -65,7 +65,8 @@ private:
 };
 
 // The body of a person: `girth` scales every radius of the trunk and limbs (1 is a body of average build for the
-// parameters), and the generator solves it so that the mass comes out right.
-BodyShape BuildBodyShape(const Skeleton& skeleton, const CharacterParameters& parameters, float girth);
+// parameters), and the generator solves it so that the mass comes out right. No radius is made smaller than
+// `minimumRadius`: the surface is cut from a grid, and a part thinner than a cell would break up.
+BodyShape BuildBodyShape(const Skeleton& skeleton, const CharacterParameters& parameters, float girth, float minimumRadius = 0.0f);
 
 }  // namespace character

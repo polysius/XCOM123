@@ -160,7 +160,6 @@ void TheSameParametersGiveTheSameBodyOnAnyNumberOfThreads() {
     Check(first.positions == second.positions && first.indices == second.indices, "the same parameters give the same mesh");
     Check(first.positions == threaded.positions && first.indices == threaded.indices && first.boneWeights == threaded.boneWeights,
           "on one thread and on six, to the last bit");
-    Person(0.7f, 38.0f, 1.74f, 76.0f, 0.5f, 10);
     const CharacterMesh other = GenerateCharacter(Person(0.7f, 38.0f, 1.74f, 76.0f, 0.5f, 10));
     Check(other.positions != first.positions || other.skeleton[Joint::Pelvis].restPosition != first.skeleton[Joint::Pelvis].restPosition,
           "and another seed gives another body");
@@ -220,7 +219,7 @@ void TheBodyIsAsTallAndAsHeavyAsAskedAndStandsOnTheFloor() {
         }
         const CharacterParameters& wanted = mesh.parameters;
         Check(std::abs(highest - wanted.statureMeters) < 0.015f, Describe(i) + ": stature " + std::to_string(highest) + " m against " + std::to_string(wanted.statureMeters));
-        Check(std::abs(lowest) < 0.012f, Describe(i) + ": the soles are on the floor, lowest point " + std::to_string(lowest));
+        Check(std::abs(lowest) < 0.006f, Describe(i) + ": the soles are on the floor, lowest point " + std::to_string(lowest));
         Check(std::abs(mesh.massKg / wanted.massKg - 1.0f) < 0.03f, Describe(i) + ": mass " + std::to_string(mesh.massKg) + " kg against " + std::to_string(wanted.massKg));
         Check(std::abs(MeshVolume(mesh.positions, mesh.indices) - mesh.volumeCubicMeters) < 1e-5f, Describe(i) + ": the stated volume is the volume of the mesh");
     }
@@ -358,14 +357,13 @@ void SkinningInTheRestPoseGivesBackTheMesh() {
     }
 }
 
-Pose BentPose(float elbowDegrees, float kneeDegrees, float twistDegrees) {
+// Both elbows bent by `elbowDegrees` and twisted by `twistDegrees`, and both knees bent by `kneeDegrees`.
+Pose BentPose(const Skeleton& skeleton, float elbowDegrees, float kneeDegrees, float twistDegrees) {
     Pose pose;
-    pose.rotation[Index(Joint::ForearmL)] = FromDegrees(-elbowDegrees, 0.0f, 0.0f);
-    pose.rotation[Index(Joint::ForearmR)] = FromDegrees(-elbowDegrees, 0.0f, 0.0f);
-    pose.rotation[Index(Joint::CalfL)] = FromDegrees(kneeDegrees, 0.0f, 0.0f);
-    pose.rotation[Index(Joint::CalfR)] = FromDegrees(kneeDegrees, 0.0f, 0.0f);
-    pose.rotation[Index(Joint::ForearmL)] = FromDegrees(-elbowDegrees, twistDegrees, 0.0f);
-    pose.rotation[Index(Joint::ForearmR)] = FromDegrees(-elbowDegrees, -twistDegrees, 0.0f);
+    pose.rotation[Index(Joint::ForearmL)] = HingeRotation(skeleton, Joint::ForearmL, elbowDegrees) * FromDegrees(0.0f, twistDegrees, 0.0f);
+    pose.rotation[Index(Joint::ForearmR)] = HingeRotation(skeleton, Joint::ForearmR, elbowDegrees) * FromDegrees(0.0f, -twistDegrees, 0.0f);
+    pose.rotation[Index(Joint::CalfL)] = HingeRotation(skeleton, Joint::CalfL, kneeDegrees);
+    pose.rotation[Index(Joint::CalfR)] = HingeRotation(skeleton, Joint::CalfR, kneeDegrees);
     return pose;
 }
 
@@ -374,9 +372,9 @@ void BendingJointsKeepsTheVolumeOfTheBody() {
     for (size_t i = 0; i < kPeopleCount; ++i) {
         const CharacterMesh& mesh = CachedMesh(i);
         const float rest = mesh.volumeCubicMeters;
-        const float bent = MeshVolume(SkinPositions(mesh, BentPose(90.0f, 90.0f, 0.0f)), mesh.indices);
+        const float bent = MeshVolume(SkinPositions(mesh, BentPose(mesh.skeleton, 90.0f, 90.0f, 0.0f)), mesh.indices);
         Check(std::abs(bent / rest - 1.0f) < 0.06f, Describe(i) + ": elbows and knees at 90 degrees change the volume by " + std::to_string((bent / rest - 1.0f) * 100.0f) + "%");
-        const float twisted = MeshVolume(SkinPositions(mesh, BentPose(0.0f, 0.0f, 80.0f)), mesh.indices);
+        const float twisted = MeshVolume(SkinPositions(mesh, BentPose(mesh.skeleton, 0.0f, 0.0f, 80.0f)), mesh.indices);
         Check(std::abs(twisted / rest - 1.0f) < 0.03f, Describe(i) + ": twisting the forearms by 80 degrees changes the volume by " + std::to_string((twisted / rest - 1.0f) * 100.0f) + "%");
     }
 }
@@ -497,7 +495,13 @@ void EveryRandomPersonIsAClosedBodyOfTheRightSize() {
     // A pair of limbs that touch, or a muscle that closes an armpit, would make a handle in the surface. People from
     // the whole spread of the population must all come out as one closed sphere, as heavy and as tall as drawn.
     JobSystem jobs(3);
-    for (uint32_t seed = 100; seed < 130; ++seed) {
+    std::vector<uint32_t> seeds;
+    for (uint32_t seed = 0; seed < 60; ++seed) {
+        seeds.push_back(seed);
+    }
+    // These two once came out with a tunnel between the thighs, where the gap was thinner than a cell of the grid.
+    seeds.insert(seeds.end(), {184u, 243u});
+    for (const uint32_t seed : seeds) {
         const CharacterMesh mesh = GenerateCharacter(RandomParameters(seed), {}, &jobs);
         const EdgeCount edges = CountEdges(mesh.indices);
         int badEdges = 0;
@@ -513,12 +517,96 @@ void EveryRandomPersonIsAClosedBodyOfTheRightSize() {
     }
 }
 
+void AnElbowBendsAboutItsHingeAndAHipOpensTheRightWay() {
+    for (size_t i = 0; i < kPeopleCount; i += 2) {
+        const Skeleton& skeleton = CachedMesh(i).skeleton;
+        // Bent by 90 degrees about its hinge, the forearm makes a right angle with the upper arm.
+        for (const Joint elbow : {Joint::ForearmL, Joint::ForearmR}) {
+            Pose pose;
+            pose.rotation[Index(elbow)] = HingeRotation(skeleton, elbow, 90.0f);
+            const std::array<glm::vec3, kJointCount> joints = JointPositions(skeleton, pose);
+            const Joint shoulder = elbow == Joint::ForearmL ? Joint::UpperArmL : Joint::UpperArmR;
+            const Joint wrist = elbow == Joint::ForearmL ? Joint::HandL : Joint::HandR;
+            const glm::vec3 upperArm = glm::normalize(joints[Index(shoulder)] - joints[Index(elbow)]);
+            const glm::vec3 forearm = glm::normalize(joints[Index(wrist)] - joints[Index(elbow)]);
+            const float angle = glm::degrees(std::acos(glm::clamp(glm::dot(upperArm, forearm), -1.0f, 1.0f)));
+            Check(std::abs(angle - 90.0f) < 1.0f, Describe(i) + ": an elbow bent 90 degrees makes an angle of " + std::to_string(angle));
+            Check(joints[Index(wrist)].z > joints[Index(elbow)].z, Describe(i) + ": and brings the hand forwards");
+        }
+        // A knee bends the shank backwards.
+        Pose knee;
+        knee.rotation[Index(Joint::CalfL)] = HingeRotation(skeleton, Joint::CalfL, 90.0f);
+        const std::array<glm::vec3, kJointCount> legJoints = JointPositions(skeleton, knee);
+        Check(legJoints[Index(Joint::FootL)].z < legJoints[Index(Joint::CalfL)].z - 0.1f, Describe(i) + ": a bent knee swings the foot backwards");
+        // A hip opens further outwards than it closes across the body, on both sides.
+        for (const bool left : {true, false}) {
+            const Joint hip = left ? Joint::ThighL : Joint::ThighR;
+            const float outward = left ? 1.0f : -1.0f;  // which way along X is out for this leg
+            const JointInfo& info = skeleton[hip];
+            const float outLimit = left ? info.maxAngleDegrees.z : -info.minAngleDegrees.z;
+            const float acrossLimit = left ? -info.minAngleDegrees.z : info.maxAngleDegrees.z;
+            Check(outLimit > acrossLimit, Describe(i) + ": the hip opens more than it closes");
+            Pose pose;
+            pose.rotation[Index(hip)] = FromDegrees(0.0f, 0.0f, outward * 20.0f);
+            const std::array<glm::vec3, kJointCount> joints = JointPositions(skeleton, pose);
+            const Joint knee2 = left ? Joint::CalfL : Joint::CalfR;
+            Check((joints[Index(knee2)].x - skeleton[knee2].restPosition.x) * outward > 0.05f, Describe(i) + ": a turn of +20 degrees opens the leg outwards");
+        }
+    }
+}
+
+void FingertipsAndToesAreNeverLost() {
+    namespace a = anthropometry;
+    JobSystem jobs(3);
+    std::vector<CharacterParameters> people;
+    for (uint32_t seed = 0; seed < 50; ++seed) {
+        people.push_back(RandomParameters(seed));
+    }
+    // The corners of the parameter space: the smallest and lightest, and the largest and heaviest, of each sex.
+    for (const float masculinity : {0.0f, 1.0f}) {
+        people.push_back(Person(masculinity, 80.0f, 1.45f, 31.5f, 1.0f, 3));
+        people.push_back(Person(masculinity, 18.0f, 2.05f, 189.0f, 0.0f, 4));
+        people.push_back(Person(masculinity, 40.0f, 1.45f, 94.0f, 0.5f, 5));
+    }
+    for (size_t index = 0; index < people.size(); ++index) {
+        const CharacterMesh mesh = GenerateCharacter(people[index], {}, &jobs);
+        const auto nearest = [&](glm::vec3 landmark) {
+            float best = 1e9f;
+            for (const glm::vec3& p : mesh.positions) {
+                best = std::min(best, glm::distance(p, landmark));
+            }
+            return best;
+        };
+        const float height = mesh.skeleton.statureMeters;
+        for (const bool left : {true, false}) {
+            const glm::vec3 wrist = mesh.skeleton[left ? Joint::HandL : Joint::HandR].restPosition;
+            const glm::vec3 elbow = mesh.skeleton[left ? Joint::ForearmL : Joint::ForearmR].restPosition;
+            const glm::vec3 along = glm::normalize(wrist - elbow);
+            const glm::vec3 fingertip = wrist + along * (0.85f * a::kHandLength * height);
+            Check(nearest(fingertip) < 0.03f, "person " + std::to_string(index) + ": the " + (left ? "left" : "right") + " hand reaches its fingertips");
+            const glm::vec3 ankle = mesh.skeleton[left ? Joint::FootL : Joint::FootR].restPosition;
+            const glm::vec3 toe(ankle.x, 0.02f, 0.9f * a::kAnkleToToe * height);
+            Check(nearest(toe) < 0.03f, "person " + std::to_string(index) + ": the " + (left ? "left" : "right") + " foot reaches its toes");
+        }
+    }
+}
+
+void AVoxelSizeThatIsNotANumberIsReplaced() {
+    MeshSettings settings;
+    settings.voxelMeters = std::numeric_limits<float>::quiet_NaN();
+    const CharacterMesh mesh = GenerateCharacter(Person(0.5f, 30.0f, 1.70f, 70.0f, 0.4f), settings);
+    Check(!mesh.positions.empty() && mesh.volumeCubicMeters > 0.0f, "a voxel size that is not a number gives the default grid");
+    settings.voxelMeters = 1e-9f;
+    const CharacterMesh fine = GenerateCharacter(Person(0.5f, 30.0f, 1.70f, 70.0f, 0.4f), {.voxelMeters = 0.04f});
+    Check(fine.volumeCubicMeters > 0.0f, "and the coarsest grid still makes a body");
+}
+
 void GenerationFitsTheBudget() {
     const auto start = std::chrono::steady_clock::now();
     const CharacterMesh mesh = GenerateCharacter(Person(0.5f, 35.0f, 1.72f, 72.0f, 0.4f, 11));
     const double milliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
     const size_t triangles = mesh.indices.size() / 3;
-    Check(triangles >= 8000 && triangles <= 40000, "a character has 8000 to 40000 triangles: " + std::to_string(triangles));
+    Check(triangles >= 8000 && triangles <= 50000, "a character has 8000 to 50000 triangles: " + std::to_string(triangles));
     Check(milliseconds < 1500.0, "and takes under 1.5 s on one thread: " + std::to_string(milliseconds) + " ms");
 }
 
@@ -545,6 +633,9 @@ int main() {
         {"RandomPeopleFollowThePopulation", RandomPeopleFollowThePopulation},
         {"ThePopulationLooksRight", ThePopulationLooksRight},
         {"EveryRandomPersonIsAClosedBodyOfTheRightSize", EveryRandomPersonIsAClosedBodyOfTheRightSize},
+        {"AnElbowBendsAboutItsHingeAndAHipOpensTheRightWay", AnElbowBendsAboutItsHingeAndAHipOpensTheRightWay},
+        {"FingertipsAndToesAreNeverLost", FingertipsAndToesAreNeverLost},
+        {"AVoxelSizeThatIsNotANumberIsReplaced", AVoxelSizeThatIsNotANumberIsReplaced},
         {"GenerationFitsTheBudget", GenerationFitsTheBudget},
     };
     for (const Test& test : tests) {

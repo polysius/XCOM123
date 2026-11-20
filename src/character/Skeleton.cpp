@@ -41,12 +41,12 @@ const JointSpec kSpecs[kJointCount] = {
     {"clavicleR", Joint::Spine2, {-15, -10, -35}, {25, 10, 15}},
     {"upperArmL", Joint::ClavicleL, {-180, -90, -60}, {60, 90, 180}},
     {"upperArmR", Joint::ClavicleR, {-180, -90, -180}, {60, 90, 60}},
-    {"forearmL", Joint::UpperArmL, {-150, -90, 0}, {5, 90, 0}},
-    {"forearmR", Joint::UpperArmR, {-150, -90, 0}, {5, 90, 0}},
+    {"forearmL", Joint::UpperArmL, {-5, -90, 0}, {150, 90, 0}},   // X is the bend about the hinge axis
+    {"forearmR", Joint::UpperArmR, {-5, -90, 0}, {150, 90, 0}},
     {"handL", Joint::ForearmL, {-70, -30, -25}, {80, 30, 30}},
     {"handR", Joint::ForearmR, {-70, -30, -30}, {80, 30, 25}},
-    {"thighL", Joint::Pelvis, {-120, -45, -45}, {30, 45, 25}},
-    {"thighR", Joint::Pelvis, {-120, -45, -25}, {30, 45, 45}},
+    {"thighL", Joint::Pelvis, {-120, -45, -25}, {30, 45, 45}},    // out to the side is +Z for the left leg: 45 out, 25 across
+    {"thighR", Joint::Pelvis, {-120, -45, -45}, {30, 45, 25}},
     {"calfL", Joint::ThighL, {-5, -10, 0}, {150, 10, 0}},
     {"calfR", Joint::ThighR, {-5, -10, 0}, {150, 10, 0}},
     {"footL", Joint::CalfL, {-45, -25, -25}, {50, 25, 25}},
@@ -134,7 +134,18 @@ Skeleton BuildSkeleton(const CharacterParameters& parameters) {
         joint.minAngleDegrees = kSpecs[i].minAngle;
         joint.maxAngleDegrees = kSpecs[i].maxAngle;
     }
+    // The elbow bends about the axis across the arm in the plane of the body, so that a positive angle brings the hand
+    // forwards (+Z). The knee bends about X, and a positive angle swings the shank backwards.
+    for (const Joint elbow : {Joint::ForearmL, Joint::ForearmR}) {
+        const Joint hand = elbow == Joint::ForearmL ? Joint::HandL : Joint::HandR;
+        const glm::vec3 along = glm::normalize(skeleton[hand].restPosition - skeleton[elbow].restPosition);
+        skeleton.joints[Index(elbow)].hingeAxis = glm::normalize(glm::cross(along, glm::vec3(0.0f, 0.0f, 1.0f)));
+    }
     return skeleton;
+}
+
+glm::quat HingeRotation(const Skeleton& skeleton, Joint joint, float degrees) {
+    return glm::angleAxis(degrees * kDegreesToRadians, skeleton[joint].hingeAxis);
 }
 
 std::array<glm::mat4, kJointCount> SkinMatrices(const Skeleton& skeleton, const Pose& pose) {

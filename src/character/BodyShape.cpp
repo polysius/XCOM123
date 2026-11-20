@@ -51,14 +51,14 @@ float Lerp(float a, float b, float t) {
 
 class Builder {
 public:
-    Builder(const Skeleton& skeleton, const CharacterParameters& parameters, float girth)
-        : skeleton(skeleton), p(ProportionsOf(parameters, girth)), stature(parameters.statureMeters) {}
+    Builder(const Skeleton& skeleton, const CharacterParameters& parameters, float girth, float minimumRadius)
+        : skeleton(skeleton), p(ProportionsOf(parameters, girth)), stature(parameters.statureMeters), minimumRadius(minimumRadius) {}
 
     std::vector<ShapePart> parts;
 
     // Radii at a stature of 1.75 m, made to fit the stature and the build: `girthPower` says how much of the girth
     // factor a part takes (1 for the trunk and limbs, less for hands and feet, none for the head).
-    float R(float radius, float girthPower = 1.0f) const { return radius * p.scale * std::pow(p.girth, girthPower); }
+    float R(float radius, float girthPower = 1.0f) const { return std::max(radius * p.scale * std::pow(p.girth, girthPower), minimumRadius); }
 
     glm::vec3 At(Joint joint) const { return skeleton[joint].restPosition; }
 
@@ -98,6 +98,7 @@ public:
     const Skeleton& skeleton;
     Proportions p;
     float stature;
+    float minimumRadius;
 };
 
 }  // namespace
@@ -141,9 +142,9 @@ float BodyShape::Distance(glm::vec3 point) const {
     return EvaluateNode(root, point);
 }
 
-BodyShape BuildBodyShape(const Skeleton& skeleton, const CharacterParameters& parameters, float girth) {
+BodyShape BuildBodyShape(const Skeleton& skeleton, const CharacterParameters& parameters, float girth, float minimumRadius) {
     const CharacterParameters clean = Sanitised(parameters);
-    Builder b(skeleton, clean, girth);
+    Builder b(skeleton, clean, girth, minimumRadius);
     const Proportions& p = b.p;
     const float s = p.scale;
     const float height = clean.statureMeters;
@@ -262,11 +263,13 @@ BodyShape BuildBodyShape(const Skeleton& skeleton, const CharacterParameters& pa
         const glm::vec3 ball = b.At(toes);
         const float heelDepth = 0.034f * s;
         const float ballDepth = 0.022f * s;
-        const glm::vec3 heel(ankle.x, heelDepth, -a::kAnkleToHeel * height + 0.035f * s);
-        const glm::vec3 footEnd(ankle.x, ballDepth, ball.z);
+        // The smooth union with the leg adds a few millimetres under the sole, so the foot is lifted by as much.
+        const float sole = 0.004f * s;
+        const glm::vec3 heel(ankle.x, heelDepth + sole, -a::kAnkleToHeel * height + 0.035f * s);
+        const glm::vec3 footEnd(ankle.x, ballDepth + sole, ball.z);
         out.foot.push_back(b.Capsule(foot, heel, footEnd, b.R(0.036f, handSize), heelDepth, b.R(0.046f, handSize), ballDepth, up));
-        const glm::vec3 toeStart(ankle.x, 0.022f * s, ball.z);
-        const glm::vec3 toeEnd(ankle.x, 0.017f * s, a::kAnkleToToe * height - 0.012f * s);
+        const glm::vec3 toeStart(ankle.x, 0.022f * s + sole, ball.z);
+        const glm::vec3 toeEnd(ankle.x, 0.017f * s + sole, a::kAnkleToToe * height - 0.012f * s);
         out.toes.push_back(b.Capsule(toes, toeStart, toeEnd, b.R(0.044f, handSize), 0.022f * s, b.R(0.034f, handSize), 0.017f * s, up));
     }
 
@@ -305,6 +308,7 @@ BodyShape BuildBodyShape(const Skeleton& skeleton, const CharacterParameters& pa
     };
 
     int body = merge(torsoParts, 0.050f * s);
+    int legs[2] = {-1, -1};
     for (const int girdlePart : {sides[0].shoulderGirdle[0], sides[1].shoulderGirdle[0]}) {
         body = join(body, leaf(girdlePart), 0.030f * s);
     }
@@ -314,7 +318,7 @@ BodyShape BuildBodyShape(const Skeleton& skeleton, const CharacterParameters& pa
 
     for (int which = 0; which < 2; ++which) {
         const Side& side = sides[which];
-        // An arm joins the shoulder but is a union with the body everywhere else, and the same for a leg and the hip.
+        // An arm grows out of the shoulder, and a leg out of the hip.
         const int upper = merge(side.upperArm, 0.030f * s);
         const int fore = merge(side.forearm, 0.020f * s);
         const int hand = merge(side.hand, 0.012f * s);
@@ -324,12 +328,24 @@ BodyShape BuildBodyShape(const Skeleton& skeleton, const CharacterParameters& pa
         const int upperLeg = merge(side.thigh, 0.030f * s);
         const int lowerLeg = merge(side.calf, 0.030f * s);
         const int footAndToes = join(merge(side.foot, 0.010f * s), merge(side.toes, 0.010f * s), 0.016f * s);
-        const int leg = join(join(upperLeg, lowerLeg, 0.032f * s), footAndToes, 0.020f * s);
-        body = join(body, leg, 0.045f * s);
+        legs[which] = join(join(upperLeg, lowerLeg, 0.032f * s), footAndToes, 0.020f * s);
     }
-    shape.root = body;
-    shape.boundsMin = nodes[body].lower;
-    shape.boundsMax = nodes[body].upper;
+    // Each leg is joined to the body on its own, and the two are then united without smoothing, so that one thigh
+    // never grows into the other and the body does not depend on which leg was joined first.
+    const int withLeftLeg = join(body, legs[0], 0.045f * s);
+    const int withRightLeg = join(body, legs[1], 0.045f * s);
+    shape.root = join(withLeftLeg, withRightLeg, 0.0f);
+
+    // The box the surface is cut from: every part, and a margin for what smoothing adds outside them.
+    shape.boundsMin = glm::vec3(1e9f);
+    shape.boundsMax = glm::vec3(-1e9f);
+    for (const ShapePart& part : shape.parts) {
+        const float reach = std::max({part.sideStart, part.depthStart, part.sideEnd, part.depthEnd, part.alongRadius});
+        shape.boundsMin = glm::min(shape.boundsMin, glm::min(part.start, part.end) - glm::vec3(reach));
+        shape.boundsMax = glm::max(shape.boundsMax, glm::max(part.start, part.end) + glm::vec3(reach));
+    }
+    shape.boundsMin -= glm::vec3(0.03f * s);
+    shape.boundsMax += glm::vec3(0.03f * s);
     return shape;
 }
 

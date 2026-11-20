@@ -60,6 +60,10 @@ struct JointInfo {
     glm::mat4 inverseBind{1.0f};     // takes a point of the rest pose into the joint's own space
     glm::vec3 minAngleDegrees{0.0f}; // limits of the rotation about X, Y and Z from the rest pose
     glm::vec3 maxAngleDegrees{0.0f};
+    // The axis an elbow or a knee bends about, in the rest pose; a positive angle about it flexes the joint. The forearm
+    // hangs 40 degrees out from the body, so its hinge is not the world X axis. For these joints the limits in X are limits
+    // of the angle about this axis. For every other joint it is the X axis.
+    glm::vec3 hingeAxis{1.0f, 0.0f, 0.0f};
 };
 
 // Where a foot touches the ground in the rest pose; foot inverse kinematics will need these three.
@@ -98,7 +102,10 @@ std::array<glm::mat4, kJointCount> SkinMatrices(const Skeleton& skeleton, const 
 // The world positions of the joints in a pose.
 std::array<glm::vec3, kJointCount> JointPositions(const Skeleton& skeleton, const Pose& pose);
 
-// A rotation about X, then Y, then Z... in degrees, given as the three angles of a joint.
+// A rotation about X, then Y, then Z, in degrees: the three angles of a joint.
 glm::quat FromDegrees(float aboutX, float aboutY, float aboutZ);
+
+// The rotation that flexes an elbow or a knee by `degrees` about its hinge, a pure bend with no twist or swing.
+glm::quat HingeRotation(const Skeleton& skeleton, Joint joint, float degrees);
 
 }  // namespace character

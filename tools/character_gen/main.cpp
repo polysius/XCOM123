@@ -1,5 +1,5 @@
-// character_gen makes a character and writes a contact sheet of it as a PNG file: the body from the front, the side,
-// the back and three quarters, the skin weights with the skeleton, and the body in a pose, where linear blend skinning
+// character_gen makes a character and writes a contact sheet of it as a PNG file: the body from the front, the side and
+// three quarters, the skin weights with the skeleton, and the body in a pose from two sides, where linear blend skinning
 // shows what it does to the joints. It also writes the mesh as a Wavefront OBJ file. No window and no GPU are needed.
 //
 //   character_gen --seed 7                       (a person drawn from the population)
@@ -195,15 +195,16 @@ std::vector<glm::vec3> NormalsOf(const std::vector<glm::vec3>& positions, const 
     return normals;
 }
 
-character::Pose DemoPose() {
+character::Pose DemoPose(const character::Skeleton& skeleton) {
     using character::FromDegrees;
+    using character::HingeRotation;
     using character::Index;
     using character::Joint;
     character::Pose pose;
     pose.rotation[Index(Joint::UpperArmL)] = FromDegrees(0.0f, 0.0f, 50.0f);
-    pose.rotation[Index(Joint::ForearmL)] = FromDegrees(-90.0f, 0.0f, 0.0f);
+    pose.rotation[Index(Joint::ForearmL)] = HingeRotation(skeleton, Joint::ForearmL, 90.0f);
     pose.rotation[Index(Joint::UpperArmR)] = FromDegrees(-70.0f, 0.0f, 0.0f);
-    pose.rotation[Index(Joint::ForearmR)] = FromDegrees(-90.0f, 0.0f, 0.0f);
+    pose.rotation[Index(Joint::ForearmR)] = HingeRotation(skeleton, Joint::ForearmR, 90.0f);
     pose.rotation[Index(Joint::ThighL)] = FromDegrees(-70.0f, 0.0f, 0.0f);
     pose.rotation[Index(Joint::CalfL)] = FromDegrees(90.0f, 0.0f, 0.0f);
     pose.rotation[Index(Joint::CalfR)] = FromDegrees(35.0f, 0.0f, 0.0f);
@@ -255,7 +256,7 @@ int main(int argc, char** argv) {
     bool explicitPerson = false;
     CharacterParameters parameters;
     std::filesystem::path folder = "characters";
-    float voxel = 0.022f;
+    float voxel = 0.024f;
 
     for (int i = 1; i < argc; ++i) {
         const std::string option = argv[i];
@@ -347,7 +348,9 @@ int main(int argc, char** argv) {
                 }
             }
         }
-        std::cout << "pieces: " << pieces << "\n";
+        const character::MeshTopology topology = character::MeasureTopology(mesh);
+        std::cout << "pieces: " << pieces << ", bad edges " << topology.badEdges << ", Euler characteristic " << topology.eulerCharacteristic
+                  << (topology.IsClosedSphere() ? " (a closed sphere)" : " (NOT a closed sphere)") << "\n";
     }
 
     std::filesystem::create_directories(folder);
@@ -356,9 +359,9 @@ int main(int argc, char** argv) {
     // The contact sheet: two rows of three panels.
     Image sheet(kPanelWidth * 3, kPanelHeight * 2);
     const std::vector<glm::vec3> skin(mesh.positions.size(), glm::vec3(0.62f, 0.44f, 0.36f));
-    const float turns[4] = {0.0f, 90.0f, 180.0f, 35.0f};
+    const float turns[3] = {0.0f, 90.0f, 35.0f};  // front, side, three quarters
     for (int view = 0; view < 3; ++view) {
-        Panel panel(sheet, view * kPanelWidth, 0, turns[view == 2 ? 3 : view], mesh.skeleton.statureMeters);
+        Panel panel(sheet, view * kPanelWidth, 0, turns[view], mesh.skeleton.statureMeters);
         panel.Draw(mesh.positions, mesh.normals, mesh.indices, skin);
     }
     {
@@ -375,7 +378,7 @@ int main(int argc, char** argv) {
         }
     }
     {
-        const character::Pose pose = DemoPose();
+        const character::Pose pose = DemoPose(mesh.skeleton);
         const std::vector<glm::vec3> posed = character::SkinPositions(mesh, pose);
         const std::vector<glm::vec3> posedNormals = NormalsOf(posed, mesh.indices);
         Panel front(sheet, kPanelWidth, kPanelHeight, 0.0f, mesh.skeleton.statureMeters);
