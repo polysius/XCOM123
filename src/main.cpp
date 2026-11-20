@@ -19,7 +19,9 @@
 #include "core/CommandLine.h"
 #include "core/FlyCamera.h"
 #include "core/Module_Interface.h"
+#include "core/JobSystem.h"
 #include "fluid/RiverWater.h"
+#include "material/MaterialLibrary.h"
 #include "physics/PropField.h"
 #include "render/IRenderModule.h"
 #include "scene/Frustum.h"
@@ -423,6 +425,20 @@ void PrintWorldSummary(const Options& options, const Engine& engine) {
     }
 }
 
+// Generates the scanned materials from the world seed and hands them to the renderer. The generator is deterministic,
+// so the same seed always draws the same walls and streets.
+void UploadScanMaterials(IRenderModule& renderer, const Options& options) {
+    const auto start = Clock::now();
+    material::LibrarySettings settings;
+    settings.seed = options.seed;
+    settings.size = static_cast<int>(options.materialSize);
+    const material::MaterialLibrary library = material::BuildMaterialLibrary(settings, &JobSystem::Shared());
+    renderer.UploadMaterials(library);
+    const double milliseconds = std::chrono::duration<double, std::milli>(Clock::now() - start).count();
+    std::cout << "Materials: " << library.layers << " layers of " << library.size << " px made and uploaded in "
+              << static_cast<int>(milliseconds) << " ms\n";
+}
+
 // Runs the engine until the window closes, the benchmark ends or the screenshot is saved.
 // Returns the process exit code.
 int RunEngine(const Options& options, GLFWwindow* window) {
@@ -451,6 +467,9 @@ int RunEngine(const Options& options, GLFWwindow* window) {
     citySettings.terraces = options.terraces;
     engine.city = GenerateCity(citySettings);
     engine.renderer->UploadStaticScene(engine.city.boxes);
+    if (options.scanMaterials) {
+        UploadScanMaterials(*engine.renderer, options);
+    }
     engine.crowd.Spawn(engine.city, {.agentCount = options.npcCount, .seed = options.seed * 7919u + 1u});
     // Reserve room for everyone up front, so the renderer never grows buffers mid-flight.
     engine.renderer->ReserveNpcCapacity(engine.crowd.AgentCount());

@@ -7,6 +7,7 @@
 #include <string_view>
 
 #include "core/Module_Interface.h"
+#include "material/MaterialLibrary.h"
 #include "scene/SceneTypes.h"
 
 // GPU time spent in one render pass.
@@ -44,6 +45,9 @@ public:
     virtual void SetResolutionSettings(const ResolutionSettings& settings) = 0;
     // Static geometry is uploaded once; the renderer keeps its own copy on the GPU.
     virtual void UploadStaticScene(std::span<const BoxInstance> boxes) = 0;
+    // Gives the renderer the generated materials to draw surfaces with. Until this is called, surfaces are drawn
+    // with the city colours and procedural detail only.
+    virtual void UploadMaterials(const material::MaterialLibrary& library) = 0;
     // Makes room for this many visible people up front, so the first crowded frames do not
     // have to grow GPU buffers.
     virtual void ReserveNpcCapacity(size_t npcCount) = 0;

@@ -183,6 +183,7 @@ void VulkanContext::PickPhysicalDevice() {
             deviceProperties = properties;
             queueFamily = *family;
             supportsDepthClamp = features.features.depthClamp == VK_TRUE;
+            supportsSamplerAnisotropy = features.features.samplerAnisotropy == VK_TRUE;
         }
     }
 
@@ -213,6 +214,7 @@ void VulkanContext::CreateDevice() {
     features.pNext = &features13;
     // Depth clamping stops shadow casters that sit behind the shadow camera from being cut away.
     features.features.depthClamp = supportsDepthClamp ? VK_TRUE : VK_FALSE;
+    features.features.samplerAnisotropy = supportsSamplerAnisotropy ? VK_TRUE : VK_FALSE;
 
     const char* extensions[] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
     VkDeviceCreateInfo createInfo{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};

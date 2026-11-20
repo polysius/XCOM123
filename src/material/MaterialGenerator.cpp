@@ -206,8 +206,11 @@ Sample PlasterSample(const Context& c, float u, float v) {
     const float chipThreshold = 0.62f - 0.25f * c.wear;
     const float chip = Smooth(chipThreshold, chipThreshold + 0.08f, Fbm(u, v, 5, 5, 4, s + 2));
 
-    const Cellular cracks = CellularNoise(u, v, 4, 4, s + 3);
-    const float crack = (1.0f - Smooth(0.0f, 0.02f, cracks.second - cracks.nearest)) * Smooth(0.1f, 0.4f, Fbm(u, v, 3, 3, 3, s + 4)) * c.wear;
+    // Cracks follow the borders of large cells that are bent by noise, and only run through some parts of the wall.
+    const float crackU = u + 0.06f * Fbm(u, v, 3, 3, 3, s + 11);
+    const float crackV = v + 0.06f * Fbm(u, v, 3, 3, 3, s + 12);
+    const Cellular cracks = CellularNoise(crackU, crackV, 3, 3, s + 3);
+    const float crack = (1.0f - Smooth(0.0f, 0.012f, cracks.second - cracks.nearest)) * Smooth(0.3f, 0.6f, Fbm(u, v, 3, 3, 3, s + 4)) * c.wear;
 
     Sample sample;
     sample.height = 0.7f + 0.05f * trowel + 0.015f * Fbm(u, v, 128, 128, 3, s + 5) - 0.25f * chip - 0.1f * crack +

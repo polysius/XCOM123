@@ -23,6 +23,7 @@ layout(location = 3) out vec3 outSurface;        // x: roughness, y: material id
 layout(location = 4) out vec3 outLocalPosition;  // metres from the box's minimum corner
 layout(location = 5) out vec3 outBoxSize;        // full size of the box in metres
 layout(location = 6) out vec3 outLocalNormal;    // the face normal before the box turns, to tell walls apart
+layout(location = 7) out float outFreeBody;      // 0: boxes only turn about the vertical axis
 
 // Turns a vector about +Y. A positive angle turns +Z towards +X, as for people (see npc.vert).
 vec3 RotateAroundY(vec3 v, float angle) {
@@ -39,6 +40,7 @@ void main() {
     outWorldPosition = worldPosition;
     outNormal = RotateAroundY(inNormal, yaw);
     outLocalNormal = inNormal;
+    outFreeBody = 0.0;
     outAlbedo = inColorSeed.rgb;
     outSurface = vec3(inHalfSizeRoughness.w, inCenterMaterial.w, inColorSeed.w);
     outLocalPosition = (inPosition + 1.0) * halfSize;

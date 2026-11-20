@@ -35,6 +35,8 @@ struct ImageDesc {
     VkImageUsageFlags usage;
     VkImageAspectFlags aspect;
     VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+    uint32_t mipLevels = 1;
+    uint32_t arrayLayers = 1;  // more than one makes the view a 2D array view
 };
 
 GpuBuffer CreateMappedBuffer(VkDevice device, VkPhysicalDevice physicalDevice, VkDeviceSize size, VkBufferUsageFlags usage);

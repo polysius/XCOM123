@@ -7,7 +7,8 @@ layout(set = 0, binding = 0) uniform FrameUniforms {
     vec4 cameraPosition;  // xyz: camera position in world space, w: time in seconds
     vec4 sunDirection;    // xyz: unit vector pointing towards the sun
     vec4 sunColor;        // rgb: sun radiance
-    vec4 settings;        // x: shadow map texel size (UV units), y: fog density
+    vec4 settings;        // x: shadow map texel size (UV units), y: fog density, z: how much the scanned materials count (0 to 1)
+    vec4 scanTiles[3];    // the size in metres of one tile of each scanned material, four to a vector
 } frame;
 
 const float PI = 3.14159265359;

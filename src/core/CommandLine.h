@@ -25,6 +25,10 @@ struct Options {
     bool vsync = true;
     bool showHelp = false;
 
+    // The generated materials drawn on walls, roofs, streets and props. Each is a tile of this many pixels along a side.
+    bool scanMaterials = true;
+    uint32_t materialSize = 512;
+
     // Benchmark: fly the scripted camera path for this many frames, report, then quit.
     int benchmarkFrames = 0;
     std::optional<double> targetFps;  // the benchmark fails when p99 frame time misses this rate

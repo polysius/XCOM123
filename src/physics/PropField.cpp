@@ -176,7 +176,7 @@ void PropField::Spawn(const CityLayout& city, const PropSettings& settings) {
             description.density = stone ? 2400.0f : 450.0f;
             description.material = {0.6f, 0.1f, 0.05f};
             boxInstances.push_back(MakeInstance(description.shape.halfExtents, stone ? kStone : kWoods[i % 4],
-                                                stone ? SurfaceMaterial::Stone : SurfaceMaterial::Plain, 0.85f, seed));
+                                                stone ? SurfaceMaterial::Stone : SurfaceMaterial::Wood, 0.85f, seed));
             boxBodies.push_back(world.AddBody(description));
         } else if (kind < 8) {  // a barrel, which is a box here, and hollow
             description.shape = Shape::Box({0.3f, 0.45f, 0.3f});
@@ -189,7 +189,7 @@ void PropField::Spawn(const CityLayout& city, const PropSettings& settings) {
             description.shape = Shape::Sphere(radius);
             description.density = 300.0f;
             description.material = {0.5f, 0.65f, 0.05f};
-            sphereInstances.push_back(MakeInstance(glm::vec3(radius), kBallColours[i % 4], SurfaceMaterial::Plain, 0.4f, seed));
+            sphereInstances.push_back(MakeInstance(glm::vec3(radius), kBallColours[i % 4], SurfaceMaterial::Rubber, 0.4f, seed));
             sphereBodies.push_back(world.AddBody(description));
         }
     }
