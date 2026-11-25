@@ -108,7 +108,8 @@ private:
 
 std::vector<glm::vec3> Grow(const GrowthPlan& plan, const Obstacle& obstacle) {
     std::vector<glm::vec3> points;
-    glm::vec3 position = plan.root.position + plan.root.normal * plan.lift;
+    // The root is on the skin itself; the lock lifts away from it over the first two steps.
+    glm::vec3 position = plan.root.position;
     points.push_back(position);
     // Hair lies over the scalp more than it stands up from it: the longer it is, the more it follows the flow.
     glm::vec3 direction = glm::normalize(plan.root.normal * 0.30f + plan.flow * 0.70f);
@@ -134,7 +135,7 @@ std::vector<glm::vec3> Grow(const GrowthPlan& plan, const Obstacle& obstacle) {
         direction = glm::normalize(glm::mix(direction, wanted, plan.stiffness));
         position += direction * step;
         // A lock never enters the head or the body: push it out along the surface, a few strands' thickness above it.
-        const float clearance = 0.0012f + plan.lift;
+        const float clearance = 0.0012f + plan.lift * std::min(1.0f, static_cast<float>(k) / 2.0f);
         for (int pass = 0; pass < 3; ++pass) {
             const float distance = obstacle.Distance(position);
             if (distance >= clearance) {
@@ -218,7 +219,8 @@ void GrowScalpHair(HairSet& set, const TriangleMesh& head, const HeadLandmarks& 
         plan.salt = 400u;
         plan.root = sampler.Draw(seed, plan.salt, static_cast<uint32_t>(i));
         // Roots thin out near the edge of the hairy region, so that the hairline is soft.
-        if (Random01(seed, 410u, static_cast<uint32_t>(i)) > ScalpWeight(landmarks, traits, plan.root.position) * 1.1f) {
+        const float weight = ScalpWeight(landmarks, traits, plan.root.position);
+        if (weight < 0.25f || Random01(seed, 410u, static_cast<uint32_t>(i)) > weight * 1.1f) {
             plan.points = 0;
             continue;
         }
@@ -315,7 +317,8 @@ void GrowFacialHair(HairSet& set, const TriangleMesh& head, const HeadLandmarks&
         GrowthPlan plan;
         plan.salt = 600u;
         plan.root = sampler.Draw(seed, plan.salt, static_cast<uint32_t>(i));
-        if (Random01(seed, 610u, static_cast<uint32_t>(i)) > BeardWeight(landmarks, plan.root.position) * 1.1f) {
+        const float weight = BeardWeight(landmarks, plan.root.position);
+        if (weight < 0.25f || Random01(seed, 610u, static_cast<uint32_t>(i)) > weight * 1.1f) {
             continue;
         }
         const glm::vec3 q = plan.root.position / scale;

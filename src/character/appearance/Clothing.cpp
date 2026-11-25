@@ -168,40 +168,75 @@ GarmentSpec MakeSpec(GarmentKind kind, const BodyMeasures& m, uint32_t seed) {
     return spec;
 }
 
-// Pushes every point of `inner` out along its normal until the triangles of the character are at least `minimum` away, from the
-// outside. A point inside the body is first carried out through the surface.
-void EnforceClearance(std::vector<glm::vec3>& inner, const std::vector<glm::vec3>& normals, const TriangleGrid& body, float minimum, JobSystem* jobs) {
-    constexpr int kPasses = 8;
-    std::vector<glm::vec3> next = inner;
+// The move that brings a point to `minimum` away from the surface in `body`, seen from outside: zero if it is far enough. The move is
+// away from the nearest point of the surface, so that where two parts of the body face each other across a narrow gap (the two thighs)
+// the point settles between them instead of being driven into one by the other. A point inside the surface comes out through it.
+glm::vec3 ClearancePush(const TriangleGrid& body, glm::vec3 point, float minimum) {
+    const TriangleGrid::Nearest nearest = body.FindNearest(point, minimum);
+    if (nearest.distance >= minimum) {
+        return glm::vec3(0.0f);
+    }
+    const bool inside = glm::dot(point - nearest.point, nearest.faceNormal) < 0.0f;
+    if (inside || nearest.distance < 1e-6f) {
+        return nearest.faceNormal * (nearest.distance + minimum);
+    }
+    return (point - nearest.point) / nearest.distance * (minimum - nearest.distance);
+}
+
+// Moves the points of `inner`, the inner surface of a garment, until the triangles of `body` are at least `minimum` away from the
+// points and also from the middles of the triangles and of their edges: a triangle can cut across a hollow of the body that its
+// corners clear, as at the crotch or under an arm.
+void EnforceClearance(std::vector<glm::vec3>& inner, const std::vector<uint32_t>& indices, const TriangleGrid& body, float minimum, JobSystem* jobs) {
+    constexpr int kPasses = 150;
+    const size_t triangleCount = indices.size() / 3;
+    std::vector<glm::vec3> pushOfVertex(inner.size());
+    std::vector<glm::vec3> pushOfTriangle(triangleCount);
+    // The body does not move, so a point or a triangle that was far enough stays so until one of its corners moves: after the first
+    // pass only what moved, and what touches it, is looked at again.
+    std::vector<char> vertexActive(inner.size(), 1);
+    std::vector<char> triangleActive(triangleCount, 1);
+    const auto longer = [](glm::vec3 a, glm::vec3 b) { return glm::dot(a, a) >= glm::dot(b, b) ? a : b; };
     for (int pass = 0; pass < kPasses; ++pass) {
-        std::atomic<bool> changed{false};
-        ParallelEach(jobs, static_cast<int>(inner.size()), [&](int v) {
-            const TriangleGrid::Nearest nearest = body.FindNearest(inner[v], minimum);
-            next[v] = inner[v];
-            if (nearest.distance >= minimum) {
+        ParallelEach(jobs, static_cast<int>(inner.size()), [&](int v) { pushOfVertex[v] = vertexActive[v] ? ClearancePush(body, inner[v], minimum) : glm::vec3(0.0f); });
+        ParallelEach(jobs, static_cast<int>(triangleCount), [&](int t) {
+            if (!triangleActive[t]) {
+                pushOfTriangle[t] = glm::vec3(0.0f);
                 return;
             }
-            const glm::vec3 away = inner[v] - nearest.point;
-            const bool inside = glm::dot(away, nearest.faceNormal) < 0.0f;
-            // Outside the surface, step away from its nearest point; inside it, step out along the face and past it.
-            glm::vec3 direction = inside || nearest.distance < 1e-6f ? nearest.faceNormal : away / nearest.distance;
-            if (glm::dot(direction, normals[v]) < 0.0f && nearest.distance < 1e-6f) {
-                direction = normals[v];
-            }
-            const float travel = inside ? nearest.distance + minimum : minimum - nearest.distance;
-            next[v] = inner[v] + direction * (travel + 0.0002f);
-            changed = true;
+            const glm::vec3 a = inner[indices[t * 3]];
+            const glm::vec3 b = inner[indices[t * 3 + 1]];
+            const glm::vec3 c = inner[indices[t * 3 + 2]];
+            pushOfTriangle[t] = longer(longer(ClearancePush(body, (a + b + c) / 3.0f, minimum), ClearancePush(body, 0.5f * (a + b), minimum)),
+                                       longer(ClearancePush(body, 0.5f * (b + c), minimum), ClearancePush(body, 0.5f * (c + a), minimum)));
         });
-        inner = next;
+        // A triangle that is too close moves all three of its corners.
+        for (size_t t = 0; t < triangleCount; ++t) {
+            for (int corner = 0; corner < 3; ++corner) {
+                glm::vec3& push = pushOfVertex[indices[t * 3 + corner]];
+                push = longer(push, pushOfTriangle[t]);
+            }
+        }
+        bool changed = false;
+        for (size_t v = 0; v < inner.size(); ++v) {
+            const float length = glm::length(pushOfVertex[v]);
+            vertexActive[v] = length > 0.0f ? 1 : 0;
+            if (length > 0.0f) {
+                inner[v] += pushOfVertex[v] * (1.0f + 0.0002f / length);
+                changed = true;
+            }
+        }
         if (!changed) {
             break;
+        }
+        for (size_t t = 0; t < triangleCount; ++t) {
+            triangleActive[t] = vertexActive[indices[t * 3]] || vertexActive[indices[t * 3 + 1]] || vertexActive[indices[t * 3 + 2]];
         }
     }
 }
 
 // A closed shell from an open surface: the surface itself pushed out by `ease` (the inner side), a copy a thickness further, and a
 // strip along every boundary edge to join the two.
-TriangleMesh MakeShell(const TriangleMesh& surface, const std::function<float(glm::vec3)>& ease, float thickness, const TriangleGrid& body, JobSystem* jobs) {
+TriangleMesh MakeShell(const TriangleMesh& surface, const std::function<float(glm::vec3)>& ease, float thickness, const TriangleGrid& layers, const TriangleGrid& bodyOnly, JobSystem* jobs) {
     const size_t count = surface.vertices.size();
     std::vector<glm::vec3> inner(count);
     std::vector<glm::vec3> normals(count);
@@ -209,7 +244,10 @@ TriangleMesh MakeShell(const TriangleMesh& surface, const std::function<float(gl
         normals[v] = surface.vertices[v].normal;
         inner[v] = surface.vertices[v].position + normals[v] * ease(surface.vertices[v].position);
     }
-    EnforceClearance(inner, normals, body, kMinimumClearance + 0.0004f, jobs);
+    // First clear everything below (the body and the garments under this one), then clear the body alone: where the layers are pinched
+    // together (under an arm) the body has the last word, so that a garment never touches the body.
+    EnforceClearance(inner, surface.indices, layers, kMinimumClearance + 0.0004f, jobs);
+    EnforceClearance(inner, surface.indices, bodyOnly, kMinimumClearance + 0.0004f, jobs);
     const std::vector<glm::vec3> outwards = VertexNormals(inner, surface.indices);
 
     TriangleMesh shell;
@@ -421,7 +459,7 @@ GarmentTextures BakeGarmentTextures(const GarmentSpec& spec, const TriangleMesh&
     return textures;
 }
 
-Garment BuildGarment(const CharacterMesh& character, const TriangleMesh& body, const TriangleGrid& collision, const GarmentSpec& spec, int tileSize, JobSystem* jobs) {
+Garment BuildGarment(const CharacterMesh& character, const TriangleMesh& body, const TriangleGrid& collision, const TriangleGrid& bodyOnly, const GarmentSpec& spec, int tileSize, JobSystem* jobs) {
     Garment garment;
     garment.kind = spec.kind;
     garment.material = spec.material;
@@ -441,7 +479,13 @@ Garment BuildGarment(const CharacterMesh& character, const TriangleMesh& body, c
     if (surface.indices.empty()) {
         return garment;
     }
-    TriangleMesh shell = MakeShell(surface, spec.ease, spec.thickness, collision, jobs);
+    TriangleMesh shell = MakeShell(surface, spec.ease, spec.thickness, collision, bodyOnly, jobs);
+    // The shell before the unwrap: its vertices are shared by every triangle that meets there, so it is a watertight surface.
+    garment.solid.positions.resize(shell.vertices.size());
+    for (size_t v = 0; v < shell.vertices.size(); ++v) {
+        garment.solid.positions[v] = shell.vertices[v].position;
+    }
+    garment.solid.indices = shell.indices;
     const TriangleMesh unwrapped = Unwrap(shell, character.skeleton, tileSize, -1);
     garment.mesh = ToRenderMesh(unwrapped);
     garment.vertexLayer.resize(unwrapped.vertices.size());
@@ -483,10 +527,17 @@ float MeasureClearance(const CharacterMesh& character, const Garment& garment) {
     const TriangleGrid grid(character.positions, character.indices, 0.03f);
     float least = 1e9f;
     for (size_t v = 0; v < garment.mesh.positions.size(); ++v) {
-        if (garment.vertexLayer[v] != 0) {
-            continue;
+        if (garment.vertexLayer[v] == 0) {
+            least = std::min(least, grid.FindNearest(garment.mesh.positions[v], 0.05f).distance);
         }
-        least = std::min(least, grid.FindNearest(garment.mesh.positions[v], 0.05f).distance);
+    }
+    // The middles of the triangles of the inner surface too: a triangle may cut across a hollow that its corners clear.
+    for (size_t t = 0; t + 2 < garment.mesh.indices.size(); t += 3) {
+        const uint32_t id[3] = {garment.mesh.indices[t], garment.mesh.indices[t + 1], garment.mesh.indices[t + 2]};
+        if (garment.vertexLayer[id[0]] == 0 && garment.vertexLayer[id[1]] == 0 && garment.vertexLayer[id[2]] == 0) {
+            const glm::vec3 middle = (garment.mesh.positions[id[0]] + garment.mesh.positions[id[1]] + garment.mesh.positions[id[2]]) / 3.0f;
+            least = std::min(least, grid.FindNearest(middle, 0.05f).distance);
+        }
     }
     return least;
 }
@@ -497,8 +548,11 @@ Outfit BuildOutfit(const CharacterMesh& character, const OutfitSettings& rawSett
     Outfit outfit;
     const BodyMeasures measures = MeasureBody(character.skeleton);
     const TriangleMesh body = ExtractPiece(character, 0);
-    // Clearance is held against everything the character is made of: the body, the head and the hands.
-    const TriangleGrid collision(character.positions, character.indices, 0.03f);
+    // Clearance is held against everything the character is made of (the body, the head and the hands) and against the garments
+    // already made, so that each layer stands off the one below it.
+    const TriangleGrid bodyOnly(character.positions, character.indices, 0.03f);
+    std::vector<glm::vec3> obstaclePositions = character.positions;
+    std::vector<uint32_t> obstacleIndices = character.indices;
     const uint32_t seed = character.parameters.seed;
 
     // From the inside out: what lies against the skin comes first, and each layer is built to stand off further than the one below.
@@ -520,9 +574,18 @@ Outfit BuildOutfit(const CharacterMesh& character, const OutfitSettings& rawSett
         order.push_back(GarmentKind::Boots);
     }
     for (const GarmentKind kind : order) {
-        Garment garment = BuildGarment(character, body, collision, MakeSpec(kind, measures, seed), settings.tileSize, jobs);
+        Garment garment;
+        {
+            const TriangleGrid collision(obstaclePositions, obstacleIndices, 0.03f);
+            garment = BuildGarment(character, body, collision, bodyOnly, MakeSpec(kind, measures, seed), settings.tileSize, jobs);
+        }
         if (garment.mesh.indices.empty()) {
             continue;
+        }
+        const uint32_t firstVertex = static_cast<uint32_t>(obstaclePositions.size());
+        obstaclePositions.insert(obstaclePositions.end(), garment.mesh.positions.begin(), garment.mesh.positions.end());
+        for (const uint32_t index : garment.mesh.indices) {
+            obstacleIndices.push_back(index + firstVertex);
         }
         if (kind == GarmentKind::Shoes || kind == GarmentKind::Boots) {
             for (const glm::vec3& p : garment.mesh.positions) {

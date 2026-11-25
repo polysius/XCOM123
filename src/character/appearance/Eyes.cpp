@@ -361,7 +361,7 @@ EyeSet BuildEyes(const CharacterParameters& rawParameters, const PersonTraits& t
         const float side = i == 0 ? 1.0f : -1.0f;
         EyeFrame frame;
         // The eyeball sits in the hollow with its front a little behind the brow, and its back in the flesh behind the socket.
-        frame.centre = landmarks.eyeSockets[i].centre + glm::vec3(0.0f, 0.0f, -0.0165f * scale);
+        frame.centre = landmarks.eyeSockets[i].centre + glm::vec3(0.0f, 0.0f, -0.0190f * scale);
         frame.lateral = glm::vec3(side, 0.0f, 0.0f);
         frame.scale = scale;
         EyeParts& eye = set.eyes[i];

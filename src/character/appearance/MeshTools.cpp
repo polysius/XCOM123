@@ -95,7 +95,8 @@ TriangleMesh ClipByField(const TriangleMesh& mesh, const std::vector<float>& fie
         }
         const uint32_t inside = field[from] >= 0.0f ? from : to;
         const uint32_t outside = inside == from ? to : from;
-        const float t = field[inside] / (field[inside] - field[outside]);
+        // Not within 1 percent of an end of the edge: a cut that close to a vertex would only make a sliver of a triangle.
+        const float t = glm::clamp(field[inside] / (field[inside] - field[outside]), 0.01f, 0.99f);
         const uint32_t index = static_cast<uint32_t>(result.vertices.size());
         result.vertices.push_back(Blend(mesh.vertices[inside], mesh.vertices[outside], t));
         crossings.emplace(key, index);

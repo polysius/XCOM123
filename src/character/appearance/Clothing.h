@@ -70,6 +70,13 @@ struct Garment {
     float minimumClearance = 0.0f;      // the least distance of its inner surface from the character, as measured at the end
     RenderMesh mesh;                    // a closed shell, skinned like the body
     std::vector<uint8_t> vertexLayer;   // for each vertex of the mesh: 0 on the inner surface (towards the body), 1 on the outer one
+    // The same shell before the unwrap, with no vertex split at a texture seam: a watertight, consistently oriented surface (no
+    // edge in other than two triangles, every triangle facing outwards) for collision or physics. `mesh` has the same surface, cut
+    // along the seams of the unwrap, where a triangle is split at a seam its neighbour in another tile is not.
+    struct Solid {
+        std::vector<glm::vec3> positions;
+        std::vector<uint32_t> indices;
+    } solid;
     GarmentTextures textures;
 };
 
@@ -82,7 +89,7 @@ struct Outfit {
 // either way.
 Outfit BuildOutfit(const CharacterMesh& character, const OutfitSettings& settings, JobSystem* jobs = nullptr);
 
-// The least distance from the vertices of a garment's inner surface (those of layer 0) to the triangles of the character. The
+// The least distance from the vertices and the triangle middles of a garment's inner surface (layer 0) to the triangles of the character. The
 // garment itself records this, and the tests measure it again independently with this function.
 float MeasureClearance(const CharacterMesh& character, const Garment& garment);
 
