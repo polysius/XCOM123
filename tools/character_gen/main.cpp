@@ -4,6 +4,7 @@
 //
 //   character_gen --seed 7                       (a person drawn from the population)
 //   character_gen --sex 0 --age 40 --height 1.65 --mass 62 --muscle 0.3 --out characters
+//   character_gen --seed 7 --closeup             (also writes close-ups of the head and the hands, as <name>_head.png and <name>_hand.png)
 #include <algorithm>
 #include <chrono>
 #include <cmath>
