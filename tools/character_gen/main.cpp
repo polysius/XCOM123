@@ -52,12 +52,18 @@ float ToSrgb(float linear) {
 // One orthographic view of a mesh into a panel of the sheet. `turn` is how far the camera moves round the figure.
 class Panel {
 public:
+    // A view of the whole body of a person of this stature.
     Panel(Image& image, int left, int top, float turnDegrees, float stature)
+        : Panel(image, left, top, turnDegrees, glm::vec3(0.0f, 0.56f * stature - 0.04f, 0.0f), stature * 1.12f) {}
+
+    // A view of `viewHeight` metres of the height of the panel, centred on the point `focus` of the figure.
+    Panel(Image& image, int left, int top, float turnDegrees, glm::vec3 focus, float viewHeight)
         : image(image), left(left), top(top), depth(static_cast<size_t>(kPanelWidth) * kPanelHeight, -1e9f) {
         const float turn = turnDegrees * 0.01745329252f;
         cosTurn = std::cos(turn);
         sinTurn = std::sin(turn);
-        scale = static_cast<float>(kPanelHeight) / (stature * 1.12f);
+        scale = static_cast<float>(kPanelHeight) / viewHeight;
+        focusInView = ToView(focus);
         // Light from the upper left in front, in the view's own axes.
         lightDirection = glm::normalize(glm::vec3(-0.45f, 0.55f, 0.7f));
         for (int y = 0; y < kPanelHeight; ++y) {
@@ -73,7 +79,7 @@ public:
     }
 
     glm::vec2 ToPixel(glm::vec3 view) const {
-        return {kPanelWidth * 0.5f + view.x * scale, kPanelHeight - (view.y + 0.04f) * scale};
+        return {kPanelWidth * 0.5f + (view.x - focusInView.x) * scale, kPanelHeight * 0.5f - (view.y - focusInView.y) * scale};
     }
 
     // Fills the triangles with the colour of each vertex, lit by the normals.
@@ -158,6 +164,7 @@ private:
     float cosTurn = 1.0f;
     float sinTurn = 0.0f;
     float scale = 1.0f;
+    glm::vec3 focusInView{0.0f};
     glm::vec3 lightDirection{0.0f, 0.0f, 1.0f};
 };
 
@@ -234,6 +241,33 @@ bool WriteObj(const std::filesystem::path& path, const CharacterMesh& mesh) {
     return true;
 }
 
+// Sheets of the head and of the left hand, each from three sides, zoomed in.
+void WriteCloseups(const std::filesystem::path& folder, const std::string& name, const CharacterMesh& mesh) {
+    const std::vector<glm::vec3> skin(mesh.positions.size(), glm::vec3(0.62f, 0.44f, 0.36f));
+    const float stature = mesh.skeleton.statureMeters;
+    {
+        Image sheet(kPanelWidth * 3, kPanelHeight);
+        const float turns[3] = {0.0f, 90.0f, 35.0f};
+        for (int view = 0; view < 3; ++view) {
+            Panel panel(sheet, view * kPanelWidth, 0, turns[view], glm::vec3(0.0f, 0.925f * stature, 0.02f * stature), 0.19f * stature);
+            panel.Draw(mesh.positions, mesh.normals, mesh.indices, skin);
+        }
+        WritePng((folder / (name + "_head.png")).string(), static_cast<uint32_t>(sheet.width), static_cast<uint32_t>(sheet.height), sheet.rgba);
+    }
+    {
+        Image sheet(kPanelWidth * 3, kPanelHeight);
+        const glm::vec3 wrist = mesh.skeleton[character::Joint::HandL].restPosition;
+        const glm::vec3 elbow = mesh.skeleton[character::Joint::ForearmL].restPosition;
+        const glm::vec3 centre = wrist + glm::normalize(wrist - elbow) * (0.07f * stature);
+        const float turns[3] = {90.0f, 270.0f, 0.0f};  // the back of the hand, the palm, and the edge
+        for (int view = 0; view < 3; ++view) {
+            Panel panel(sheet, view * kPanelWidth, 0, turns[view], centre, 0.17f * stature);
+            panel.Draw(mesh.positions, mesh.normals, mesh.indices, skin);
+        }
+        WritePng((folder / (name + "_hand.png")).string(), static_cast<uint32_t>(sheet.width), static_cast<uint32_t>(sheet.height), sheet.rgba);
+    }
+}
+
 double NumberOrExit(const std::string& option, const std::string& text, double lowest, double highest) {
     double value = 0.0;
     size_t used = 0;
@@ -257,6 +291,7 @@ int main(int argc, char** argv) {
     CharacterParameters parameters;
     std::filesystem::path folder = "characters";
     float voxel = 0.024f;
+    bool closeup = false;
 
     for (int i = 1; i < argc; ++i) {
         const std::string option = argv[i];
@@ -286,6 +321,8 @@ int main(int argc, char** argv) {
             explicitPerson = true;
         } else if (option == "--voxel") {
             voxel = static_cast<float>(NumberOrExit(option, next(), 0.006, 0.04));
+        } else if (option == "--closeup") {
+            closeup = true;
         } else if (option == "--out") {
             folder = next();
         } else {
@@ -314,44 +351,15 @@ int main(int argc, char** argv) {
               << "\n" << mesh.positions.size() << " vertices, " << mesh.indices.size() / 3 << " triangles, girth " << mesh.girth << ", made in "
               << static_cast<int>(milliseconds) << " ms\n";
 
-    // The separate pieces of the surface, which should be one.
-    {
-        std::vector<int> parent(mesh.positions.size());
-        for (size_t v = 0; v < parent.size(); ++v) {
-            parent[v] = static_cast<int>(v);
-        }
-        const auto find = [&](int v) {
-            while (parent[v] != v) {
-                parent[v] = parent[parent[v]];
-                v = parent[v];
-            }
-            return v;
-        };
-        for (size_t t = 0; t + 2 < mesh.indices.size(); t += 3) {
-            parent[find(static_cast<int>(mesh.indices[t]))] = find(static_cast<int>(mesh.indices[t + 1]));
-            parent[find(static_cast<int>(mesh.indices[t + 1]))] = find(static_cast<int>(mesh.indices[t + 2]));
-        }
-        std::vector<int> triangles(mesh.positions.size(), 0);
-        std::vector<glm::vec3> centre(mesh.positions.size(), glm::vec3(0.0f));
-        for (size_t t = 0; t + 2 < mesh.indices.size(); t += 3) {
-            const int root = find(static_cast<int>(mesh.indices[t]));
-            ++triangles[root];
-            centre[root] += mesh.positions[mesh.indices[t]];
-        }
-        int pieces = 0;
-        for (size_t v = 0; v < triangles.size(); ++v) {
-            if (triangles[v] > 0) {
-                ++pieces;
-                if (triangles[v] < 2000) {
-                    const glm::vec3 c = centre[v] / static_cast<float>(triangles[v]);
-                    std::cout << "  small piece of " << triangles[v] << " triangles near (" << c.x << ", " << c.y << ", " << c.z << ")\n";
-                }
-            }
-        }
-        const character::MeshTopology topology = character::MeasureTopology(mesh);
-        std::cout << "pieces: " << pieces << ", bad edges " << topology.badEdges << ", Euler characteristic " << topology.eulerCharacteristic
-                  << (topology.IsClosedSphere() ? " (a closed sphere)" : " (NOT a closed sphere)") << "\n";
+    // Each surface of the character should be one closed sphere.
+    bool allClosed = true;
+    for (size_t piece = 0; piece < mesh.pieces.size(); ++piece) {
+        const character::MeshTopology topology = character::MeasureTopology(mesh, piece);
+        allClosed = allClosed && topology.IsClosedSphere();
+        std::cout << "  piece " << piece << ": " << mesh.pieces[piece].indexCount / 3 << " triangles, bad edges " << topology.badEdges << ", Euler characteristic "
+                  << topology.eulerCharacteristic << ", " << topology.pieces << " connected\n";
     }
+    std::cout << (allClosed ? "pieces: all closed spheres" : "pieces: NOT all closed spheres") << "\n";
 
     std::filesystem::create_directories(folder);
     const std::string name = "character_" + std::to_string(seed);
@@ -385,6 +393,9 @@ int main(int argc, char** argv) {
         front.Draw(posed, posedNormals, mesh.indices, skin);
         Panel threeQuarter(sheet, 2 * kPanelWidth, kPanelHeight, 40.0f, mesh.skeleton.statureMeters);
         threeQuarter.Draw(posed, posedNormals, mesh.indices, skin);
+    }
+    if (closeup) {
+        WriteCloseups(folder, name, mesh);
     }
     const bool sheetWritten = WritePng((folder / (name + "_sheet.png")).string(), static_cast<uint32_t>(sheet.width), static_cast<uint32_t>(sheet.height), sheet.rgba);
     const bool objWritten = WriteObj(folder / (name + ".obj"), mesh);
