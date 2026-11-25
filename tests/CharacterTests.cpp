@@ -17,6 +17,8 @@
 #include <vector>
 
 #include "character/Anthropometry.h"
+#include "character/BodyShape.h"
+#include "character/DetailShapes.h"
 #include "character/CharacterGenerator.h"
 #include "character/CharacterParameters.h"
 #include "character/Skeleton.h"
@@ -70,56 +72,13 @@ std::string Describe(size_t personIndex) {
 
 // Mesh checks -----------------------------------------------------------------------------------
 
-struct EdgeCount {
-    std::map<std::pair<uint32_t, uint32_t>, int> uses;
-};
-
-EdgeCount CountEdges(const std::vector<uint32_t>& indices) {
-    EdgeCount result;
-    for (size_t t = 0; t + 2 < indices.size(); t += 3) {
-        for (int corner = 0; corner < 3; ++corner) {
-            uint32_t a = indices[t + corner];
-            uint32_t b = indices[t + (corner + 1) % 3];
-            if (a > b) {
-                std::swap(a, b);
-            }
-            ++result.uses[{a, b}];
-        }
-    }
-    return result;
-}
-
-int ComponentCount(size_t vertexCount, const std::vector<uint32_t>& indices) {
-    std::vector<int> parent(vertexCount);
-    std::iota(parent.begin(), parent.end(), 0);
-    const std::function<int(int)> find = [&](int v) {
-        while (parent[v] != v) {
-            parent[v] = parent[parent[v]];
-            v = parent[v];
-        }
-        return v;
-    };
-    for (size_t t = 0; t + 2 < indices.size(); t += 3) {
-        parent[find(static_cast<int>(indices[t]))] = find(static_cast<int>(indices[t + 1]));
-        parent[find(static_cast<int>(indices[t + 1]))] = find(static_cast<int>(indices[t + 2]));
-    }
-    int components = 0;
-    std::vector<bool> used(vertexCount, false);
-    for (const uint32_t index : indices) {
-        used[index] = true;
-    }
-    for (size_t v = 0; v < vertexCount; ++v) {
-        if (used[v] && find(static_cast<int>(v)) == static_cast<int>(v)) {
-            ++components;
-        }
-    }
-    return components;
-}
-
-// Whether a point is inside a closed mesh, by counting how many triangles a ray along +X crosses.
-bool PointInside(const CharacterMesh& mesh, glm::vec3 origin) {
+// Whether a point is inside a closed mesh, by counting how many triangles a ray along +X crosses. With a piece given,
+// only that piece counts; without, the whole character does, where the overlap of two pieces would confuse the count.
+bool PointInside(const CharacterMesh& mesh, glm::vec3 origin, int piece = -1) {
     int crossings = 0;
-    for (size_t t = 0; t + 2 < mesh.indices.size(); t += 3) {
+    const size_t first = piece < 0 ? 0 : mesh.pieces[piece].firstIndex;
+    const size_t last = piece < 0 ? mesh.indices.size() : first + mesh.pieces[piece].indexCount;
+    for (size_t t = first; t + 2 < last; t += 3) {
         const glm::vec3 a = mesh.positions[mesh.indices[t]];
         const glm::vec3 b = mesh.positions[mesh.indices[t + 1]];
         const glm::vec3 c = mesh.positions[mesh.indices[t + 2]];
@@ -165,19 +124,17 @@ void TheSameParametersGiveTheSameBodyOnAnyNumberOfThreads() {
           "and another seed gives another body");
 }
 
-void TheSurfaceIsOneClosedManifoldWithoutHoles() {
+void EveryPieceIsOneClosedManifoldWithoutHoles() {
     for (size_t i = 0; i < kPeopleCount; ++i) {
         const CharacterMesh& mesh = CachedMesh(i);
-        const EdgeCount edges = CountEdges(mesh.indices);
-        int badEdges = 0;
-        for (const auto& [edge, uses] : edges.uses) {
-            badEdges += uses != 2 ? 1 : 0;
+        Check(mesh.pieces.size() == 4, Describe(i) + ": a body, a head and two hands: " + std::to_string(mesh.pieces.size()) + " pieces");
+        for (size_t piece = 0; piece < mesh.pieces.size(); ++piece) {
+            const MeshTopology topology = MeasureTopology(mesh, piece);
+            const std::string what = Describe(i) + ", piece " + std::to_string(piece);
+            Check(topology.badEdges == 0, what + ": every edge is shared by exactly two triangles, " + std::to_string(topology.badEdges) + " are not");
+            Check(topology.eulerCharacteristic == 2, what + ": the surface is a sphere without handles, Euler characteristic " + std::to_string(topology.eulerCharacteristic));
+            Check(topology.pieces == 1, what + ": it is one connected surface, not " + std::to_string(topology.pieces));
         }
-        Check(badEdges == 0, Describe(i) + ": every edge is shared by exactly two triangles, " + std::to_string(badEdges) + " are not");
-        const long long euler = static_cast<long long>(mesh.positions.size()) - static_cast<long long>(edges.uses.size()) +
-                                static_cast<long long>(mesh.indices.size() / 3);
-        Check(euler == 2, Describe(i) + ": the surface is a sphere without handles, Euler characteristic " + std::to_string(euler));
-        Check(ComponentCount(mesh.positions.size(), mesh.indices) == 1, Describe(i) + ": it is one piece");
         Check(mesh.volumeCubicMeters > 0.0f, Describe(i) + ": the triangles face outwards");
     }
 }
@@ -503,16 +460,12 @@ void EveryRandomPersonIsAClosedBodyOfTheRightSize() {
     seeds.insert(seeds.end(), {184u, 243u});
     for (const uint32_t seed : seeds) {
         const CharacterMesh mesh = GenerateCharacter(RandomParameters(seed), {}, &jobs);
-        const EdgeCount edges = CountEdges(mesh.indices);
-        int badEdges = 0;
-        for (const auto& [edge, uses] : edges.uses) {
-            badEdges += uses != 2 ? 1 : 0;
-        }
-        const long long euler = static_cast<long long>(mesh.positions.size()) - static_cast<long long>(edges.uses.size()) +
-                                static_cast<long long>(mesh.indices.size() / 3);
         const std::string who = "random person " + std::to_string(seed);
-        Check(badEdges == 0 && euler == 2 && ComponentCount(mesh.positions.size(), mesh.indices) == 1,
-              who + " is one closed sphere: " + std::to_string(badEdges) + " bad edges, Euler characteristic " + std::to_string(euler));
+        for (size_t piece = 0; piece < mesh.pieces.size(); ++piece) {
+            const MeshTopology topology = MeasureTopology(mesh, piece);
+            Check(topology.IsClosedSphere(), who + ", piece " + std::to_string(piece) + " is one closed sphere: " + std::to_string(topology.badEdges) +
+                                                 " bad edges, Euler characteristic " + std::to_string(topology.eulerCharacteristic) + ", " + std::to_string(topology.pieces) + " pieces");
+        }
         Check(std::abs(mesh.massKg / mesh.parameters.massKg - 1.0f) < 0.04f, who + " has the mass asked for: " + std::to_string(mesh.massKg) + " against " + std::to_string(mesh.parameters.massKg));
     }
 }
@@ -582,13 +535,326 @@ void FingertipsAndToesAreNeverLost() {
             const glm::vec3 wrist = mesh.skeleton[left ? Joint::HandL : Joint::HandR].restPosition;
             const glm::vec3 elbow = mesh.skeleton[left ? Joint::ForearmL : Joint::ForearmR].restPosition;
             const glm::vec3 along = glm::normalize(wrist - elbow);
-            const glm::vec3 fingertip = wrist + along * (0.85f * a::kHandLength * height);
-            Check(nearest(fingertip) < 0.03f, "person " + std::to_string(index) + ": the " + (left ? "left" : "right") + " hand reaches its fingertips");
+            const float sign = left ? 1.0f : -1.0f;
+            const glm::vec3 inward = glm::normalize(sign * glm::cross(along, glm::vec3(0.0f, 0.0f, 1.0f)));
+            glm::vec3 acrossHand = glm::normalize(glm::cross(inward, along));
+            if (acrossHand.z < 0.0f) {
+                acrossHand = -acrossHand;
+            }
+            // The tip of the middle finger: it runs 0.149 along the hand and has curled 0.037 towards the palm, and lies 0.011 across.
+            const float handScale = height / 1.75f;
+            const glm::vec3 fingertip = wrist + (along * 0.149f + inward * 0.037f + acrossHand * 0.011f) * handScale;
+            (void)a::kHandLength;
+            Check(nearest(fingertip) < 0.016f * handScale, "person " + std::to_string(index) + ": the " + (left ? "left" : "right") + " hand reaches its fingertips");
             const glm::vec3 ankle = mesh.skeleton[left ? Joint::FootL : Joint::FootR].restPosition;
             const glm::vec3 toe(ankle.x, 0.02f, 0.9f * a::kAnkleToToe * height);
             Check(nearest(toe) < 0.03f, "person " + std::to_string(index) + ": the " + (left ? "left" : "right") + " foot reaches its toes");
         }
     }
+}
+
+// The head and the hands --------------------------------------------------------------------------
+
+constexpr int kHeadPiece = 1;
+constexpr int kLeftHandPiece = 2;
+constexpr int kRightHandPiece = 3;
+
+// The front of the face at a height and width: the largest Z among the vertices of the head within a small box.
+float FaceFront(const CharacterMesh& mesh, float x, float y, float halfWidth, float halfHeight) {
+    const MeshPiece& piece = mesh.pieces[kHeadPiece];
+    float front = -1e9f;
+    for (uint32_t v = piece.firstVertex; v < piece.firstVertex + piece.vertexCount; ++v) {
+        const glm::vec3 p = mesh.positions[v];
+        if (std::abs(p.x - x) < halfWidth && std::abs(p.y - y) < halfHeight) {
+            front = std::max(front, p.z);
+        }
+    }
+    return front;
+}
+
+void TheHeadHasAFace() {
+    for (size_t i = 0; i < kPeopleCount; ++i) {
+        const CharacterMesh& mesh = CachedMesh(i);
+        const float s = mesh.skeleton.statureMeters / 1.75f;
+        const std::string who = Describe(i);
+        // The nose stands out of the face: its tip is well in front of the cheeks beside it and of the forehead above.
+        const float noseTip = FaceFront(mesh, 0.0f, 1.598f * s, 0.006f * s, 0.012f * s);
+        const float cheek = FaceFront(mesh, 0.040f * s, 1.598f * s, 0.008f * s, 0.012f * s);
+        const float forehead = FaceFront(mesh, 0.0f, 1.690f * s, 0.010f * s, 0.012f * s);
+        Check(noseTip - cheek > 0.020f * s, who + ": the nose stands out of the face by " + std::to_string(noseTip - cheek) + " m");
+        Check(noseTip > forehead + 0.008f * s, who + ": and in front of the forehead");
+        // The eyes lie in hollows below the brow ridge and above the cheekbones.
+        // A hollow is a dip: the surface at the eye lies behind both the brow above it and the cheekbone below it, where a
+        // face without hollows would curve smoothly between the two and lie in front of the lower of them.
+        const float brow = FaceFront(mesh, 0.030f * s, 1.668f * s, 0.012f * s, 0.006f * s);
+        const float cheekbone = FaceFront(mesh, 0.031f * s, 1.608f * s, 0.008f * s, 0.006f * s);
+        const float eye = FaceFront(mesh, 0.031f * s, 1.636f * s, 0.008f * s, 0.006f * s);
+        Check(std::min(brow, cheekbone) - eye > 0.003f * s, who + ": the eye is hollowed behind the brow (" + std::to_string(brow) + ") and the cheekbone (" +
+                                                                 std::to_string(cheekbone) + "): " + std::to_string(eye));
+        // The lips are in front of the chin line and the groove above them is behind them.
+        const float lips = FaceFront(mesh, 0.0f, 1.566f * s, 0.008f * s, 0.008f * s);
+        const float belowChin = FaceFront(mesh, 0.0f, 1.528f * s, 0.008f * s, 0.004f * s);
+        Check(lips > belowChin, who + ": the lips are in front of the underside of the chin");
+        // Both ears stand beside the head.
+        for (const float side : {1.0f, -1.0f}) {
+            Check(PointInside(mesh, {side * 0.078f * s, 1.628f * s, -0.004f * s}, kHeadPiece), who + ": there is an ear on each side of the head");
+            Check(!PointInside(mesh, {side * 0.115f * s, 1.628f * s, -0.004f * s}, kHeadPiece), who + ": and nothing beyond it");
+        }
+        // The head is the same on the left as on the right.
+        const MeshPiece& piece = mesh.pieces[kHeadPiece];
+        float worst = 0.0f;
+        for (uint32_t v = piece.firstVertex; v < piece.firstVertex + piece.vertexCount; v += 5) {
+            const glm::vec3 mirrored(-mesh.positions[v].x, mesh.positions[v].y, mesh.positions[v].z);
+            float nearest = 1e9f;
+            for (uint32_t other = piece.firstVertex; other < piece.firstVertex + piece.vertexCount; ++other) {
+                nearest = std::min(nearest, glm::distance(mirrored, mesh.positions[other]));
+            }
+            worst = std::max(worst, nearest);
+        }
+        Check(worst < 0.012f, who + ": the head mirrors itself to within " + std::to_string(worst) + " m");
+    }
+}
+
+// How far forward the surface of a shape lies at a width and a height: looking in from the front, the first place that is
+// inside. Measured on the shape itself, to a fifth of a millimetre, so that the cells of a mesh do not blur it.
+float FrontOf(const BodyShape& shape, float x, float y) {
+    for (float z = 0.20f; z > -0.20f; z -= 0.0002f) {
+        if (shape.Distance({x, y, z}) < 0.0f) {
+            return z;
+        }
+    }
+    return -1.0f;
+}
+
+void SexAndAgeChangeTheFace() {
+    // The same person, a man and a woman, a young one and an old one, at the same stature and with the same seed.
+    const auto head = [](float masculinity, float age, uint32_t seed) { return BuildHeadShape(Person(masculinity, age, 1.75f, 72.0f, 0.5f, seed)); };
+    const BodyShape man = head(1.0f, 30.0f, 7);
+    const BodyShape woman = head(0.0f, 30.0f, 7);
+    const BodyShape young = head(0.5f, 20.0f, 7);
+    const BodyShape old = head(0.5f, 75.0f, 7);
+    const float browMan = FrontOf(man, 0.030f, 1.668f) - FrontOf(man, 0.031f, 1.636f);
+    const float browWoman = FrontOf(woman, 0.030f, 1.668f) - FrontOf(woman, 0.031f, 1.636f);
+    Check(browMan > browWoman, "a man's brow stands further over the eye: " + std::to_string(browMan) + " against " + std::to_string(browWoman));
+    Check(FrontOf(woman, 0.0f, 1.5595f) > FrontOf(man, 0.0f, 1.5595f) + 0.002f, "a woman's lower lip stands further out: " + std::to_string(FrontOf(woman, 0.0f, 1.5595f)) + " against " + std::to_string(FrontOf(man, 0.0f, 1.5595f)));
+    Check(FrontOf(young, 0.0f, 1.5725f) > FrontOf(old, 0.0f, 1.5725f) + 0.001f, "and a young person's upper lip is fuller than an old person's: " + std::to_string(FrontOf(young, 0.0f, 1.5725f)) + " against " + std::to_string(FrontOf(old, 0.0f, 1.5725f)));
+    Check(FrontOf(old, 0.0f, 1.585f) < FrontOf(old, 0.0f, 1.58f) + 0.05f, "the front of the face is a number that exists");
+    const BodyShape other = head(1.0f, 30.0f, 8);
+    Check(FrontOf(man, 0.0f, 1.598f) != FrontOf(other, 0.0f, 1.598f), "another seed gives another nose");
+}
+
+// How many separate fingers a line across the hand passes through: the number of runs of points inside the hand.
+int FingersAcross(const CharacterMesh& mesh, int piece, bool left, float alongFraction) {
+    const float s = mesh.skeleton.statureMeters / 1.75f;
+    const Joint wristJoint = left ? Joint::HandL : Joint::HandR;
+    const Joint elbowJoint = left ? Joint::ForearmL : Joint::ForearmR;
+    const glm::vec3 wrist = mesh.skeleton[wristJoint].restPosition;
+    const glm::vec3 along = glm::normalize(wrist - mesh.skeleton[elbowJoint].restPosition);
+    const float sign = left ? 1.0f : -1.0f;
+    const glm::vec3 inward = glm::normalize(sign * glm::cross(along, glm::vec3(0.0f, 0.0f, 1.0f)));
+    glm::vec3 across = glm::normalize(glm::cross(inward, along));
+    if (across.z < 0.0f) {
+        across = -across;
+    }
+    // Curled fingers lie further from the plane of the back of the hand the further along they go, so every width of the
+    // hand is looked at through the whole depth of it.
+    int runs = 0;
+    bool inside = false;
+    for (float b = -0.06f; b <= 0.07f; b += 0.001f) {
+        bool hit = false;
+        for (float c = -0.004f; c <= 0.040f && !hit; c += 0.003f) {
+            hit = PointInside(mesh, wrist + (along * alongFraction + across * b + inward * c) * s, piece);
+        }
+        runs += hit && !inside ? 1 : 0;
+        inside = hit;
+    }
+    return runs;
+}
+
+void AHandHasFiveSeparateFingersAndAPalm() {
+    for (size_t i = 0; i < kPeopleCount; i += 2) {
+        const CharacterMesh& mesh = CachedMesh(i);
+        const std::string who = Describe(i);
+        for (const bool left : {true, false}) {
+            const int piece = left ? kLeftHandPiece : kRightHandPiece;
+            const int fingers = FingersAcross(mesh, piece, left, 0.120f);
+            Check(fingers >= 4 && fingers <= 6, who + ": a line across the " + (left ? "left" : "right") + " hand at the fingers passes through " + std::to_string(fingers) + " of them");
+            const int palm = FingersAcross(mesh, piece, left, 0.050f);
+            Check(palm >= 1 && palm <= 2, who + ": and across the palm through " + std::to_string(palm) + " solid piece");
+            // The thumb reaches out past the edge of the palm, which is 4.25 cm from the middle.
+            const float s = mesh.skeleton.statureMeters / 1.75f;
+            const glm::vec3 wrist = mesh.skeleton[left ? Joint::HandL : Joint::HandR].restPosition;
+            const glm::vec3 along = glm::normalize(wrist - mesh.skeleton[left ? Joint::ForearmL : Joint::ForearmR].restPosition);
+            const glm::vec3 inward = glm::normalize((left ? 1.0f : -1.0f) * glm::cross(along, glm::vec3(0.0f, 0.0f, 1.0f)));
+            glm::vec3 across = glm::normalize(glm::cross(inward, along));
+            if (across.z < 0.0f) {
+                across = -across;
+            }
+            float reach = 0.0f;
+            const MeshPiece& range = mesh.pieces[piece];
+            for (uint32_t v = range.firstVertex; v < range.firstVertex + range.vertexCount; ++v) {
+                reach = std::max(reach, glm::dot(mesh.positions[v] - wrist, across));
+            }
+            Check(reach > 0.062f * s, who + ": the thumb reaches " + std::to_string(reach / s) + " from the middle of the hand");
+        }
+    }
+}
+
+void TheHeadAndHandsOverlapTheBodyAtTheNeckAndTheWrists() {
+    for (size_t i = 0; i < kPeopleCount; i += 2) {
+        const CharacterMesh& mesh = CachedMesh(i);
+        const float s = mesh.skeleton.statureMeters / 1.75f;
+        const std::string who = Describe(i);
+        // The neck runs up into the head, so that the top of it cannot be seen.
+        const glm::vec3 neckTop = mesh.skeleton[Joint::Head].restPosition + glm::vec3(0.0f, 0.008f * s, 0.006f * s);
+        Check(PointInside(mesh, neckTop, kHeadPiece), who + ": the top of the neck is inside the head");
+        Check(PointInside(mesh, neckTop, 0), who + ": and inside the body");
+        // The forearm ends inside the cuff of the hand.
+        for (const bool left : {true, false}) {
+            const Joint wristJoint = left ? Joint::HandL : Joint::HandR;
+            const Joint elbowJoint = left ? Joint::ForearmL : Joint::ForearmR;
+            const glm::vec3 wrist = mesh.skeleton[wristJoint].restPosition;
+            const glm::vec3 along = glm::normalize(wrist - mesh.skeleton[elbowJoint].restPosition);
+            const glm::vec3 inForearm = wrist - along * (0.006f * s);
+            Check(PointInside(mesh, inForearm, left ? kLeftHandPiece : kRightHandPiece), who + ": the wrist is inside the cuff of the hand");
+            Check(PointInside(mesh, inForearm, 0), who + ": and inside the forearm");
+        }
+    }
+}
+
+void HeadAndHandsFollowTheirOwnBones() {
+    const CharacterMesh& mesh = CachedMesh(4);
+    const std::pair<int, Joint> expected[3] = {{kHeadPiece, Joint::Head}, {kLeftHandPiece, Joint::HandL}, {kRightHandPiece, Joint::HandR}};
+    for (const auto& [piece, bone] : expected) {
+        const MeshPiece& range = mesh.pieces[piece];
+        bool onlyThatBone = true;
+        for (uint32_t v = range.firstVertex; v < range.firstVertex + range.vertexCount; ++v) {
+            onlyThatBone = onlyThatBone && mesh.boneIndices[v][0] == Index(bone) && mesh.boneWeights[v][0] == 1.0f;
+        }
+        Check(onlyThatBone, "piece " + std::to_string(piece) + " follows only " + mesh.skeleton[bone].name);
+    }
+    // Turning the head moves the head piece and leaves the body piece where it was.
+    Pose pose;
+    pose.rotation[Index(Joint::Head)] = FromDegrees(0.0f, 40.0f, 0.0f);
+    const std::vector<glm::vec3> turned = SkinPositions(mesh, pose);
+    const MeshPiece& head = mesh.pieces[kHeadPiece];
+    uint32_t noseVertex = head.firstVertex;  // the vertex furthest forward on the head is the tip of the nose
+    for (uint32_t v = head.firstVertex; v < head.firstVertex + head.vertexCount; ++v) {
+        if (mesh.positions[v].z > mesh.positions[noseVertex].z) {
+            noseVertex = v;
+        }
+    }
+    Check(glm::distance(turned[noseVertex], mesh.positions[noseVertex]) > 0.01f, "turning the head 40 degrees moves the tip of the nose by more than a centimetre");
+    float bodyMoved = 0.0f;
+    for (uint32_t v = 0; v < mesh.pieces[0].vertexCount; ++v) {
+        bodyMoved = std::max(bodyMoved, glm::distance(turned[v], mesh.positions[v]));
+    }
+    Check(bodyMoved > 0.0f, "turning the head turns the neck of the body a little");
+}
+
+// Builds at the ends of the range, where a fixed-size feature meets a body that has grown or shrunk around it.
+std::vector<CharacterParameters> ExtremePeople() {
+    return {Person(0.0f, 80.0f, 1.45f, 45.0f * 1.45f * 1.45f, 0.2f, 31), Person(1.0f, 60.0f, 1.45f, 45.0f * 1.45f * 1.45f, 0.5f, 32),
+            Person(1.0f, 25.0f, 2.05f, 15.0f * 2.05f * 2.05f, 1.0f, 33), Person(0.0f, 30.0f, 1.45f, 15.0f * 1.45f * 1.45f, 0.0f, 34),
+            Person(1.0f, 40.0f, 2.05f, 45.0f * 2.05f * 2.05f, 0.5f, 35)};
+}
+
+// The width of a shape across the arm at a distance along it from the wrist, in metres, found on the shape itself: where a
+// line across the arm is inside it. `alongFraction` is in units of stature / 1.75, and is negative towards the elbow.
+float ShapeWidthAcross(const BodyShape& shape, const Skeleton& skeleton, bool left, float alongFraction) {
+    const float s = skeleton.statureMeters / 1.75f;
+    const glm::vec3 wrist = skeleton[left ? Joint::HandL : Joint::HandR].restPosition;
+    const glm::vec3 along = glm::normalize(wrist - skeleton[left ? Joint::ForearmL : Joint::ForearmR].restPosition);
+    const glm::vec3 inward = glm::normalize((left ? 1.0f : -1.0f) * glm::cross(along, glm::vec3(0.0f, 0.0f, 1.0f)));
+    glm::vec3 across = glm::normalize(glm::cross(inward, along));
+    if (across.z < 0.0f) {
+        across = -across;
+    }
+    float low = 1e9f;
+    float high = -1e9f;
+    for (float b = -0.10f; b <= 0.10f; b += 0.0002f) {
+        if (shape.Distance(wrist + (along * alongFraction + across * b) * s) < 0.0f) {
+            low = std::min(low, b);
+            high = std::max(high, b);
+        }
+    }
+    return high > low ? (high - low) * s : 0.0f;
+}
+
+void TheCuffMeetsTheForearmWithoutAStep() {
+    std::vector<CharacterParameters> people = ExtremePeople();
+    for (const CharacterParameters& person : SomePeople()) {
+        people.push_back(person);
+    }
+    for (size_t index = 0; index < people.size(); ++index) {
+        const CharacterMesh mesh = GenerateCharacter(people[index]);
+        const float s = mesh.skeleton.statureMeters / 1.75f;
+        const float minimumRadius = 0.55f * MeshSettings{}.voxelMeters;
+        const BodyShape body = BuildBodyShape(mesh.skeleton, mesh.parameters, {.girth = mesh.girth, .minimumRadius = minimumRadius, .includeHead = false, .includeHands = false});
+        for (const bool left : {true, false}) {
+            const BodyShape hand = BuildHandShape(mesh.skeleton, mesh.parameters, left, mesh.girth);
+            for (const float position : {-0.018f, -0.012f}) {
+                const float forearm = ShapeWidthAcross(body, mesh.skeleton, left, position);
+                const float cuff = ShapeWidthAcross(hand, mesh.skeleton, left, position);
+                const std::string who = "person " + std::to_string(index) + ", " + (left ? "left" : "right") + " wrist at " + std::to_string(position);
+                Check(forearm > 0.0f && cuff > 0.0f, who + ": both the forearm and the cuff are there");
+                // The cuff covers the forearm, a little wider and never narrower, and never by more than 8 mm.
+                Check(cuff - forearm > -0.001f * s && cuff - forearm < 0.008f * s,
+                      who + ": the cuff is " + std::to_string((cuff - forearm) * 1000.0f) + " mm wider than the forearm of " + std::to_string(forearm * 1000.0f) + " mm");
+            }
+        }
+    }
+}
+
+void TheNeckStaysUnderTheChinAtAnyBuild() {
+    std::vector<CharacterParameters> people = ExtremePeople();
+    for (const CharacterParameters& person : SomePeople()) {
+        people.push_back(person);
+    }
+    for (size_t index = 0; index < people.size(); ++index) {
+        const CharacterMesh mesh = GenerateCharacter(people[index]);
+        const float s = mesh.skeleton.statureMeters / 1.75f;
+        // Every vertex of the body in front of the face, at the height of the mouth and above, must be inside the head: the
+        // neck comes out from under the chin, and the body must not come up over the mouth.
+        int outside = 0;
+        glm::vec3 firstOutside(0.0f);
+        const MeshPiece& body = mesh.pieces[0];
+        for (uint32_t v = body.firstVertex; v < body.firstVertex + body.vertexCount; ++v) {
+            const glm::vec3 p = mesh.positions[v];
+            if (std::abs(p.x) < 0.05f * s && p.z > 0.03f * s && p.y > 1.56f * s && !PointInside(mesh, p, kHeadPiece)) {
+                firstOutside = outside == 0 ? p / s : firstOutside;
+                ++outside;
+            }
+        }
+        Check(outside == 0, "person " + std::to_string(index) + ": " + std::to_string(outside) + " vertices of the body come up in front of the face, the first at (" + std::to_string(firstOutside.x) + ", " +
+                                std::to_string(firstOutside.y) + ", " + std::to_string(firstOutside.z) + ")");
+    }
+}
+
+void HandsAreClosedSurfacesAtFineGridSizes() {
+    // A finer grid has more room for the gaps between the fingers to become tunnels, so every size is checked.
+    JobSystem jobs(3);
+    for (const float voxel : {0.006f, 0.007f, 0.008f, 0.010f}) {
+        for (uint32_t seed = 40; seed < 46; ++seed) {
+            MeshSettings settings;
+            settings.handVoxelMeters = voxel;
+            const CharacterMesh mesh = GenerateCharacter(RandomParameters(seed), settings, &jobs);
+            for (const size_t piece : {size_t{kLeftHandPiece}, size_t{kRightHandPiece}}) {
+                const MeshTopology topology = MeasureTopology(mesh, piece);
+                Check(topology.IsClosedSphere(), "seed " + std::to_string(seed) + " at " + std::to_string(voxel * 1000.0f) + " mm: hand piece " + std::to_string(piece) + " is a closed sphere, Euler characteristic " +
+                                                     std::to_string(topology.eulerCharacteristic) + ", " + std::to_string(topology.badEdges) + " bad edges");
+            }
+        }
+    }
+}
+
+void ACharacterWithoutFaceAndHandsIsOneWholeBody() {
+    MeshSettings settings;
+    settings.faceAndHands = false;
+    const CharacterMesh mesh = GenerateCharacter(Person(0.5f, 30.0f, 1.70f, 70.0f, 0.4f, 21), settings);
+    Check(mesh.pieces.size() == 1, "one piece when the face and the hands are left out");
+    Check(MeasureTopology(mesh, 0).IsClosedSphere(), "and it is a closed sphere");
+    Check(std::abs(mesh.massKg / mesh.parameters.massKg - 1.0f) < 0.03f, "of the right mass");
 }
 
 void AVoxelSizeThatIsNotANumberIsReplaced() {
@@ -606,20 +872,22 @@ void GenerationFitsTheBudget() {
     const CharacterMesh mesh = GenerateCharacter(Person(0.5f, 35.0f, 1.72f, 72.0f, 0.4f, 11));
     const double milliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
     const size_t triangles = mesh.indices.size() / 3;
-    Check(triangles >= 8000 && triangles <= 50000, "a character has 8000 to 50000 triangles: " + std::to_string(triangles));
-    Check(milliseconds < 1500.0, "and takes under 1.5 s on one thread: " + std::to_string(milliseconds) + " ms");
+    Check(triangles >= 20000 && triangles <= 100000, "a character has 20000 to 100000 triangles: " + std::to_string(triangles));
+    Check(milliseconds < 4000.0, "and takes under 4 s on one thread: " + std::to_string(milliseconds) + " ms");
 }
 
 }  // namespace
 
-int main() {
+// With a word on the command line, only the tests whose names contain it run, which is quick when one test is being worked on.
+int main(int argc, char** argv) {
+    const std::string filter = argc > 1 ? argv[1] : "";
     struct Test {
         const char* name;
         std::function<void()> run;
     };
     const Test tests[] = {
         {"TheSameParametersGiveTheSameBodyOnAnyNumberOfThreads", TheSameParametersGiveTheSameBodyOnAnyNumberOfThreads},
-        {"TheSurfaceIsOneClosedManifoldWithoutHoles", TheSurfaceIsOneClosedManifoldWithoutHoles},
+        {"EveryPieceIsOneClosedManifoldWithoutHoles", EveryPieceIsOneClosedManifoldWithoutHoles},
         {"NormalsPointOutAndAreUnitLength", NormalsPointOutAndAreUnitLength},
         {"TheBodyIsAsTallAndAsHeavyAsAskedAndStandsOnTheFloor", TheBodyIsAsTallAndAsHeavyAsAskedAndStandsOnTheFloor},
         {"TheSkeletonHasTheProportionsOfTheLiterature", TheSkeletonHasTheProportionsOfTheLiterature},
@@ -635,10 +903,22 @@ int main() {
         {"EveryRandomPersonIsAClosedBodyOfTheRightSize", EveryRandomPersonIsAClosedBodyOfTheRightSize},
         {"AnElbowBendsAboutItsHingeAndAHipOpensTheRightWay", AnElbowBendsAboutItsHingeAndAHipOpensTheRightWay},
         {"FingertipsAndToesAreNeverLost", FingertipsAndToesAreNeverLost},
+        {"TheHeadHasAFace", TheHeadHasAFace},
+        {"SexAndAgeChangeTheFace", SexAndAgeChangeTheFace},
+        {"AHandHasFiveSeparateFingersAndAPalm", AHandHasFiveSeparateFingersAndAPalm},
+        {"TheHeadAndHandsOverlapTheBodyAtTheNeckAndTheWrists", TheHeadAndHandsOverlapTheBodyAtTheNeckAndTheWrists},
+        {"HeadAndHandsFollowTheirOwnBones", HeadAndHandsFollowTheirOwnBones},
+        {"TheCuffMeetsTheForearmWithoutAStep", TheCuffMeetsTheForearmWithoutAStep},
+        {"TheNeckStaysUnderTheChinAtAnyBuild", TheNeckStaysUnderTheChinAtAnyBuild},
+        {"HandsAreClosedSurfacesAtFineGridSizes", HandsAreClosedSurfacesAtFineGridSizes},
+        {"ACharacterWithoutFaceAndHandsIsOneWholeBody", ACharacterWithoutFaceAndHandsIsOneWholeBody},
         {"AVoxelSizeThatIsNotANumberIsReplaced", AVoxelSizeThatIsNotANumberIsReplaced},
         {"GenerationFitsTheBudget", GenerationFitsTheBudget},
     };
     for (const Test& test : tests) {
+        if (!filter.empty() && std::string(test.name).find(filter) == std::string::npos) {
+            continue;
+        }
         const int failuresBefore = failureCount;
         try {
             test.run();

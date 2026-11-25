@@ -8,14 +8,16 @@
 namespace character {
 namespace {
 
-// Points farther from a node's box than this are not evaluated: their distance is taken from the box. The margin
-// is wider than any smoothing, so near the skin the answer is exact.
-constexpr float kBoxMargin = 0.10f;
-
 // The smooth minimum of two distances: the union of two shapes with the crease between them rounded off over a width k.
 float SmoothMin(float a, float b, float k) {
     const float h = std::max(k - std::abs(a - b), 0.0f) / k;
     return std::min(a, b) - h * h * k * 0.25f;
+}
+
+// The smooth maximum: the intersection of two shapes, rounded the same way. Cutting one shape out of another is the
+// smooth maximum of the first and the inside-out second.
+float SmoothMax(float a, float b, float k) {
+    return -SmoothMin(-a, -b, k);
 }
 
 float DistanceToBox(glm::vec3 point, glm::vec3 lower, glm::vec3 upper) {
@@ -54,7 +56,7 @@ public:
     Builder(const Skeleton& skeleton, const CharacterParameters& parameters, float girth, float minimumRadius)
         : skeleton(skeleton), p(ProportionsOf(parameters, girth)), stature(parameters.statureMeters), minimumRadius(minimumRadius) {}
 
-    std::vector<ShapePart> parts;
+    ShapeAssembler assembler;
 
     // Radii at a stature of 1.75 m, made to fit the stature and the build: `girthPower` says how much of the girth
     // factor a part takes (1 for the trunk and limbs, less for hands and feet, none for the head).
@@ -62,37 +64,13 @@ public:
 
     glm::vec3 At(Joint joint) const { return skeleton[joint].restPosition; }
 
-    // A tapered capsule. `depthDirection` is where the shallow axis of its cross section points.
     int Capsule(Joint bone, glm::vec3 start, glm::vec3 end, float sideStart, float depthStart, float sideEnd, float depthEnd,
-                glm::vec3 depthDirection = glm::vec3(0.0f, 0.0f, 1.0f)) {
-        ShapePart part;
-        part.bone = bone;
-        part.start = start;
-        part.end = end;
-        part.sideStart = sideStart;
-        part.depthStart = depthStart;
-        part.sideEnd = sideEnd;
-        part.depthEnd = depthEnd;
-        const glm::vec3 axis = glm::normalize(end - start);
-        glm::vec3 depth = depthDirection - axis * glm::dot(depthDirection, axis);
-        depth = glm::normalize(depth);
-        part.depth = depth;
-        part.side = glm::normalize(glm::cross(depth, axis));
-        parts.push_back(part);
-        return static_cast<int>(parts.size()) - 1;
+                glm::vec3 depthDirection = glm::vec3(0.0f, 0.0f, 1.0f), float endCapDepth = 0.0f) {
+        return assembler.Capsule(bone, start, end, sideStart, depthStart, sideEnd, depthEnd, depthDirection, endCapDepth);
     }
 
-    // An ellipsoid with radii along X, Y and Z.
     int Ellipsoid(Joint bone, glm::vec3 centre, float radiusX, float radiusY, float radiusZ) {
-        ShapePart part;
-        part.bone = bone;
-        part.start = centre;
-        part.end = centre;
-        part.sideStart = part.sideEnd = radiusX;
-        part.depthStart = part.depthEnd = radiusZ;
-        part.alongRadius = radiusY;
-        parts.push_back(part);
-        return static_cast<int>(parts.size()) - 1;
+        return assembler.Ellipsoid(bone, centre, radiusX, radiusY, radiusZ);
     }
 
     const Skeleton& skeleton;
@@ -127,7 +105,7 @@ float BodyShape::PartDistance(size_t part, glm::vec3 point) const {
 float BodyShape::EvaluateNode(int index, glm::vec3 point) const {
     const Node& node = nodes[index];
     const float boxDistance = DistanceToBox(point, node.lower, node.upper);
-    if (boxDistance > kBoxMargin) {
+    if (boxDistance > cullDistance) {
         return boxDistance;
     }
     if (node.part >= 0) {
@@ -135,6 +113,9 @@ float BodyShape::EvaluateNode(int index, glm::vec3 point) const {
     }
     const float a = EvaluateNode(node.first, point);
     const float b = EvaluateNode(node.second, point);
+    if (node.carve) {
+        return node.smoothing > 0.0f ? SmoothMax(a, -b, node.smoothing) : std::max(a, -b);
+    }
     return node.smoothing > 0.0f ? SmoothMin(a, b, node.smoothing) : std::min(a, b);
 }
 
@@ -142,9 +123,104 @@ float BodyShape::Distance(glm::vec3 point) const {
     return EvaluateNode(root, point);
 }
 
-BodyShape BuildBodyShape(const Skeleton& skeleton, const CharacterParameters& parameters, float girth, float minimumRadius) {
+int ShapeAssembler::Capsule(Joint bone, glm::vec3 start, glm::vec3 end, float sideStart, float depthStart, float sideEnd, float depthEnd,
+                            glm::vec3 depthDirection, float endCapDepth) {
+    ShapePart part;
+    part.bone = bone;
+    part.alongRadius = endCapDepth;
+    part.start = start;
+    part.end = end;
+    part.sideStart = sideStart;
+    part.depthStart = depthStart;
+    part.sideEnd = sideEnd;
+    part.depthEnd = depthEnd;
+    const glm::vec3 axis = glm::normalize(end - start);
+    const glm::vec3 depth = glm::normalize(depthDirection - axis * glm::dot(depthDirection, axis));
+    part.depth = depth;
+    part.side = glm::normalize(glm::cross(depth, axis));
+    shape.parts.push_back(part);
+    return static_cast<int>(shape.parts.size()) - 1;
+}
+
+int ShapeAssembler::Ellipsoid(Joint bone, glm::vec3 centre, float radiusX, float radiusY, float radiusZ) {
+    ShapePart part;
+    part.bone = bone;
+    part.start = centre;
+    part.end = centre;
+    part.sideStart = part.sideEnd = radiusX;
+    part.depthStart = part.depthEnd = radiusZ;
+    part.alongRadius = radiusY;
+    shape.parts.push_back(part);
+    return static_cast<int>(shape.parts.size()) - 1;
+}
+
+int ShapeAssembler::Leaf(int part) {
+    const ShapePart& sp = shape.parts[part];
+    BodyShape::Node node;
+    node.part = part;
+    const float reach = std::max({sp.sideStart, sp.depthStart, sp.sideEnd, sp.depthEnd, sp.alongRadius}) * 1.15f;
+    node.lower = glm::min(sp.start, sp.end) - glm::vec3(reach);
+    node.upper = glm::max(sp.start, sp.end) + glm::vec3(reach);
+    shape.nodes.push_back(node);
+    return static_cast<int>(shape.nodes.size()) - 1;
+}
+
+int ShapeAssembler::Join(int first, int second, float smoothing) {
+    BodyShape::Node node;
+    node.first = first;
+    node.second = second;
+    node.smoothing = smoothing;
+    node.lower = glm::min(shape.nodes[first].lower, shape.nodes[second].lower) - glm::vec3(smoothing);
+    node.upper = glm::max(shape.nodes[first].upper, shape.nodes[second].upper) + glm::vec3(smoothing);
+    shape.nodes.push_back(node);
+    return static_cast<int>(shape.nodes.size()) - 1;
+}
+
+int ShapeAssembler::Carve(int from, int cut, float smoothing) {
+    BodyShape::Node node;
+    node.first = from;
+    node.second = cut;
+    node.carve = true;
+    node.smoothing = smoothing;
+    node.lower = shape.nodes[from].lower;  // cutting only takes away
+    node.upper = shape.nodes[from].upper;
+    shape.nodes.push_back(node);
+    return static_cast<int>(shape.nodes.size()) - 1;
+}
+
+int ShapeAssembler::Merge(const std::vector<int>& parts, float smoothing) {
+    int result = Leaf(parts[0]);
+    for (size_t i = 1; i < parts.size(); ++i) {
+        result = Join(result, Leaf(parts[i]), smoothing);
+    }
+    return result;
+}
+
+BodyShape ShapeAssembler::Finish(int root, float margin, float cullDistance) {
+    shape.root = root;
+    shape.cullDistance = cullDistance;
+    shape.boundsMin = glm::vec3(1e9f);
+    shape.boundsMax = glm::vec3(-1e9f);
+    for (const ShapePart& part : shape.parts) {
+        const float reach = std::max({part.sideStart, part.depthStart, part.sideEnd, part.depthEnd, part.alongRadius});
+        shape.boundsMin = glm::min(shape.boundsMin, glm::min(part.start, part.end) - glm::vec3(reach));
+        shape.boundsMax = glm::max(shape.boundsMax, glm::max(part.start, part.end) + glm::vec3(reach));
+    }
+    shape.boundsMin -= glm::vec3(margin);
+    shape.boundsMax += glm::vec3(margin);
+    return shape;
+}
+
+WristSection ForearmWristSection(const CharacterParameters& parameters, float girth, float minimumRadius) {
     const CharacterParameters clean = Sanitised(parameters);
-    Builder b(skeleton, clean, girth, minimumRadius);
+    const Proportions p = ProportionsOf(clean, girth);
+    const auto radius = [&](float value) { return std::max(value * p.scale * p.girth, minimumRadius); };
+    return {radius(0.026f * (0.9f + 0.1f * p.fat)), radius(0.024f)};
+}
+
+BodyShape BuildBodyShape(const Skeleton& skeleton, const CharacterParameters& parameters, const BodyShapeOptions& options) {
+    const CharacterParameters clean = Sanitised(parameters);
+    Builder b(skeleton, clean, options.girth, options.minimumRadius);
     const Proportions& p = b.p;
     const float s = p.scale;
     const float height = clean.statureMeters;
@@ -162,15 +238,23 @@ BodyShape BuildBodyShape(const Skeleton& skeleton, const CharacterParameters& pa
     const int abdomen = b.Capsule(J::Spine1, b.At(J::Spine1) - glm::vec3(0.0f, 0.035f * s, 0.0f), b.At(J::Spine2), b.R(waistSide + 0.012f * p.fat),
                                   b.R(0.098f + 0.022f * p.fat), b.R(chestSide - 0.006f), b.R(0.108f));
     const glm::vec3 upperChest = glm::vec3(0.0f, 0.790f * height, 0.0f);
-    const int chest = b.Capsule(J::Spine2, b.At(J::Spine2), upperChest, b.R(chestSide - 0.006f), b.R(0.108f), b.R(chestSide + 0.004f), b.R(0.116f));
+    // The top of the chest is flat, with a shallow cap: a dome as high as the chest is wide would rise to the face on a heavy person.
+    const int chest = b.Capsule(J::Spine2, b.At(J::Spine2), upperChest, b.R(chestSide - 0.006f), b.R(0.108f), b.R(chestSide + 0.004f), b.R(0.116f),
+                                glm::vec3(0.0f, 0.0f, 1.0f), b.R(0.06f));
     const glm::vec3 neckBase = b.At(J::Neck);
-    const int neck = b.Capsule(J::Neck, neckBase - glm::vec3(0.0f, 0.020f * s, 0.0f), b.At(J::Head) + glm::vec3(0.0f, 0.012f * s, 0.006f * s),
-                               b.R(Lerp(0.050f, 0.058f, p.male), 0.5f), b.R(Lerp(0.050f, 0.058f, p.male), 0.5f), b.R(Lerp(0.045f, 0.052f, p.male), 0.5f),
-                               b.R(Lerp(0.045f, 0.052f, p.male), 0.5f));
+    // The neck grows less with the build than the rest of the body, and ends at the base of the skull, so that on a heavy
+    // person it stays under the chin instead of rising in front of the mouth.
+    const int neck = b.Capsule(J::Neck, neckBase - glm::vec3(0.0f, 0.020f * s, 0.0f), b.At(J::Head) + glm::vec3(0.0f, 0.0f, 0.004f * s),
+                               b.R(Lerp(0.050f, 0.058f, p.male), 0.35f), b.R(Lerp(0.050f, 0.058f, p.male), 0.35f), b.R(Lerp(0.043f, 0.049f, p.male), 0.30f),
+                               b.R(Lerp(0.043f, 0.049f, p.male), 0.30f));
 
     // The head does not grow with the body mass. Its size follows the stature.
-    const int skull = b.Ellipsoid(J::Head, glm::vec3(0.0f, 0.938f * height, 0.004f * s), 0.077f * s, 0.062f * height, 0.095f * s);
-    const int jaw = b.Ellipsoid(J::Head, glm::vec3(0.0f, 0.900f * height, 0.016f * s), 0.062f * s, 0.040f * height, 0.080f * s);
+    int skull = -1;
+    int jaw = -1;
+    if (options.includeHead) {
+        skull = b.Ellipsoid(J::Head, glm::vec3(0.0f, 0.938f * height, 0.004f * s), 0.077f * s, 0.062f * height, 0.095f * s);
+        jaw = b.Ellipsoid(J::Head, glm::vec3(0.0f, 0.900f * height, 0.016f * s), 0.062f * s, 0.040f * height, 0.080f * s);
+    }
 
     std::vector<int> torsoParts = {pelvis, abdomen, chest};
     const int glutL = b.Ellipsoid(J::Pelvis, glm::vec3(0.075f * s, 0.502f * height, -0.076f * s), b.R(0.078f + 0.008f * p.female + 0.02f * p.fat),
@@ -234,19 +318,23 @@ BodyShape BuildBodyShape(const Skeleton& skeleton, const CharacterParameters& pa
                                            b.R(0.064f * (0.85f + 0.3f * p.muscle), 0.8f), b.R(0.056f * (0.85f + 0.3f * p.muscle), 0.8f)));
         const glm::vec3 bicepsCentre = shoulder + (elbow - shoulder) * 0.38f + glm::vec3(0.0f, 0.0f, 0.010f * s);
         out.upperArm.push_back(b.Ellipsoid(upperArm, bicepsCentre, b.R(0.045f * (0.5f + p.muscle), 0.8f), b.R(0.085f), b.R(0.044f * (0.5f + p.muscle), 0.8f)));
-        out.forearm.push_back(b.Capsule(forearm, elbow, wrist, b.R(0.041f * armBuild), b.R(0.040f * armBuild), b.R(0.026f * (0.9f + 0.1f * p.fat)), b.R(0.024f)));
+        const WristSection wristSection = ForearmWristSection(clean, options.girth, options.minimumRadius);
+        out.forearm.push_back(b.Capsule(forearm, elbow, wrist, b.R(0.041f * armBuild), b.R(0.040f * armBuild), wristSection.side, wristSection.depth));
 
-        // The hand: a flat palm, the fingers together as one, and the thumb. The cross section is thin along `medial`.
-        const float handLength = a::kHandLength * height;
-        const glm::vec3 palmEnd = wrist + armDirection * (0.46f * handLength);
-        const glm::vec3 fingerEnd = wrist + armDirection * handLength;
+        // The hand: a flat palm, the fingers together as one, and the thumb. The cross section is thin along `medial`. When
+        // the body is cut without its hands, the forearm simply ends at the wrist.
         const float handSize = 0.35f;  // girth counts for little in the hands and feet
-        // The fingers are kept thicker than real ones: a part thinner than the grid the surface is cut from would break up.
-        out.hand.push_back(b.Capsule(hand, wrist, palmEnd, b.R(0.037f, handSize), b.R(0.019f, handSize), b.R(0.042f, handSize), b.R(0.017f, handSize), medial));
-        out.hand.push_back(b.Capsule(hand, palmEnd, fingerEnd - armDirection * (0.012f * s), b.R(0.040f, handSize), b.R(0.016f, handSize), b.R(0.029f, handSize), b.R(0.013f, handSize), medial));
-        const glm::vec3 thumbStart = wrist + armDirection * (0.10f * handLength) + glm::vec3(0.0f, 0.0f, 0.020f * s);
-        out.hand.push_back(b.Capsule(hand, thumbStart, thumbStart + armDirection * (0.28f * handLength) + glm::vec3(0.0f, 0.0f, 0.030f * s), b.R(0.018f, handSize),
-                                     b.R(0.017f, handSize), b.R(0.014f, handSize), b.R(0.013f, handSize), medial));
+        if (options.includeHands) {
+            const float handLength = a::kHandLength * height;
+            const glm::vec3 palmEnd = wrist + armDirection * (0.46f * handLength);
+            const glm::vec3 fingerEnd = wrist + armDirection * handLength;
+            // The fingers are kept thicker than real ones: a part thinner than the grid the surface is cut from would break up.
+            out.hand.push_back(b.Capsule(hand, wrist, palmEnd, b.R(0.037f, handSize), b.R(0.019f, handSize), b.R(0.042f, handSize), b.R(0.017f, handSize), medial));
+            out.hand.push_back(b.Capsule(hand, palmEnd, fingerEnd - armDirection * (0.012f * s), b.R(0.040f, handSize), b.R(0.016f, handSize), b.R(0.029f, handSize), b.R(0.013f, handSize), medial));
+            const glm::vec3 thumbStart = wrist + armDirection * (0.10f * handLength) + glm::vec3(0.0f, 0.0f, 0.020f * s);
+            out.hand.push_back(b.Capsule(hand, thumbStart, thumbStart + armDirection * (0.28f * handLength) + glm::vec3(0.0f, 0.0f, 0.030f * s), b.R(0.018f, handSize),
+                                         b.R(0.017f, handSize), b.R(0.014f, handSize), b.R(0.013f, handSize), medial));
+        }
 
         const glm::vec3 hip = b.At(thigh);
         const glm::vec3 knee = b.At(calf);
@@ -274,79 +362,39 @@ BodyShape BuildBodyShape(const Skeleton& skeleton, const CharacterParameters& pa
     }
 
     // --- the tree of unions -----------------------------------------------------------------------------------------------
-    BodyShape shape;
-    shape.parts = b.parts;
-    std::vector<BodyShape::Node>& nodes = shape.nodes;
-
-    const auto leaf = [&](int part) {
-        const ShapePart& sp = shape.parts[part];
-        BodyShape::Node node;
-        node.part = part;
-        const float reach = std::max({sp.sideStart, sp.depthStart, sp.sideEnd, sp.depthEnd, sp.alongRadius}) * 1.15f;
-        node.lower = glm::min(sp.start, sp.end) - glm::vec3(reach);
-        node.upper = glm::max(sp.start, sp.end) + glm::vec3(reach);
-        nodes.push_back(node);
-        return static_cast<int>(nodes.size()) - 1;
-    };
-    const auto join = [&](int first, int second, float smoothing) {
-        BodyShape::Node node;
-        node.first = first;
-        node.second = second;
-        node.smoothing = smoothing;
-        node.lower = glm::min(nodes[first].lower, nodes[second].lower) - glm::vec3(smoothing);
-        node.upper = glm::max(nodes[first].upper, nodes[second].upper) + glm::vec3(smoothing);
-        nodes.push_back(node);
-        return static_cast<int>(nodes.size()) - 1;
-    };
-    // Smoothly merges a list of parts one after another.
-    const auto merge = [&](const std::vector<int>& list, float smoothing) {
-        int result = leaf(list[0]);
-        for (size_t i = 1; i < list.size(); ++i) {
-            result = join(result, leaf(list[i]), smoothing);
-        }
-        return result;
-    };
-
-    int body = merge(torsoParts, 0.050f * s);
+    ShapeAssembler& tree = b.assembler;
+    int body = tree.Merge(torsoParts, 0.050f * s);
     int legs[2] = {-1, -1};
     for (const int girdlePart : {sides[0].shoulderGirdle[0], sides[1].shoulderGirdle[0]}) {
-        body = join(body, leaf(girdlePart), 0.030f * s);
+        body = tree.Join(body, tree.Leaf(girdlePart), 0.030f * s);
     }
-    body = join(body, leaf(neck), 0.040f * s);
-    const int head = join(leaf(skull), leaf(jaw), 0.045f * s);
-    body = join(body, head, 0.030f * s);
+    body = tree.Join(body, tree.Leaf(neck), 0.040f * s);
+    if (options.includeHead) {
+        const int head = tree.Join(tree.Leaf(skull), tree.Leaf(jaw), 0.045f * s);
+        body = tree.Join(body, head, 0.030f * s);
+    }
 
     for (int which = 0; which < 2; ++which) {
         const Side& side = sides[which];
         // An arm grows out of the shoulder, and a leg out of the hip.
-        const int upper = merge(side.upperArm, 0.030f * s);
-        const int fore = merge(side.forearm, 0.020f * s);
-        const int hand = merge(side.hand, 0.012f * s);
-        const int arm = join(join(upper, fore, 0.025f * s), hand, 0.014f * s);
-        body = join(body, arm, 0.035f * s);
+        const int upper = tree.Merge(side.upperArm, 0.030f * s);
+        const int fore = tree.Merge(side.forearm, 0.020f * s);
+        int arm = tree.Join(upper, fore, 0.025f * s);
+        if (!side.hand.empty()) {
+            arm = tree.Join(arm, tree.Merge(side.hand, 0.012f * s), 0.014f * s);
+        }
+        body = tree.Join(body, arm, 0.035f * s);
 
-        const int upperLeg = merge(side.thigh, 0.030f * s);
-        const int lowerLeg = merge(side.calf, 0.030f * s);
-        const int footAndToes = join(merge(side.foot, 0.010f * s), merge(side.toes, 0.010f * s), 0.016f * s);
-        legs[which] = join(join(upperLeg, lowerLeg, 0.032f * s), footAndToes, 0.020f * s);
+        const int upperLeg = tree.Merge(side.thigh, 0.030f * s);
+        const int lowerLeg = tree.Merge(side.calf, 0.030f * s);
+        const int footAndToes = tree.Join(tree.Merge(side.foot, 0.010f * s), tree.Merge(side.toes, 0.010f * s), 0.016f * s);
+        legs[which] = tree.Join(tree.Join(upperLeg, lowerLeg, 0.032f * s), footAndToes, 0.020f * s);
     }
     // Each leg is joined to the body on its own, and the two are then united without smoothing, so that one thigh
     // never grows into the other and the body does not depend on which leg was joined first.
-    const int withLeftLeg = join(body, legs[0], 0.045f * s);
-    const int withRightLeg = join(body, legs[1], 0.045f * s);
-    shape.root = join(withLeftLeg, withRightLeg, 0.0f);
-
-    // The box the surface is cut from: every part, and a margin for what smoothing adds outside them.
-    shape.boundsMin = glm::vec3(1e9f);
-    shape.boundsMax = glm::vec3(-1e9f);
-    for (const ShapePart& part : shape.parts) {
-        const float reach = std::max({part.sideStart, part.depthStart, part.sideEnd, part.depthEnd, part.alongRadius});
-        shape.boundsMin = glm::min(shape.boundsMin, glm::min(part.start, part.end) - glm::vec3(reach));
-        shape.boundsMax = glm::max(shape.boundsMax, glm::max(part.start, part.end) + glm::vec3(reach));
-    }
-    shape.boundsMin -= glm::vec3(0.03f * s);
-    shape.boundsMax += glm::vec3(0.03f * s);
-    return shape;
+    const int withLeftLeg = tree.Join(body, legs[0], 0.045f * s);
+    const int withRightLeg = tree.Join(body, legs[1], 0.045f * s);
+    return tree.Finish(tree.Join(withLeftLeg, withRightLeg, 0.0f), 0.03f * s);
 }
 
 }  // namespace character
