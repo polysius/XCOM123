@@ -758,6 +758,47 @@ void EveryChangeOfGaitIsContinuous() {
     }
 }
 
+// The largest turn of any joint, and of the knees, between two frames of a steady gait, in degrees per frame.
+struct StepSizes {
+    float anyJoint = 0.0f;
+    float knee = 0.0f;
+};
+
+StepSizes LargestFrameSteps(const CharacterParameters& person, float speed, float dt) {
+    const std::vector<Frame> frames = Simulate(person, FlatGround(), {{6.0f, speed, 0.0f}}, dt);
+    StepSizes sizes;
+    for (size_t k = static_cast<size_t>(3.5f / dt); k < frames.size(); ++k) {
+        for (int j = 1; j < kJointCount; ++j) {
+            const float step = DegreesBetween(frames[k - 1].pose.rotation[j], frames[k].pose.rotation[j]);
+            sizes.anyJoint = std::max(sizes.anyJoint, step);
+            if (j == character::Index(Joint::CalfL) || j == character::Index(Joint::CalfR)) {
+                sizes.knee = std::max(sizes.knee, step);
+            }
+        }
+    }
+    return sizes;
+}
+
+void AStepOfAFrameShrinksWithTheFrame() {
+    // A pop is a jump that does not get smaller when the frames do. In a steady gait the change of every joint between two
+    // frames is proportional to the length of the frame, and the speed of a knee is what a knee can do.
+    const CharacterParameters person = Person(0.5f, 30, 1.75f, 70, 0.4f);
+    struct Case {
+        float speed;
+        float kneeLimit;  // degrees a second
+        float jointLimit;
+    };
+    for (const Case& gait : {Case{1.4f, 1000.0f, 1000.0f}, Case{3.0f, 1700.0f, 1700.0f}}) {
+        const float dt = 1.0f / 120.0f;
+        const StepSizes coarse = LargestFrameSteps(person, gait.speed, dt);
+        const StepSizes fine = LargestFrameSteps(person, gait.speed, dt / 4.0f);
+        Check(fine.anyJoint < 0.45f * coarse.anyJoint, "at " + std::to_string(gait.speed) + " m/s a joint step shrinks with the frame: " + std::to_string(coarse.anyJoint) + " to " + std::to_string(fine.anyJoint));
+        Check(fine.knee < 0.45f * coarse.knee, "at " + std::to_string(gait.speed) + " m/s a knee step shrinks with the frame: " + std::to_string(coarse.knee) + " to " + std::to_string(fine.knee));
+        Check(coarse.knee / dt < gait.kneeLimit, "a knee turns no faster than " + std::to_string(gait.kneeLimit) + " degrees a second at " + std::to_string(gait.speed) + ": " + std::to_string(coarse.knee / dt));
+        Check(coarse.anyJoint / dt < gait.jointLimit, "a joint turns no faster than " + std::to_string(gait.jointLimit) + " degrees a second at " + std::to_string(gait.speed) + ": " + std::to_string(coarse.anyJoint / dt));
+    }
+}
+
 void TheSameScriptGivesTheSameMotionEveryTime() {
     const std::vector<Segment> script = {{1.0f, 0.0f, 0.0f}, {3.0f, 1.4f, 0.0f}, {3.0f, 3.5f, 0.4f}, {2.0f, 0.0f, 0.0f}};
     for (const CharacterParameters& person : SomePeople()) {
@@ -1639,6 +1680,7 @@ int main(int argc, char** argv) {
         {"ABodyTurnsAndLeansIntoTheTurn", ABodyTurnsAndLeansIntoTheTurn},
         {"AWalkerStartsAndStopsGently", AWalkerStartsAndStopsGently},
         {"EveryChangeOfGaitIsContinuous", EveryChangeOfGaitIsContinuous},
+        {"AStepOfAFrameShrinksWithTheFrame", AStepOfAFrameShrinksWithTheFrame},
         {"TheSameScriptGivesTheSameMotionEveryTime", TheSameScriptGivesTheSameMotionEveryTime},
         {"TheGaitWorksForEveryBodyFromTheSmallestToTheLargest", TheGaitWorksForEveryBodyFromTheSmallestToTheLargest},
         {"PersonalityFollowsFromTheBodyAndTheMood", PersonalityFollowsFromTheBodyAndTheMood},

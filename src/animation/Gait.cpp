@@ -15,6 +15,8 @@ constexpr float kGravity = 9.81f;
 // Updates are made in steps of at most a sixtieth of a second, and an update never covers more than half a second.
 constexpr float kMaxStep = 1.0f / 60.0f;
 constexpr float kLongestUpdate = 0.5f;
+// How fast the lift that a swinging foot needs over and above its planned path may change, in metres a second.
+constexpr float kCorrectionSpeed = 1.5f;
 constexpr float kReferenceLegLength = 0.92f;  // of the person the cadence and speed numbers below were fitted on
 
 // The pitch of the foot, toes up, at heel strike and at toe-off, at full roll (the toes can only bend up 10 degrees, so toe-off is modest).
@@ -413,7 +415,7 @@ float Walker::TerrainDeficit(const glm::vec3& ankle, const glm::quat& footRotati
 // Solves one leg to its foot, and turns the foot. The ankle can only bend so far, so a foot that the gait wants turned
 // further than that ends up turned less; for a swinging foot the toes might then catch the ground, so the foot is lifted by
 // what the pose actually needs and the leg is solved again.
-void Walker::PoseLeg(Pose& built, bool left) {
+void Walker::PoseLeg(Pose& built, bool left, float dt) {
     const character::Skeleton& skeleton = body.skeleton;
     FootTrack& track = feet[left ? 0 : 1];
     const FootPose& foot = track.state;
@@ -424,6 +426,11 @@ void Walker::PoseLeg(Pose& built, bool left) {
     // A planted foot has to stay on its pivot, so if the ankle cannot be turned as far as the gait wants, the foot is turned
     // to the limit and the pivot is kept: the ankle target follows from the pitch the ankle can really reach.
     FootPose wanted = foot;
+    if (track.planted) {
+        track.liftCorrection = 0.0f;
+    } else {
+        wanted.ankle.y += track.liftCorrection * track.swingLift;
+    }
     for (int pass = 0; pass < 3; ++pass) {
         track.legReachesFoot = SolveTwoBone(skeleton, built, leg, wanted.ankle, Forward(wanted.yaw)).reached;
         SetWorldRotation(skeleton, built, footJoint, FootRotation(wanted.yaw, wanted.pitch));
@@ -437,11 +444,16 @@ void Walker::PoseLeg(Pose& built, bool left) {
             wanted = PlantedFootAtPitch(track, track.stanceProgress, actualPitch);
             track.state = wanted;
         } else {
+            // The lift that the pose needs goes into a correction that may change only at a limited speed, so that the ankle
+            // rises smoothly (a step of a frame shrinks with the frame) and not all at once; it fades out as the foot lands.
             const float deficit = TerrainDeficit(wanted.ankle, actualRotation);
-            if (deficit <= 0.0005f) {
+            const float needed = std::max(track.liftCorrection + deficit, 0.0f);
+            const float change = std::clamp(needed - track.liftCorrection, -kCorrectionSpeed * dt, kCorrectionSpeed * dt);
+            if (pass > 0 || std::abs(change) < 1e-6f) {
                 break;
             }
-            wanted.ankle.y += deficit;
+            track.liftCorrection += change;
+            wanted.ankle.y = foot.ankle.y + track.liftCorrection * track.swingLift;
         }
     }
     built.rotation[character::Index(toes)] = ClampToLimits(skeleton, toes, glm::angleAxis(wanted.toeFlex, glm::vec3(1.0f, 0.0f, 0.0f)));
@@ -460,12 +472,14 @@ void Walker::UpdateFoot(bool left, float cyclePosition) {
     foot.planted = shouldBePlanted;
 
     foot.stanceProgress = foot.planted ? cyclePosition / shape.dutyFactor : 0.0f;
+    foot.swingLift = 0.0f;
     if (foot.planted) {
         foot.state = PlantedFoot(foot, foot.stanceProgress);
     } else {
         const float swingProgress = (cyclePosition - shape.dutyFactor) / (1.0f - shape.dutyFactor);
         foot.footfall = PredictFootfall(left, (1.0f - cyclePosition) * shape.period);
         foot.state = SwingingFoot(foot, swingProgress, foot.footfall);
+        foot.swingLift = Smoothstep(0.0f, 0.12f, 1.0f - swingProgress);  // the correction goes out over the last tenth of the swing
     }
 }
 
@@ -584,8 +598,8 @@ void Walker::BuildPose(float dt) {
     SetPelvisPosition(skeleton, built, pelvisPosition);
 
     // The legs, from the planted and swinging feet.
-    PoseLeg(built, true);
-    PoseLeg(built, false);
+    PoseLeg(built, true, dt);
+    PoseLeg(built, false, dt);
 
     // Everything above the pelvis is held to the range of the human body.
     for (const Joint joint : {Joint::Spine1, Joint::Spine2, Joint::Neck, Joint::Head, Joint::ClavicleL, Joint::ClavicleR, Joint::UpperArmL, Joint::UpperArmR,

@@ -104,6 +104,8 @@ private:
     struct FootTrack {
         bool planted = true;
         float stanceProgress = 0.0f;  // 0 at heel strike, 1 at toe-off, and 0 while the foot swings
+        float swingLift = 0.0f;       // 0 on the ground; 1 through most of a swing; fades out as the foot lands
+        float liftCorrection = 0.0f;  // extra lift, in metres, that the pose needed (see PoseLeg)
         bool legReachesFoot = true;   // whether the leg could put the ankle where the gait wanted it at the last update
         int footfalls = 0;
         Footfall footfall;   // where the foot is planted, or is going to land
@@ -118,7 +120,7 @@ private:
     FootPose PlantedFoot(const FootTrack& foot, float stanceProgress) const;
     FootPose PlantedFootAtPitch(const FootTrack& foot, float stanceProgress, float pitch) const;
     float TerrainDeficit(const glm::vec3& ankle, const glm::quat& footRotation) const;
-    void PoseLeg(Pose& built, bool left);
+    void PoseLeg(Pose& built, bool left, float dt);
     FootPose SwingingFoot(const FootTrack& foot, float swingProgress, const Footfall& landing) const;
     void UpdateFoot(bool left, float cyclePosition);
     void Step(float dt, float wantedSpeed, float wantedTurnRate);
