@@ -110,9 +110,8 @@ glm::quat AboutX(float degrees) {
     return glm::angleAxis(degrees * kDegreesToRadians, glm::vec3(1.0f, 0.0f, 0.0f));
 }
 
-// The orientation of a foot: turned to a heading, then pitched with the toes up by `pitch` radians.
 glm::quat FootRotation(float yaw, float pitch) {
-    return YawRotation(yaw) * glm::angleAxis(-pitch, glm::vec3(1.0f, 0.0f, 0.0f));
+    return FootOrientation(yaw, pitch);
 }
 
 // The angle the walking and running shapes use for a speed: the speed of a person with the reference leg that moves like this one.

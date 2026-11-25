@@ -20,6 +20,7 @@
 #include "animation/Gait.h"
 #include "animation/Kinematics.h"
 #include "animation/JointLimits.h"
+#include "animation/SitStand.h"
 #include "core/PngWriter.h"
 
 namespace {
@@ -157,6 +158,23 @@ void DrawFigure(Canvas& canvas, const character::Skeleton& skeleton, const Pose&
     canvas.Line(view.ScreenX(head), view.ScreenY(head), view.ScreenX(nose), view.ScreenY(nose), thickness, Faded(kSpine, alpha));
 }
 
+// A row of figures across the canvas, one cell for each pose, the pelvis in the middle of its cell: side view or front view.
+void DrawPoseRow(Canvas& canvas, const character::Skeleton& skeleton, const std::vector<Pose>& poses, const GroundFunction& ground, int rowTop, int cellHeight, bool front) {
+    const float cellWidth = 1800.0f / static_cast<float>(poses.size());
+    for (size_t f = 0; f < poses.size(); ++f) {
+        const glm::vec3 pelvis = character::JointPositions(skeleton, poses[f])[0];
+        View view;
+        view.front = front;
+        view.scale = 0.78f * cellHeight / skeleton.statureMeters;
+        view.originX = (f + 0.5f) * cellWidth - (front ? pelvis.x : pelvis.z) * view.scale;
+        // The ground under the figure.
+        const float groundY = ground(pelvis.x, pelvis.z);
+        view.originY = rowTop + cellHeight - 20.0f + groundY * view.scale;
+        canvas.Line(f * cellWidth + 4.0f, view.originY - groundY * view.scale, (f + 1) * cellWidth - 4.0f, view.originY - groundY * view.scale, 1.5f, kGround);
+        DrawFigure(canvas, skeleton, poses[f], view, 1.0f, 3.0f);
+    }
+}
+
 struct Options {
     std::string out = "animation_walk.png";
     float speed = 1.4f;
@@ -169,6 +187,7 @@ struct Options {
     int frames = 8;
     float turn = 0.0f;
     bool trace = false;  // print the height of the pelvis at every step of the cycle
+    bool sit = false;    // draw sitting down onto a chair instead of a walk
 };
 
 bool ParseOptions(int argc, char** argv, Options& options) {
@@ -176,6 +195,10 @@ bool ParseOptions(int argc, char** argv, Options& options) {
         const std::string name = argv[i];
         if (name == "--trace") {
             options.trace = true;
+            continue;
+        }
+        if (name == "--sit") {
+            options.sit = true;
             continue;
         }
         if (i + 1 >= argc) {
@@ -217,6 +240,40 @@ std::array<glm::vec3, 3> FootContactPoints(const character::Skeleton& skeleton, 
     return {Transform(skin, contacts.heel), Transform(skin, contacts.ball), Transform(skin, contacts.toe)};
 }
 
+// A sheet of sitting down onto a seat: the side and the front view at `frames` moments from standing to seated.
+int WriteSitSheet(const Options& options, const BodyModel& body) {
+    Seat seat;
+    seat.center = glm::vec3(0.0f, 0.45f * body.skeleton.statureMeters / 1.75f, 0.0f);
+    seat.facing = 0.0f;
+    const GroundFunction flat = [](float, float) { return 0.0f; };
+    std::vector<Pose> moments;
+    for (int f = 0; f < options.frames; ++f) {
+        moments.push_back(SitPose(body, seat, static_cast<float>(f) / (options.frames - 1), flat));
+    }
+    const int cellHeight = 380;
+    Canvas canvas(1800, 2 * cellHeight);
+    DrawPoseRow(canvas, body.skeleton, moments, flat, 0, cellHeight, false);
+    DrawPoseRow(canvas, body.skeleton, moments, flat, cellHeight, cellHeight, true);
+    // The seat, in the side view of every cell.
+    const float cellWidth = 1800.0f / static_cast<float>(moments.size());
+    for (size_t f = 0; f < moments.size(); ++f) {
+        const float pelvisZ = character::JointPositions(body.skeleton, moments[f])[0].z;
+        View view;
+        view.scale = 0.78f * cellHeight / body.skeleton.statureMeters;
+        view.originX = (f + 0.5f) * cellWidth - pelvisZ * view.scale;
+        view.originY = cellHeight - 20.0f;
+        const glm::vec3 back(0.0f, seat.center.y, -0.22f);
+        const glm::vec3 front(0.0f, seat.center.y, 0.22f);
+        canvas.Line(view.ScreenX(back), view.ScreenY(back), view.ScreenX(front), view.ScreenY(front), 5.0f, Color{90, 60, 30, 1.0f});
+    }
+    if (!canvas.Save(options.out)) {
+        std::cerr << "could not write " << options.out << "\n";
+        return 1;
+    }
+    std::cout << "wrote " << options.out << "\n";
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -232,6 +289,9 @@ int main(int argc, char** argv) {
     parameters.seed = options.seed;
 
     const BodyModel body = MakeBodyModel(parameters);
+    if (options.sit) {
+        return WriteSitSheet(options, body);
+    }
     const Personality personality = PersonalityFrom(body.parameters);
     const float slope = std::tan(options.slopeDegrees * kDegreesToRadians);
     GroundFunction ground = [slope](float, float z) { return slope * z; };
@@ -337,22 +397,12 @@ int main(int argc, char** argv) {
     }
 
     // The middle and bottom rows: the side and the front view of each moment, the pelvis in the middle of the cell.
-    const float cellWidth = static_cast<float>(width) / frames;
-    for (int row = 0; row < 2; ++row) {
-        for (int f = 0; f < frames; ++f) {
-            const Snapshot& snapshot = all[static_cast<size_t>(f) * steps / frames];
-            const glm::vec3 pelvis = character::JointPositions(body.skeleton, snapshot.pose)[0];
-            View view;
-            view.front = row == 1;
-            view.scale = 0.78f * cellHeight / options.stature;
-            view.originX = (f + 0.5f) * cellWidth - (row == 1 ? pelvis.x : pelvis.z) * view.scale;
-            // The ground under the figure, at the height of the path point.
-            const float groundY = ground(pelvis.x, pelvis.z);
-            view.originY = topHeight + (row + 1) * cellHeight - 20.0f + groundY * view.scale;
-            canvas.Line(f * cellWidth + 4.0f, view.originY - groundY * view.scale, (f + 1) * cellWidth - 4.0f, view.originY - groundY * view.scale, 1.5f, kGround);
-            DrawFigure(canvas, body.skeleton, snapshot.pose, view, 1.0f, 3.0f);
-        }
+    std::vector<Pose> moments;
+    for (int f = 0; f < frames; ++f) {
+        moments.push_back(all[static_cast<size_t>(f) * steps / frames].pose);
     }
+    DrawPoseRow(canvas, body.skeleton, moments, ground, topHeight, cellHeight, false);
+    DrawPoseRow(canvas, body.skeleton, moments, ground, topHeight + cellHeight, cellHeight, true);
     canvas.Rectangle(0, topHeight - 2, width, 3, Color{0, 0, 0, 0.6f});
     canvas.Rectangle(0, topHeight + cellHeight - 1, width, 2, Color{0, 0, 0, 0.3f});
 

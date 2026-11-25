@@ -23,10 +23,6 @@
 
 namespace animation {
 
-// The height of the ground at a place, in metres: the ground callback of the gait. Feet are planted on it, so a slope or a
-// step or a hill changes the pose of the legs and the height of the pelvis.
-using GroundFunction = std::function<float(float x, float z)>;
-
 struct LocomotionCommand {
     float speed = 0.0f;     // metres a second, forwards
     float turnRate = 0.0f;  // radians a second about the vertical; positive turns towards +X, the character's left

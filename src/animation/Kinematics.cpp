@@ -81,6 +81,10 @@ glm::quat YawRotation(float radians) {
     return glm::angleAxis(radians, glm::vec3(0.0f, 1.0f, 0.0f));
 }
 
+glm::quat FootOrientation(float yaw, float pitch) {
+    return YawRotation(yaw) * glm::angleAxis(-pitch, glm::vec3(1.0f, 0.0f, 0.0f));
+}
+
 float RotationAngleDegrees(const glm::quat& rotation) {
     const float w = std::clamp(std::abs(glm::normalize(rotation).w), 0.0f, 1.0f);
     return 2.0f * std::acos(w) * kRadiansToDegrees;

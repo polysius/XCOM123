@@ -1,5 +1,7 @@
 #pragma once
 
+#include <functional>
+
 #include <glm/glm.hpp>
 
 #include "character/CharacterParameters.h"
@@ -9,6 +11,11 @@
 // the ground. Nothing is assumed about the proportions; a tall person and a short one both read their own skeleton.
 
 namespace animation {
+
+// The height of the ground at a place, in metres: the ground callback of the gait and of the posing functions. Feet are planted
+// on it, so a slope or a step or a hill changes the pose of the legs and the height of the pelvis. An empty function is flat
+// ground at height 0.
+using GroundFunction = std::function<float(float x, float z)>;
 
 struct BodyModel {
     character::CharacterParameters parameters;  // sanitised

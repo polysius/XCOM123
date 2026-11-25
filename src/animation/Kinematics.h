@@ -64,6 +64,10 @@ glm::quat RotationBetweenFrames(const glm::vec3& fromFirst, const glm::vec3& fro
 // A rotation about Y: the heading of a body. Zero faces +Z, and a positive angle turns towards +X.
 glm::quat YawRotation(float radians);
 
+// The orientation of a foot: turned to a heading, then pitched with the toes up by `pitch` radians (about the foot's own X axis,
+// where a positive rotation points the toes down, so the pitch enters with a minus sign).
+glm::quat FootOrientation(float yaw, float pitch);
+
 // The angle of a rotation in degrees, 0 to 180: how far it turns, whatever the axis.
 float RotationAngleDegrees(const glm::quat& rotation);
 

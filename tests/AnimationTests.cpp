@@ -17,7 +17,11 @@
 #include <vector>
 
 #include "animation/BodyModel.h"
+#include "animation/Blending.h"
 #include "animation/Gait.h"
+#include "animation/LookAt.h"
+#include "animation/Secondary.h"
+#include "animation/SitStand.h"
 #include "animation/IdleMotion.h"
 #include "animation/JointLimits.h"
 #include "animation/Kinematics.h"
@@ -933,6 +937,539 @@ void StandingStillBreathesAndShiftsWeightWithoutMovingTheFeet() {
     Check(LargestAngularSpeed(frames, dt, 0) < 40.0f, "a standing person moves slowly");
 }
 
+// ---------------------------------------------------------------------------
+// Looking
+// ---------------------------------------------------------------------------
+
+Pose StandingPose(const BodyModel& body) {
+    Walker walker(body, PersonalityFrom(body.parameters));
+    walker.Reset(glm::vec3(0.0f), 0.0f);
+    return walker.CurrentPose();
+}
+
+float AngleBetweenDegrees(const glm::vec3& a, const glm::vec3& b) {
+    return std::acos(std::clamp(glm::dot(glm::normalize(a), glm::normalize(b)), -1.0f, 1.0f)) * kRadiansToDegrees;
+}
+
+void TheHeadAndEyesLookAtWhatIsInRange() {
+    Random random(41);
+    for (const CharacterParameters& person : SomePeople()) {
+        const BodyModel body = MakeBodyModel(person);
+        for (int trial = 0; trial < 60; ++trial) {
+            Pose pose = StandingPose(body);
+            const float yaw = random.Between(-70.0f, 70.0f) * kDegreesToRadians;
+            const float pitch = random.Between(-30.0f, 35.0f) * kDegreesToRadians;
+            const float distance = random.Between(0.8f, 6.0f);
+            const glm::vec3 eyes = EyeCentre(body, pose);
+            const glm::vec3 target = eyes + distance * glm::vec3(std::cos(pitch) * std::sin(yaw), std::sin(pitch), std::cos(pitch) * std::cos(yaw));
+            const LookAtResult result = LookAt(body, pose, target);
+            Check(result.reachedWithHeadAndEyes, "a target in range is looked at: error " + std::to_string(result.errorDegrees) + " degrees");
+            // The gaze, from the eye centre, is on the target: the head faces it up to what the eyes can add.
+            const glm::vec3 toTarget = target - EyeCentre(body, pose);
+            Check(AngleBetweenDegrees(HeadForward(body, pose), toTarget) < 35.0f, "the head faces roughly at the target");
+            Check(std::abs(result.leftEye.yawDegrees) <= 35.01f && std::abs(result.rightEye.yawDegrees) <= 35.01f, "the eyes stay within their range");
+            Check(LimitExcessDegrees(body.skeleton, Joint::Neck, pose.rotation[character::Index(Joint::Neck)]) < 0.1f, "the neck is inside its limits");
+            Check(LimitExcessDegrees(body.skeleton, Joint::Head, pose.rotation[character::Index(Joint::Head)]) < 0.1f, "the head is inside its limits");
+        }
+    }
+}
+
+void ATargetBehindIsLookedAtAsFarAsTheNeckAllows() {
+    const BodyModel body = MakeBodyModel(Person(0.5f, 30, 1.75f, 70, 0.4f));
+    Pose pose = StandingPose(body);
+    const glm::vec3 target = EyeCentre(body, pose) + glm::vec3(0.0f, 0.0f, -3.0f);
+    const LookAtResult result = LookAt(body, pose, target);
+    Check(!result.reachedWithHeadAndEyes, "a target behind cannot be looked at");
+    Check(result.errorDegrees > 20.0f, "the gaze misses a target behind by a good deal");
+    for (const Joint joint : {Joint::Neck, Joint::Head}) {
+        Check(LimitExcessDegrees(body.skeleton, joint, pose.rotation[character::Index(joint)]) < 0.1f, "the neck and head are held to their limits");
+    }
+    // The head still turns round as far as it can.
+    Check(HeadForward(body, pose).z < 0.5f || std::abs(HeadForward(body, pose).x) > 0.8f, "the head turns a long way towards the target");
+}
+
+void TheLookFadesInWithItsWeight() {
+    const BodyModel body = MakeBodyModel(Person(0.5f, 30, 1.75f, 70, 0.4f));
+    const Pose standing = StandingPose(body);
+    const glm::vec3 target = EyeCentre(body, standing) + glm::vec3(2.0f, 0.3f, 2.0f);
+    Pose none = standing;
+    LookAt(body, none, target, 0.0f);
+    Check(DegreesBetween(none.rotation[character::Index(Joint::Head)], standing.rotation[character::Index(Joint::Head)]) < 1e-3f, "a look of weight 0 changes nothing");
+    Pose half = standing;
+    Pose full = standing;
+    LookAt(body, half, target, 0.5f);
+    LookAt(body, full, target, 1.0f);
+    const float halfTurn = DegreesBetween(half.rotation[character::Index(Joint::Head)], standing.rotation[character::Index(Joint::Head)]);
+    const float fullTurn = DegreesBetween(full.rotation[character::Index(Joint::Head)], standing.rotation[character::Index(Joint::Head)]);
+    Check(halfTurn > 0.3f * fullTurn && halfTurn < 0.7f * fullTurn, "a look of weight a half turns the head about half as far");
+}
+
+void TheEyesConvergeOnANearTarget() {
+    const BodyModel body = MakeBodyModel(Person(0.5f, 30, 1.75f, 70, 0.4f));
+    Pose pose = StandingPose(body);
+    const glm::vec3 near = EyeCentre(body, pose) + glm::vec3(0.0f, 0.0f, 0.4f);
+    const LookAtResult closeLook = LookAt(body, pose, near);
+    Check(closeLook.leftEye.yawDegrees < -1.0f && closeLook.rightEye.yawDegrees > 1.0f, "the eyes turn in towards a target close to the nose");
+    Pose farPose = StandingPose(body);
+    const glm::vec3 far = EyeCentre(body, farPose) + glm::vec3(0.0f, 0.0f, 20.0f);
+    const LookAtResult farLook = LookAt(body, farPose, far);
+    Check(std::abs(farLook.leftEye.yawDegrees) < 0.5f && std::abs(farLook.rightEye.yawDegrees) < 0.5f, "the eyes look nearly straight at a distant target");
+}
+
+// ---------------------------------------------------------------------------
+// Springs, secondary motion and hits
+// ---------------------------------------------------------------------------
+
+void ACriticallyDampedSpringFollowsTheExactSolutionAtAnyStepSize() {
+    const float omega = 9.0f;
+    SpringState fine{glm::vec3(1.0f, -0.5f, 0.2f), glm::vec3(2.0f, 1.0f, -3.0f)};
+    SpringState coarse = fine;
+    for (int i = 0; i < 100; ++i) {
+        StepCriticallyDamped(fine, glm::vec3(0.3f, 0.0f, -0.2f), omega, 0.001f);
+    }
+    StepCriticallyDamped(coarse, glm::vec3(0.3f, 0.0f, -0.2f), omega, 0.1f);
+    Check(glm::length(fine.value - coarse.value) < 1e-4f && glm::length(fine.velocity - coarse.velocity) < 1e-3f, "one big step gives what many small steps give");
+    // And the closed form: from 1 with no velocity and no force, y(t) = (1 + w t) e^(-w t).
+    SpringState spring{glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.0f)};
+    StepCriticallyDamped(spring, glm::vec3(0.0f), omega, 0.2f);
+    Check(std::abs(spring.value.x - (1.0f + omega * 0.2f) * std::exp(-omega * 0.2f)) < 1e-5f, "the spring matches the closed form");
+    // A step of zero time changes nothing.
+    SpringState same = spring;
+    StepCriticallyDamped(same, glm::vec3(1.0f), omega, 0.0f);
+    Check(same.value == spring.value && same.velocity == spring.velocity, "a step of no time changes nothing");
+}
+
+void ACriticallyDampedSpringNeverOvershoots() {
+    const float omega = 10.0f;
+    // Released from a displacement: it falls to zero and stays above it.
+    SpringState released{glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.0f)};
+    float previous = 1.0f;
+    for (int i = 0; i < 400; ++i) {
+        StepCriticallyDamped(released, glm::vec3(0.0f), omega, 0.005f);
+        Check(released.value.x >= -1e-6f && released.value.x <= previous + 1e-6f, "a released spring falls without crossing zero");
+        previous = released.value.x;
+    }
+    Check(released.value.x < 0.001f, "and settles");
+    // Kicked from rest: it goes out and returns, and never goes the other way.
+    SpringState kicked{glm::vec3(0.0f), glm::vec3(3.0f, 0.0f, 0.0f)};
+    float peak = 0.0f;
+    for (int i = 0; i < 400; ++i) {
+        StepCriticallyDamped(kicked, glm::vec3(0.0f), omega, 0.005f);
+        Check(kicked.value.x >= -1e-6f, "a kicked spring does not swing past rest");
+        peak = std::max(peak, kicked.value.x);
+    }
+    Check(std::abs(peak - 3.0f / (2.71828183f * omega)) < 0.005f, "the peak of a kick is v0 over e omega");
+    // Pushed by a steady force: it climbs to force over omega squared and does not pass it.
+    SpringState pushed{};
+    for (int i = 0; i < 800; ++i) {
+        StepCriticallyDamped(pushed, glm::vec3(5.0f, 0.0f, 0.0f), omega, 0.005f);
+        Check(pushed.value.x <= 5.0f / (omega * omega) + 1e-6f, "a pushed spring does not overshoot its balance point");
+    }
+    Check(std::abs(pushed.value.x - 0.05f) < 1e-4f, "and reaches it");
+}
+
+void TheChestAndHeadLagBehindAcceleration() {
+    SecondaryMotion motion;
+    const float dt = 1.0f / 120.0f;
+    BodyLayer layer;
+    for (int i = 0; i < 240; ++i) {
+        layer = motion.Update(dt, glm::vec3(0.0f, 0.0f, 0.0f), 0.0f);
+    }
+    Check(RotationAngleDegrees(layer.additive.rotation[character::Index(Joint::Spine2)]) < 1e-3f, "a body that is not accelerating has no secondary motion");
+    // Speeding up forwards tips the chest back (negative about X) by an amount that grows with the acceleration.
+    float chestPitch = 0.0f;
+    for (int i = 0; i < 240; ++i) {
+        layer = motion.Update(dt, glm::vec3(0.0f, 0.0f, 3.0f), 0.0f);
+        chestPitch = EulerDegrees(layer.additive.rotation[character::Index(Joint::Spine2)]).x;
+        Check(chestPitch <= 1e-4f, "the chest tips back as the body speeds up");
+        Check(RotationAngleDegrees(layer.additive.rotation[character::Index(Joint::Spine2)]) <= 8.01f, "the lean stays within the limit");
+    }
+    Check(chestPitch < -1.5f, "the chest settles tipped back: " + std::to_string(chestPitch));
+    // It comes back when the acceleration stops, without swinging forwards.
+    for (int i = 0; i < 600; ++i) {
+        layer = motion.Update(dt, glm::vec3(0.0f), 0.0f);
+        Check(EulerDegrees(layer.additive.rotation[character::Index(Joint::Spine2)]).x <= 1e-3f, "the chest does not swing forwards past upright");
+    }
+    Check(RotationAngleDegrees(layer.additive.rotation[character::Index(Joint::Spine2)]) < 0.05f, "the chest returns to upright");
+    // The legs are not touched.
+    for (const Joint joint : {Joint::ThighL, Joint::CalfR, Joint::FootL, Joint::Pelvis}) {
+        Check(RotationAngleDegrees(layer.additive.rotation[character::Index(joint)]) == 0.0f, "secondary motion leaves the legs alone");
+    }
+    // Frame rate does not matter.
+    SecondaryMotion slow;
+    SecondaryMotion fast;
+    BodyLayer a;
+    BodyLayer b;
+    for (int i = 0; i < 30; ++i) {
+        a = slow.Update(1.0f / 30.0f, glm::vec3(0.0f, 0.0f, 3.0f), 0.0f);
+        for (int j = 0; j < 4; ++j) {
+            b = fast.Update(1.0f / 120.0f, glm::vec3(0.0f, 0.0f, 3.0f), 0.0f);
+        }
+    }
+    Check(DegreesBetween(a.additive.rotation[character::Index(Joint::Head)], b.additive.rotation[character::Index(Joint::Head)]) < 0.05f, "secondary motion is the same at 30 and 120 frames a second");
+}
+
+void APushMakesTheBodyGiveAndComeBack() {
+    const float dt = 1.0f / 120.0f;
+    HitReaction hit;
+    Check(hit.Settled(), "a body that has not been hit is settled");
+    hit.Push(glm::vec3(0.0f, 0.0f, 2.0f), 0.0f);  // a shove from behind: the body is sent forwards
+    float peakShift = 0.0f;
+    float lowestPitch = 0.0f;
+    float previousShift = 0.0f;
+    bool falling = false;
+    BodyLayer layer;
+    for (int i = 0; i < 600; ++i) {
+        layer = hit.Update(dt);
+        const float shift = layer.pelvisOffset.z;
+        Check(shift >= -1e-5f, "the pelvis is shoved the way of the push and does not swing back past rest");
+        if (shift < previousShift) {
+            falling = true;
+        }
+        Check(!falling || shift <= previousShift + 1e-6f, "after its peak the pelvis only comes back");
+        previousShift = shift;
+        peakShift = std::max(peakShift, shift);
+        lowestPitch = std::min(lowestPitch, EulerDegrees(layer.additive.rotation[character::Index(Joint::Spine2)]).x);
+    }
+    Check(peakShift > 0.03f && peakShift <= 0.1001f, "the pelvis gives by a few centimetres: " + std::to_string(peakShift));
+    Check(lowestPitch < -3.0f, "the trunk tips back: " + std::to_string(lowestPitch));
+    Check(hit.Settled(), "after five seconds the body has settled");
+
+    // A push twice as big is a body that moves twice as far (until the limit).
+    HitReaction small;
+    HitReaction big;
+    small.Push(glm::vec3(1.0f, 0.0f, 0.0f), 0.0f);
+    big.Push(glm::vec3(2.0f, 0.0f, 0.0f), 0.0f);
+    float smallPeak = 0.0f;
+    float bigPeak = 0.0f;
+    for (int i = 0; i < 240; ++i) {
+        smallPeak = std::max(smallPeak, std::abs(small.Update(dt).pelvisOffset.x));
+        bigPeak = std::max(bigPeak, std::abs(big.Update(dt).pelvisOffset.x));
+    }
+    Check(std::abs(bigPeak - 2.0f * smallPeak) < 0.002f, "a bigger push moves the body further in proportion");
+    // The push is in the world, the body is turned: a push towards +X on a body that faces +X is a push forwards.
+    HitReaction turned;
+    turned.Push(glm::vec3(2.0f, 0.0f, 0.0f), 3.14159265f * 0.5f);
+    Check(std::abs(turned.Update(0.1f).pelvisOffset.z) > 0.01f, "a push is taken in the frame of the body");
+}
+
+void ABodyWalksOnWhileItIsPushed() {
+    // A push while walking: the feet stay planted, the pose has no jumps (the onset has its own, looser bound).
+    const float dt = 1.0f / 60.0f;
+    const BodyModel body = MakeBodyModel(Person(0.5f, 30, 1.75f, 70, 0.4f));
+    Walker walker(body, PersonalityFrom(body.parameters));
+    walker.Reset(glm::vec3(0.0f), 0.0f);
+    HitReaction hit;
+    SecondaryMotion secondary;
+    glm::vec3 previousVelocity(0.0f);
+    glm::vec3 previousPosition = walker.Position();
+    std::vector<Frame> frames;
+    for (int i = 0; i < 60 * 8; ++i) {
+        if (i == 60 * 5) {
+            hit.Push(glm::vec3(1.5f, 0.0f, -1.0f), walker.Heading());
+        }
+        const glm::vec3 velocity = (walker.Position() - previousPosition) / dt;
+        const glm::vec3 acceleration = (velocity - previousVelocity) / dt;
+        previousPosition = walker.Position();
+        previousVelocity = velocity;
+        walker.SetLayer(CombinedLayers(hit.Update(dt), secondary.Update(dt, acceleration, walker.Heading())));
+        walker.Update(dt, LocomotionCommand{1.4f, 0.0f});
+        frames.push_back(RecordFrame(walker));
+    }
+    CheckWalk(frames, FlatGround(), dt, "walking and pushed", 0, 0.25f);
+    const size_t hitFrame = 60 * 5;
+    Check(LargestAngularSpeed(frames, dt, 60 * 3) < 2300.0f, "the pose has no pops while pushed");
+    // The onset of the hit is the quickest thing the body does: the trunk reaches its peak within a fraction of a second.
+    float onset = 0.0f;
+    for (size_t k = hitFrame; k < hitFrame + 30; ++k) {
+        onset = std::max(onset, DegreesBetween(frames[k - 1].pose.rotation[character::Index(Joint::Spine2)], frames[k].pose.rotation[character::Index(Joint::Spine2)]) / dt);
+    }
+    Check(onset < 400.0f, "the trunk does not jerk at the onset of a hit: " + std::to_string(onset) + " degrees a second");
+}
+
+// ---------------------------------------------------------------------------
+// Sitting down and standing up
+// ---------------------------------------------------------------------------
+
+std::vector<float> SitProgressSteps(int count) {
+    std::vector<float> steps;
+    for (int i = 0; i <= count; ++i) {
+        steps.push_back(static_cast<float>(i) / count);
+    }
+    return steps;
+}
+
+void CheckSitting(const BodyModel& body, const Seat& seat, const GroundFunction& ground, const std::string& label) {
+    const Skeleton& skeleton = body.skeleton;
+    const std::array<glm::vec3, 2> heels = {SitHeel(body, seat, true, ground), SitHeel(body, seat, false, ground)};
+    Pose previous = SitPose(body, seat, 0.0f, ground);
+    float previousPelvisHeight = 1000.0f;
+    for (const float progress : SitProgressSteps(60)) {
+        const Pose pose = SitPose(body, seat, progress, ground);
+        const std::array<glm::vec3, kJointCount> joints = character::JointPositions(skeleton, pose);
+        for (int i = 0; i < 2; ++i) {
+            const FootSample foot = MeasureFoot(skeleton, pose, i == 0);
+            const std::string at = label + " at " + std::to_string(progress);
+            Check(glm::length(glm::vec2(foot.heel.x - heels[i].x, foot.heel.z - heels[i].z)) < 0.004f, at + ": a foot slides while sitting");
+            Check(std::abs(foot.heel.y - ground(foot.heel.x, foot.heel.z)) < 0.006f, at + ": a heel is off the ground");
+            Check(std::abs(foot.ball.y - ground(foot.ball.x, foot.ball.z)) < 0.012f, at + ": a ball is off the ground");
+            const Joint knee = i == 0 ? Joint::CalfL : Joint::CalfR;
+            Check(FlexionDegrees(skeleton, knee, pose.rotation[character::Index(knee)]) > -0.5f, at + ": a knee bends backwards");
+            Check(FlexionDegrees(skeleton, knee, pose.rotation[character::Index(knee)]) < skeleton[knee].maxAngleDegrees.x, at + ": a knee bends too far");
+        }
+        for (int j = 1; j < kJointCount; ++j) {
+            Check(LimitExcessDegrees(skeleton, static_cast<Joint>(j), pose.rotation[j]) < 0.3f, label + ": a joint is outside its limits: " + skeleton.joints[j].name);
+        }
+        Check(joints[0].y <= previousPelvisHeight + 1e-4f, label + ": the pelvis goes down all the way");
+        previousPelvisHeight = joints[0].y;
+        float largest = 0.0f;
+        for (int j = 1; j < kJointCount; ++j) {
+            largest = std::max(largest, DegreesBetween(previous.rotation[j], pose.rotation[j]));
+        }
+        Check(largest < 6.0f, label + ": the pose does not jump between steps of a sixtieth of the motion: " + std::to_string(largest) + " degrees");
+        previous = pose;
+    }
+
+    const std::array<glm::vec3, kJointCount> standing = character::JointPositions(skeleton, SitPose(body, seat, 0.0f, ground));
+    const Pose seatedPose = SitPose(body, seat, 1.0f, ground);
+    const std::array<glm::vec3, kJointCount> seated = character::JointPositions(skeleton, seatedPose);
+    const float legReach = body.thighLength + body.shankLength;
+    Check(standing[0].y - heels[0].y > 0.9f * (legReach + body.ankleHeight), label + ": a person at the start of a sit stands");
+    Check(std::abs(seated[0].y - (seat.center.y + 0.058f * skeleton.statureMeters)) < 0.01f, label + ": the pelvis rests at the height of the seat");
+    Check(glm::length(glm::vec2(seated[0].x - seat.center.x, seated[0].z - seat.center.z)) < 0.01f, label + ": the pelvis is over the seat");
+    // Seated, the thighs are close to level, the knees bent to a right angle, and the trunk upright.
+    for (const bool left : {true, false}) {
+        const glm::vec3 thigh = seated[character::Index(left ? Joint::CalfL : Joint::CalfR)] - seated[character::Index(left ? Joint::ThighL : Joint::ThighR)];
+        Check(std::abs(thigh.y) < 0.45f * glm::length(thigh), label + ": a seated thigh is about level");
+        const Joint knee = left ? Joint::CalfL : Joint::CalfR;
+        const float flexion = FlexionDegrees(skeleton, knee, seatedPose.rotation[character::Index(knee)]);
+        Check(flexion > 55.0f && flexion < 120.0f, label + ": a seated knee is bent to about a right angle: " + std::to_string(flexion));
+    }
+    Check(std::abs(seated[character::Index(Joint::Head)].x - seated[0].x) < 0.06f, label + ": the trunk is upright when seated");
+}
+
+void ASittingPersonKeepsTheirFeetDownAndEndsOnTheSeat() {
+    for (const CharacterParameters& person : SomePeople()) {
+        const BodyModel body = MakeBodyModel(person);
+        Seat seat;
+        seat.center = glm::vec3(2.0f, 0.45f * body.skeleton.statureMeters / 1.75f, -1.0f);
+        seat.facing = 0.7f;
+        CheckSitting(body, seat, FlatGround(), "stature " + std::to_string(person.statureMeters));
+    }
+    for (const CharacterParameters& person : ExtremePeople()) {
+        const BodyModel body = MakeBodyModel(person);
+        Seat seat;
+        seat.center = glm::vec3(0.0f, 0.45f * body.skeleton.statureMeters / 1.75f, 0.0f);
+        seat.facing = 0.0f;
+        CheckSitting(body, seat, FlatGround(), "extreme stature " + std::to_string(person.statureMeters) + " mass " + std::to_string(person.massKg));
+    }
+    // On a slope the seat is higher above the sea and the feet follow the ground.
+    const BodyModel body = MakeBodyModel(Person(0.5f, 30, 1.75f, 70, 0.4f));
+    Seat seat;
+    seat.facing = 0.0f;
+    const GroundFunction slope = SlopedGround(8.0f);
+    seat.center = glm::vec3(0.0f, slope(0.0f, 0.0f) + 0.45f, 0.0f);
+    CheckSitting(body, seat, slope, "on a slope");
+}
+
+void StandingUpIsSittingDownBackwards() {
+    const BodyModel body = MakeBodyModel(Person(0.5f, 30, 1.75f, 70, 0.4f));
+    Seat seat;
+    seat.center = glm::vec3(0.0f, 0.45f, 0.0f);
+    float previous = -1000.0f;
+    for (const float progress : SitProgressSteps(40)) {
+        const Pose standingUp = SitPose(body, seat, 1.0f - progress);
+        const float height = character::JointPositions(body.skeleton, standingUp)[0].y;
+        Check(height >= previous - 1e-4f, "the pelvis rises all the way when standing up");
+        previous = height;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Blending
+// ---------------------------------------------------------------------------
+
+Pose PoseOfSmallTurns(Random& random, float maxDegrees) {
+    Pose pose;
+    for (int i = 0; i < kJointCount; ++i) {
+        pose.rotation[i] = RandomRotation(random, maxDegrees);
+    }
+    pose.rootTranslation = glm::vec3(random.Between(-1, 1), random.Between(-1, 1), random.Between(-1, 1));
+    return pose;
+}
+
+void BlendingTwoPosesGoesFromOneToTheOther() {
+    Random random(51);
+    const Pose a = PoseOfSmallTurns(random, 80.0f);
+    const Pose b = PoseOfSmallTurns(random, 80.0f);
+    const Pose atZero = BlendPoses(a, b, 0.0f);
+    const Pose atOne = BlendPoses(a, b, 1.0f);
+    const Pose middle = BlendPoses(a, b, 0.5f);
+    for (int i = 0; i < kJointCount; ++i) {
+        Check(DegreesBetween(atZero.rotation[i], a.rotation[i]) < 1e-3f, "a blend of weight 0 is the first pose");
+        Check(DegreesBetween(atOne.rotation[i], b.rotation[i]) < 1e-3f, "a blend of weight 1 is the second pose");
+        const float whole = DegreesBetween(a.rotation[i], b.rotation[i]);
+        Check(std::abs(DegreesBetween(a.rotation[i], middle.rotation[i]) - 0.5f * whole) < 0.05f, "the middle of a blend is half way round");
+    }
+    Check(glm::length(middle.rootTranslation - 0.5f * (a.rootTranslation + b.rootTranslation)) < 1e-5f, "the root moves in a straight line");
+    // The shortest way round, even when the quaternions have opposite signs.
+    Pose flipped = b;
+    for (glm::quat& q : flipped.rotation) {
+        q = -q;
+    }
+    const Pose viaFlipped = BlendPoses(a, flipped, 0.5f);
+    for (int i = 0; i < kJointCount; ++i) {
+        Check(DegreesBetween(viaFlipped.rotation[i], middle.rotation[i]) < 0.05f, "a pose and its negated quaternions blend the same way");
+    }
+}
+
+void WeightedBlendsFollowTheirWeights() {
+    Random random(52);
+    const Pose a = PoseOfSmallTurns(random, 30.0f);
+    const Pose b = PoseOfSmallTurns(random, 30.0f);
+    const Pose c = PoseOfSmallTurns(random, 30.0f);
+    const WeightedPose onlyA[] = {{&a, 1.0f}, {&b, 0.0f}, {&c, 0.0f}};
+    const Pose same = BlendWeighted(onlyA);
+    for (int i = 0; i < kJointCount; ++i) {
+        Check(DegreesBetween(same.rotation[i], a.rotation[i]) < 1e-3f, "a weight of 1 on one pose gives that pose");
+    }
+    // Only the ratio matters: 1 to 3 is the same as 0.25 to 0.75, and near a quarter of the way for small turns.
+    const WeightedPose quarter[] = {{&a, 1.0f}, {&b, 3.0f}};
+    const WeightedPose scaled[] = {{&a, 0.25f}, {&b, 0.75f}};
+    const Pose x = BlendWeighted(quarter);
+    const Pose y = BlendWeighted(scaled);
+    const Pose slerped = BlendPoses(a, b, 0.75f);
+    for (int i = 0; i < kJointCount; ++i) {
+        Check(DegreesBetween(x.rotation[i], y.rotation[i]) < 1e-3f, "the weights are scaled to add up to 1");
+        Check(DegreesBetween(x.rotation[i], slerped.rotation[i]) < 1.0f, "a weighted blend of two poses is close to the spherical blend");
+    }
+    // A negative weight counts as nothing; all-zero weights give the first pose.
+    const WeightedPose negative[] = {{&a, 1.0f}, {&b, -5.0f}};
+    Check(DegreesBetween(BlendWeighted(negative).rotation[3], a.rotation[3]) < 1e-3f, "a negative weight counts as nothing");
+    const WeightedPose zero[] = {{&b, 0.0f}, {&a, 0.0f}};
+    Check(DegreesBetween(BlendWeighted(zero).rotation[3], b.rotation[3]) < 1e-3f, "weights of 0 give the first pose");
+}
+
+void AdditiveLayersApplyOnTopOfAPose() {
+    Random random(53);
+    const Pose reference = PoseOfSmallTurns(random, 40.0f);
+    const Pose animated = PoseOfSmallTurns(random, 40.0f);
+    const Pose base = PoseOfSmallTurns(random, 40.0f);
+    const Pose additive = MakeAdditive(animated, reference);
+    // The additive pose put back on its reference is the animated pose.
+    const Pose back = ApplyAdditive(reference, additive, 1.0f);
+    for (int i = 0; i < kJointCount; ++i) {
+        Check(DegreesBetween(back.rotation[i], animated.rotation[i]) < 1e-2f, "an additive pose applied to its reference gives the animated pose");
+    }
+    Check(glm::length(back.rootTranslation - animated.rootTranslation) < 1e-5f, "and so does the root");
+    const Pose none = ApplyAdditive(base, additive, 0.0f);
+    const Pose half = ApplyAdditive(base, additive, 0.5f);
+    const Pose full = ApplyAdditive(base, additive, 1.0f);
+    for (int i = 0; i < kJointCount; ++i) {
+        Check(DegreesBetween(none.rotation[i], base.rotation[i]) < 1e-3f, "an additive layer of weight 0 changes nothing");
+        const float whole = DegreesBetween(base.rotation[i], full.rotation[i]);
+        Check(std::abs(DegreesBetween(base.rotation[i], half.rotation[i]) - 0.5f * whole) < 0.05f, "an additive layer of weight a half turns half as far");
+    }
+
+    BlendTree tree;
+    tree.AddPose(base, 1.0f);
+    tree.AddPose(animated, 3.0f);
+    tree.AddAdditive(additive, 0.5f);
+    const WeightedPose both[] = {{&base, 1.0f}, {&animated, 3.0f}};
+    const Pose expected = ApplyAdditive(BlendWeighted(both), additive, 0.5f);
+    const Pose built = tree.Evaluate();
+    for (int i = 0; i < kJointCount; ++i) {
+        Check(DegreesBetween(built.rotation[i], expected.rotation[i]) < 1e-3f, "a blend tree is its poses blended and its layers applied");
+    }
+    tree.Clear();
+    Check(DegreesBetween(tree.Evaluate().rotation[5], glm::quat(1, 0, 0, 0)) < 1e-6f, "an empty blend tree is the rest pose");
+}
+
+void ACrossFadeIsSmoothAndHasNoPops() {
+    CrossFade fade;
+    fade.Begin(0.5f);
+    Check(fade.Weight() == 0.0f && fade.Active(), "a fade starts at 0");
+    float previous = 0.0f;
+    float previousStep = 0.0f;
+    for (int i = 0; i < 30; ++i) {
+        fade.Advance(1.0f / 60.0f);
+        Check(fade.Weight() >= previous - 1e-6f, "the weight of a fade only rises");
+        previousStep = fade.Weight() - previous;
+        previous = fade.Weight();
+    }
+    (void)previousStep;
+    Check(fade.Weight() == 1.0f && !fade.Active(), "a fade ends at 1 after its time");
+    CrossFade instant;
+    instant.Begin(0.0f);
+    Check(instant.Weight() == 1.0f, "a fade of no time is over at once");
+
+    // A fade from a walk to a run: both states keep running, and the blend has no pops.
+    const float dt = 1.0f / 60.0f;
+    const BodyModel body = MakeBodyModel(Person(0.5f, 30, 1.75f, 70, 0.4f));
+    Walker walking(body, PersonalityFrom(body.parameters));
+    Walker running(body, PersonalityFrom(body.parameters));
+    walking.Reset(glm::vec3(0.0f), 0.0f);
+    running.Reset(glm::vec3(0.0f), 0.0f);
+    for (int i = 0; i < 60 * 4; ++i) {
+        walking.Update(dt, LocomotionCommand{1.4f, 0.0f});
+        running.Update(dt, LocomotionCommand{3.0f, 0.0f});
+    }
+    CrossFade state;
+    std::vector<Pose> shown;
+    for (int i = 0; i < 60 * 3; ++i) {
+        if (i == 60) {
+            state.Begin(0.5f);
+        }
+        walking.Update(dt, LocomotionCommand{1.4f, 0.0f});
+        running.Update(dt, LocomotionCommand{3.0f, 0.0f});
+        state.Advance(dt);
+        shown.push_back(i < 60 ? walking.CurrentPose() : state.Blend(walking.CurrentPose(), running.CurrentPose()));
+    }
+    float worst = 0.0f;
+    for (size_t k = 1; k < shown.size(); ++k) {
+        for (int j = 1; j < kJointCount; ++j) {
+            worst = std::max(worst, DegreesBetween(shown[k - 1].rotation[j], shown[k].rotation[j]) / dt);
+        }
+    }
+    Check(worst < 2300.0f, "a cross fade between a walk and a run has no pops: " + std::to_string(worst) + " degrees a second");
+}
+
+void AMixOfAllTheLayersStaysInsideTheLimitsAndContinuous() {
+    // Walking, pushed, looking about, with secondary motion: the whole stack.
+    const float dt = 1.0f / 60.0f;
+    const BodyModel body = MakeBodyModel(Person(0.0f, 40, 1.65f, 60, 0.3f));
+    Walker walker(body, PersonalityFrom(body.parameters));
+    walker.Reset(glm::vec3(0.0f), 0.0f);
+    HitReaction hit;
+    SecondaryMotion secondary;
+    glm::vec3 previousPosition = walker.Position();
+    glm::vec3 previousVelocity(0.0f);
+    Pose previous = walker.CurrentPose();
+    float worst = 0.0f;
+    for (int i = 0; i < 60 * 10; ++i) {
+        if (i == 60 * 6) {
+            hit.Push(glm::vec3(-2.0f, 0.0f, 0.5f), walker.Heading());
+        }
+        const glm::vec3 velocity = (walker.Position() - previousPosition) / dt;
+        const glm::vec3 acceleration = (velocity - previousVelocity) / dt;
+        previousPosition = walker.Position();
+        previousVelocity = velocity;
+        walker.SetLayer(CombinedLayers(hit.Update(dt), secondary.Update(dt, acceleration, walker.Heading())));
+        const float speed = i < 60 * 2 ? 0.0f : (i < 60 * 5 ? 1.5f : 2.6f);
+        walker.Update(dt, LocomotionCommand{speed, i > 60 * 7 ? 0.5f : 0.0f});
+        Pose pose = walker.CurrentPose();
+        const glm::vec3 target = walker.Position() + glm::vec3(std::sin(i * 0.02f) * 3.0f, 1.6f, 4.0f);
+        LookAt(body, pose, target, 0.8f);
+        for (int j = 1; j < kJointCount; ++j) {
+            const Joint joint = static_cast<Joint>(j);
+            Check(LimitExcessDegrees(body.skeleton, joint, pose.rotation[j]) < 0.5f, std::string("a joint leaves its range in the full stack: ") + body.skeleton.joints[j].name);
+            worst = std::max(worst, DegreesBetween(previous.rotation[j], pose.rotation[j]) / dt);
+        }
+        previous = pose;
+    }
+    Check(worst < 2300.0f, "the whole stack has no pops: " + std::to_string(worst));
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -970,6 +1507,22 @@ int main(int argc, char** argv) {
         {"TheFeetPointTheWayTheyGoAndTheHeadStaysLevel", TheFeetPointTheWayTheyGoAndTheHeadStaysLevel},
         {"NoiseIsDeterministicSmoothAndBounded", NoiseIsDeterministicSmoothAndBounded},
         {"StandingStillBreathesAndShiftsWeightWithoutMovingTheFeet", StandingStillBreathesAndShiftsWeightWithoutMovingTheFeet},
+        {"TheHeadAndEyesLookAtWhatIsInRange", TheHeadAndEyesLookAtWhatIsInRange},
+        {"ATargetBehindIsLookedAtAsFarAsTheNeckAllows", ATargetBehindIsLookedAtAsFarAsTheNeckAllows},
+        {"TheLookFadesInWithItsWeight", TheLookFadesInWithItsWeight},
+        {"TheEyesConvergeOnANearTarget", TheEyesConvergeOnANearTarget},
+        {"ACriticallyDampedSpringFollowsTheExactSolutionAtAnyStepSize", ACriticallyDampedSpringFollowsTheExactSolutionAtAnyStepSize},
+        {"ACriticallyDampedSpringNeverOvershoots", ACriticallyDampedSpringNeverOvershoots},
+        {"TheChestAndHeadLagBehindAcceleration", TheChestAndHeadLagBehindAcceleration},
+        {"APushMakesTheBodyGiveAndComeBack", APushMakesTheBodyGiveAndComeBack},
+        {"ABodyWalksOnWhileItIsPushed", ABodyWalksOnWhileItIsPushed},
+        {"ASittingPersonKeepsTheirFeetDownAndEndsOnTheSeat", ASittingPersonKeepsTheirFeetDownAndEndsOnTheSeat},
+        {"StandingUpIsSittingDownBackwards", StandingUpIsSittingDownBackwards},
+        {"BlendingTwoPosesGoesFromOneToTheOther", BlendingTwoPosesGoesFromOneToTheOther},
+        {"WeightedBlendsFollowTheirWeights", WeightedBlendsFollowTheirWeights},
+        {"AdditiveLayersApplyOnTopOfAPose", AdditiveLayersApplyOnTopOfAPose},
+        {"ACrossFadeIsSmoothAndHasNoPops", ACrossFadeIsSmoothAndHasNoPops},
+        {"AMixOfAllTheLayersStaysInsideTheLimitsAndContinuous", AMixOfAllTheLayersStaysInsideTheLimitsAndContinuous},
     };
 
     int ran = 0;
