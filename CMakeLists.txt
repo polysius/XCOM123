@@ -223,6 +223,17 @@ if(MSVC)
 endif()
 add_test(NAME character_tests COMMAND character_tests)
 
+# graph_tests checks the visual scripting core: typed pins, the interpreter, validation and saving.
+file(GLOB GRAPH_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/graph/*.cpp)
+add_executable(graph_tests tests/GraphTests.cpp ${GRAPH_SOURCES})
+target_include_directories(graph_tests PRIVATE src)
+target_link_libraries(graph_tests PRIVATE glm::glm)
+target_compile_definitions(graph_tests PRIVATE GLM_FORCE_RADIANS GLM_FORCE_DEPTH_ZERO_TO_ONE)
+if(MSVC)
+    target_compile_options(graph_tests PRIVATE /W4 /permissive- /MP)
+endif()
+add_test(NAME graph_tests COMMAND graph_tests)
+
 # ---------------------------------------------------------------------------
 # City generator tests
 # ---------------------------------------------------------------------------
