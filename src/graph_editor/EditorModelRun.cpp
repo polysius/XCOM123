@@ -99,7 +99,7 @@ std::string EditorModel::SaveToFile(const std::string& path) {
         return status;
     }
     filePath = path;
-    modified = false;
+    savedText = graph::SaveGraph(graph);
     status = "Saved " + path + ".";
     return {};
 }
@@ -132,7 +132,7 @@ std::string EditorModel::LoadFromText(const std::string& text, const std::string
     wireDrag.reset();
     gesture = Gesture::None;
     filePath = path;
-    modified = false;
+    savedText = graph::SaveGraph(graph);
 
     // A graph made by a program or by hand may not have places for its nodes. Nodes that all stand on one spot are arranged.
     const bool allOnOneSpot = std::all_of(graph.Nodes().begin(), graph.Nodes().end(),
@@ -154,7 +154,7 @@ void EditorModel::NewGraph() {
     wireDrag.reset();
     gesture = Gesture::None;
     filePath.clear();
-    modified = false;
+    savedText = graph::SaveGraph(graph);
     GraphChanged();
     status = "Started a new graph.";
 }

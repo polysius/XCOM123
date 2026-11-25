@@ -92,7 +92,7 @@ void CheckCombinations(const Options& options) {
         throw std::invalid_argument("--camera cannot be combined with --benchmark, which flies its own path");
     }
     if (options.IsBenchmark() && options.editor) {
-        throw std::invalid_argument("--editor cannot be combined with --benchmark, which measures the engine without it");
+        throw std::invalid_argument("The editor options (--editor, --editor-graph, --editor-play) cannot be combined with --benchmark, which measures the engine without it");
     }
     if (options.targetFps && !options.IsBenchmark()) {
         throw std::invalid_argument("--target-fps only applies to --benchmark");
@@ -165,6 +165,9 @@ Options ParseCommandLine(int argc, char** argv) {
             options.editor = true;
         } else if (option == "--editor-graph") {
             options.editorGraphPath = arguments.ValueFor(option);
+            if (options.editorGraphPath.rfind("--", 0) == 0) {
+                throw std::invalid_argument(option + " needs a file name, but is followed by the option " + options.editorGraphPath);
+            }
             options.editor = true;
         } else if (option == "--editor-play") {
             options.editorPlay = true;

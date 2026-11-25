@@ -21,6 +21,10 @@ public:
     void Destroy();
     bool IsCreated() const { return created; }
 
+    // Lets ImGui receive the window's mouse and keyboard events, or stops it. While it is stopped, no event reaches ImGui, so none
+    // are held back to be replayed later; on connecting, the state of keys and buttons is cleared.
+    void SetInputConnected(bool connected);
+
     // Starts the ImGui frame; the caller builds the interface after it and then calls Render.
     void BeginFrame();
     // Ends the ImGui frame and keeps its draw data for Record.
@@ -30,6 +34,8 @@ public:
 
 private:
     bool created = false;
+    bool inputConnected = false;
+    GLFWwindow* window = nullptr;
     // The Vulkan backend keeps a pointer to this format for as long as it lives.
     VkFormat colorFormat = VK_FORMAT_UNDEFINED;
 };

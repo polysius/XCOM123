@@ -201,7 +201,8 @@ public:
     std::string LoadFromText(const std::string& text, const std::string& path);
     void NewGraph();
     const std::string& FilePath() const { return filePath; }
-    bool IsModified() const { return modified; }
+    // Whether the graph differs from what was last saved or loaded. Undoing back to that state makes it false again.
+    bool IsModified() const;
 
     // The last thing the editor has to say about what it did, for a status line: why a wire was refused, that a file was saved.
     const std::string& StatusMessage() const { return status; }
@@ -262,7 +263,7 @@ private:
     std::string lastRuntimeError;
 
     std::string filePath;
-    bool modified = false;
+    std::string savedText;  // the graph as it was when it was last saved or loaded
     std::string status;
 };
 

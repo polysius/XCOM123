@@ -5,6 +5,7 @@
 
 #include "editor_ui/GraphEditorWindow.h"
 #include "editor_ui/IEditorUi.h"
+#include "editor_ui/InputPolicy.h"
 #include "editor_ui/ImGuiHost.h"
 #include "graph/GraphFile.h"
 #include "graph_editor/EditorModel.h"
@@ -70,15 +71,23 @@ public:
 
     void BeginFrame(float deltaSeconds) override {
         frameReady = false;
+        // A graph that is playing goes on running while the editor is hidden, so that hiding it to look at the scene does not
+        // stop what the graph does. Its log and glow are there when the editor is opened again.
+        model.Tick(deltaSeconds);
+        if (host.IsCreated()) {
+            host.SetInputConnected(visible);  // while hidden, ImGui must not be fed events that no frame will use
+        }
         if (!visible || !attached) {
             return;
         }
-        if (!host.IsCreated() && !host.Create(target)) {
-            visible = false;  // the editor cannot be shown on this device
-            return;
+        if (!host.IsCreated()) {
+            if (!host.Create(target)) {
+                visible = false;  // the editor cannot be shown on this device
+                return;
+            }
+            host.SetInputConnected(true);
         }
         host.BeginFrame();
-        model.Tick(deltaSeconds);
         window.Draw(model);
         if (window.TakeCloseRequest()) {
             visible = false;
@@ -87,13 +96,27 @@ public:
         frameReady = true;
     }
 
-    bool CapturesMouse() const override { return visible && host.IsCreated() && ImGui::GetIO().WantCaptureMouse; }
-    bool CapturesKeyboard() const override { return visible && host.IsCreated() && (ImGui::GetIO().WantTextInput || window.IsPaletteOpen()); }
+    bool CapturesMouse() const override { return EditorCapturesMouse(InputState()); }
+    bool CapturesKeyboard() const override { return EditorCapturesKeyboard(InputState()); }
 
     std::string LoadGraphFile(const std::string& path) override { return model.LoadFromFile(path); }
     void Play() override { model.Play(); }
 
 private:
+    EditorInputState InputState() const {
+        EditorInputState state;
+        state.visible = visible && host.IsCreated();
+        if (state.visible) {
+            const ImGuiIO& io = ImGui::GetIO();
+            state.windowFocused = window.IsFocused();
+            state.wantCaptureKeyboard = io.WantCaptureKeyboard;
+            state.wantTextInput = io.WantTextInput;
+            state.paletteOpen = window.IsPaletteOpen();
+            state.wantCaptureMouse = io.WantCaptureMouse;
+        }
+        return state;
+    }
+
     // The registry comes first: the model keeps a reference to it.
     graph::NodeRegistry registry;
     graph_editor::EditorModel model;

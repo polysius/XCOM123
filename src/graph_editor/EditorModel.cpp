@@ -30,7 +30,12 @@ bool SameWire(const graph::Connection& a, const graph::Connection& b) {
 }  // namespace
 
 EditorModel::EditorModel(const graph::NodeRegistry& registry) : registry(registry) {
+    savedText = graph::SaveGraph(graph);
     GraphChanged();
+}
+
+bool EditorModel::IsModified() const {
+    return graph::SaveGraph(graph) != savedText;
 }
 
 // ---------------------------------------------------------------------------
@@ -167,7 +172,6 @@ void EditorModel::ClearSelection() {
 
 void EditorModel::BeginEdit(const std::string& mergeKey) {
     history.Record(graph::SaveGraph(graph), mergeKey);
-    modified = true;
 }
 
 void EditorModel::GraphChanged() {
@@ -510,7 +514,6 @@ void EditorModel::SetVariableInitial(const std::string& name, const graph::Value
 
 void EditorModel::RestoreSnapshot(const std::string& snapshot) {
     graph::LoadGraph(snapshot, graph);
-    modified = true;
     gesture = Gesture::None;
     wireDrag.reset();
     pendingWire.reset();

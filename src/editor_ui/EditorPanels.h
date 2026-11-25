@@ -15,7 +15,8 @@ namespace editor_ui {
 
 // What the panels remember between frames: text being typed, and whether the palette is open.
 struct PanelState {
-    char filePath[260] = "graph.json";
+    char filePath[260] = "graph.json";  // what Save and Load use; follows the model's path, see FilePathSync.h
+    std::string lastModelPath;
     bool fullHeight = false;      // the editor covers the whole window, and not the lower part
     bool closeRequested = false;
 

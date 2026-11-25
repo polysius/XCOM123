@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "editor_ui/EditorTheme.h"
+#include "editor_ui/FilePathSync.h"
 #include "editor_ui/ValueWidgets.h"
 
 namespace editor_ui {
@@ -79,6 +80,9 @@ void AddVariableNode(graph_editor::EditorModel& model, const std::string& kindId
 // ---------------------------------------------------------------------------
 
 void DrawToolbar(graph_editor::EditorModel& model, PanelState& state, GraphCanvas& canvas) {
+    if (FileFieldMustFollowModel(model.FilePath(), state.lastModelPath)) {
+        std::snprintf(state.filePath, sizeof(state.filePath), "%s", model.FilePath().c_str());
+    }
     const ImVec2 fullWidth(-1.0f, 0.0f);
 
     SectionTitle("Run");

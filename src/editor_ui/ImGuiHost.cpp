@@ -14,8 +14,9 @@
 namespace editor_ui {
 namespace {
 
-// The most descriptor sets the backend asks for: one for the font atlas.
-constexpr uint32_t kDescriptorPoolSize = IMGUI_IMPL_VULKAN_MINIMUM_IMAGE_SAMPLER_POOL_SIZE;
+// The backend needs one image sampler descriptor for the font atlas, and asserts (in debug builds) that the pool it is asked to
+// make is larger than that minimum, so a few more are allowed for.
+constexpr uint32_t kDescriptorPoolSize = IMGUI_IMPL_VULKAN_MINIMUM_IMAGE_SAMPLER_POOL_SIZE + 7;
 
 void ReportVulkanError(VkResult result) {
     if (result != VK_SUCCESS) {
@@ -65,8 +66,10 @@ bool ImGuiHost::Create(const OverlayTarget& target) {
     io.IniFilename = nullptr;  // the editor window has a fixed place, and no layout file is wanted next to the program
     ApplyEditorStyle();
 
-    // The engine has already set its own GLFW callbacks. ImGui installs after them and calls them in turn, so both see the input.
-    if (!ImGui_ImplGlfw_InitForVulkan(target.window, true)) {
+    // The GLFW callbacks are not installed here but by SetInputConnected, while the editor is shown, so that nothing queues up in
+    // ImGui while it is hidden and no frames are being built.
+    window = target.window;
+    if (!ImGui_ImplGlfw_InitForVulkan(target.window, false)) {
         std::cerr << "Editor: the ImGui GLFW backend did not start\n";
         ImGui::DestroyContext();
         return false;
@@ -105,10 +108,29 @@ void ImGuiHost::Destroy() {
     if (!created) {
         return;
     }
+    SetInputConnected(false);
     ImGui_ImplVulkan_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
     created = false;
+}
+
+void ImGuiHost::SetInputConnected(bool connected) {
+    if (!created || connected == inputConnected) {
+        return;
+    }
+    inputConnected = connected;
+    if (!connected) {
+        ImGui_ImplGlfw_RestoreCallbacks(window);
+        return;
+    }
+    // The engine has already set its own GLFW callbacks. ImGui installs after them and calls them in turn, so both see the input.
+    ImGui_ImplGlfw_InstallCallbacks(window);
+    // Nothing that happened while the editor was hidden may count: a key or button that was down then is not down now.
+    ImGuiIO& io = ImGui::GetIO();
+    io.ClearInputKeys();
+    io.ClearInputMouse();
+    io.AddFocusEvent(true);
 }
 
 void ImGuiHost::BeginFrame() {

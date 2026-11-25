@@ -17,8 +17,11 @@ public:
     // Whether the Close button was pressed since the last call.
     bool TakeCloseRequest();
     bool IsPaletteOpen() const { return state.paletteOpen; }
+    // Whether the editor window had the keyboard focus when it was last drawn.
+    bool IsFocused() const { return focused; }
 
 private:
+    bool focused = false;
     PanelState state;
     GraphCanvas canvas;
 };

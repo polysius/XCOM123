@@ -5,6 +5,7 @@
 #include <cstdio>
 
 #include "editor_ui/EditorTheme.h"
+#include "editor_ui/InputPolicy.h"
 #include "editor_ui/ValueWidgets.h"
 
 namespace editor_ui {
@@ -121,14 +122,16 @@ void GraphCanvas::Draw(graph_editor::EditorModel& editorModel, ImVec2 size, Canv
         editingValue = false;
     }
 
+    list->PushClipRect(origin, origin + canvasSize, true);
+    HandleInput(requests);
+    zoom = model->View().Zoom();  // the input may have changed the view
+
+    // The places of the nodes are taken after the input, which may have moved, added or removed nodes, so that what is drawn is
+    // what the model holds now and not what it held a frame ago.
     geometry.clear();
     for (const graph::Node& node : model->GetGraph().Nodes()) {
         geometry[node.id] = model->GeometryOf(node.id);
     }
-
-    list->PushClipRect(origin, origin + canvasSize, true);
-    HandleInput(requests);
-    zoom = model->View().Zoom();  // the input may have changed the view
 
     DrawBackground();
     DrawWires();
@@ -294,8 +297,9 @@ void GraphCanvas::DrawContextMenu() {
 
 void GraphCanvas::HandleKeys(CanvasRequests& requests) {
     const ImGuiIO& io = ImGui::GetIO();
-    const bool windowFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
-    if (io.WantTextInput || !(hovered || windowFocused)) {
+    const bool editorWindowFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+    const bool canvasFocused = ImGui::IsWindowFocused();
+    if (!CanvasShortcutsActive(editorWindowFocused, canvasFocused, hovered, io.WantTextInput)) {
         return;
     }
     const bool control = io.KeyCtrl;

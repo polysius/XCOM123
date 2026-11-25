@@ -10,9 +10,10 @@ EditorSession::EditorSession(IRenderModule& renderer, GLFWwindow* window, const 
     : renderer(renderer), window(window), editor(CreateGraphEditorUi()) {
     renderer.SetOverlay(editor.get());
     if (!options.editorGraphPath.empty()) {
-        const std::string why = editor->LoadGraphFile(options.editorGraphPath);
-        if (!why.empty()) {
-            std::cerr << "Editor: " << why << "\n";
+        startupError = editor->LoadGraphFile(options.editorGraphPath);
+        if (!startupError.empty()) {
+            // An interactive run goes on with the starter graph, and the status line of the editor says why.
+            std::cerr << "Editor: " << startupError << "\n";
         }
     }
     if (options.editorPlay) {

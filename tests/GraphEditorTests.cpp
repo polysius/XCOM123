@@ -16,6 +16,8 @@
 #include <vector>
 
 #include "graph/GraphFile.h"
+#include "editor_ui/FilePathSync.h"
+#include "editor_ui/InputPolicy.h"
 #include "graph_editor/AutoLayout.h"
 #include "graph_editor/EditorModel.h"
 #include "graph_editor/UndoHistory.h"
@@ -1202,6 +1204,83 @@ void ANodePlacementlessFileIsArrangedWhenLoaded() {
 }
 
 // ---------------------------------------------------------------------------
+// Who gets the keys, and the file name box
+// ---------------------------------------------------------------------------
+
+void AClosedEditorNeverKeepsKeysOrMouseFromTheScene() {
+    editor_ui::EditorInputState state;
+    state.windowFocused = state.wantCaptureKeyboard = state.wantTextInput = state.paletteOpen = state.wantCaptureMouse = true;
+    state.visible = false;
+    Check(!editor_ui::EditorCapturesKeyboard(state) && !editor_ui::EditorCapturesMouse(state), "a hidden editor keeps input from the scene");
+}
+
+void AFocusedEditorKeepsEveryKeyFromTheSceneSoCtrlZDoesNotMoveTheSun() {
+    editor_ui::EditorInputState state;
+    state.visible = true;
+    Check(!editor_ui::EditorCapturesKeyboard(state), "an open editor that nobody is using takes the keys from the scene");
+    state.windowFocused = true;
+    Check(editor_ui::EditorCapturesKeyboard(state), "a focused editor leaves keys such as Ctrl+Z and Ctrl+X to the scene");
+    state.windowFocused = false;
+    state.wantTextInput = true;
+    Check(editor_ui::EditorCapturesKeyboard(state), "typing in a box leaves the keys to the scene");
+    state.wantTextInput = false;
+    state.paletteOpen = true;
+    Check(editor_ui::EditorCapturesKeyboard(state), "the palette leaves the keys to the scene");
+    state.paletteOpen = false;
+    state.wantCaptureKeyboard = true;
+    Check(editor_ui::EditorCapturesKeyboard(state), "ImGui asking for the keyboard is not respected");
+}
+
+void TheMouseGoesToTheEditorOnlyWhileItIsOpenAndWantsIt() {
+    editor_ui::EditorInputState state;
+    state.visible = true;
+    Check(!editor_ui::EditorCapturesMouse(state), "the editor keeps a pointer that is not over it");
+    state.wantCaptureMouse = true;
+    Check(editor_ui::EditorCapturesMouse(state), "the editor does not keep a pointer that is over it");
+}
+
+void CanvasShortcutsNeedTheFocusedEditorAndTheCanvasInUseAndNoTextBox() {
+    using editor_ui::CanvasShortcutsActive;
+    Check(!CanvasShortcutsActive(false, false, true, false), "shortcuts act while the editor is not focused, which is while the camera moves");
+    Check(!CanvasShortcutsActive(false, true, true, false), "shortcuts act in a canvas that is focused in an editor that is not");
+    Check(CanvasShortcutsActive(true, true, false, false), "shortcuts do not act in a focused canvas");
+    Check(CanvasShortcutsActive(true, false, true, false), "shortcuts do not act when the pointer is over the canvas of a focused editor");
+    Check(!CanvasShortcutsActive(true, false, false, false), "shortcuts act when another panel is in use and the pointer is elsewhere");
+    Check(!CanvasShortcutsActive(true, true, true, true), "shortcuts act while a text box is being typed into");
+}
+
+void TheFileBoxFollowsThePathOfTheGraphInTheModel() {
+    std::string seen;
+    Check(!editor_ui::FileFieldMustFollowModel("", seen), "a graph with no file changed the box");
+    Check(editor_ui::FileFieldMustFollowModel("a.json", seen), "a graph that came from a file did not set the box");
+    Check(!editor_ui::FileFieldMustFollowModel("a.json", seen), "the box was set again with nothing changed, which would undo what is typed");
+    Check(editor_ui::FileFieldMustFollowModel("b.json", seen), "a new path did not set the box");
+    Check(!editor_ui::FileFieldMustFollowModel("", seen), "a new graph with no file wiped the box");
+    Check(editor_ui::FileFieldMustFollowModel("b.json", seen), "going back to a path did not set the box");
+}
+
+void AGraphIsModifiedOnlyWhenItDiffersFromWhatWasSaved() {
+    const std::string path = TemporaryPath("xcom_graph_editor_modified.json");
+    Editor editor;
+    Check(!editor.model.IsModified(), "an empty new graph is modified");
+    editor.Add("math.add", 0.0f, 0.0f);
+    Check(editor.model.IsModified(), "a graph with a new node is not modified");
+    editor.model.Undo();
+    Check(!editor.model.IsModified(), "undoing back to the start left the graph marked as changed");
+    editor.model.Redo();
+    Check(editor.model.SaveToFile(path).empty() && !editor.model.IsModified(), "saving did not clear the mark");
+    editor.model.SelectAll();
+    editor.model.MoveSelection({10.0f, 0.0f});
+    editor.model.EndGesture();
+    Check(editor.model.IsModified(), "a change after saving is not marked");
+    editor.model.Undo();
+    Check(!editor.model.IsModified(), "undoing back to the saved state did not clear the mark");
+    editor.model.Undo();
+    Check(editor.model.IsModified(), "undoing past the saved state did not mark the graph");
+    std::filesystem::remove(path);
+}
+
+// ---------------------------------------------------------------------------
 // Layout
 // ---------------------------------------------------------------------------
 
@@ -1319,6 +1398,12 @@ int main() {
         {"ASavedFileLoadsBackAsTheSameGraphWithAFreshHistory", ASavedFileLoadsBackAsTheSameGraphWithAFreshHistory},
         {"ALoadThatFailsLeavesTheGraphAsItWasAndSaysWhy", ALoadThatFailsLeavesTheGraphAsItWasAndSaysWhy},
         {"ANodePlacementlessFileIsArrangedWhenLoaded", ANodePlacementlessFileIsArrangedWhenLoaded},
+        {"AClosedEditorNeverKeepsKeysOrMouseFromTheScene", AClosedEditorNeverKeepsKeysOrMouseFromTheScene},
+        {"AFocusedEditorKeepsEveryKeyFromTheSceneSoCtrlZDoesNotMoveTheSun", AFocusedEditorKeepsEveryKeyFromTheSceneSoCtrlZDoesNotMoveTheSun},
+        {"TheMouseGoesToTheEditorOnlyWhileItIsOpenAndWantsIt", TheMouseGoesToTheEditorOnlyWhileItIsOpenAndWantsIt},
+        {"CanvasShortcutsNeedTheFocusedEditorAndTheCanvasInUseAndNoTextBox", CanvasShortcutsNeedTheFocusedEditorAndTheCanvasInUseAndNoTextBox},
+        {"TheFileBoxFollowsThePathOfTheGraphInTheModel", TheFileBoxFollowsThePathOfTheGraphInTheModel},
+        {"AGraphIsModifiedOnlyWhenItDiffersFromWhatWasSaved", AGraphIsModifiedOnlyWhenItDiffersFromWhatWasSaved},
         {"AutoLayoutPutsNodesInColumnsInOrderOfTheWiresWithoutOverlap", AutoLayoutPutsNodesInColumnsInOrderOfTheWiresWithoutOverlap},
         {"AutoLayoutTerminatesWhenExecutionAndDataWiresFormACycle", AutoLayoutTerminatesWhenExecutionAndDataWiresFormACycle},
     };

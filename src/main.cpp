@@ -238,10 +238,9 @@ int RunInteractive(Engine& engine, const Options& options) {
         previousFrame = now;
 
         editor.BeginFrame(deltaSeconds);
-        // The camera and the sun keys leave the pointer and the keys to the editor while it is using them.
-        if (!editor.CapturesMouse() && !editor.CapturesKeyboard()) {
-            camera.Update(engine.window, deltaSeconds);
-        }
+        // The camera and the sun keys leave the pointer and the keys to the editor while it is using them. The camera still
+        // sees every frame, so that a look that began before the editor took the pointer ends when the button is let go.
+        camera.Update(engine.window, deltaSeconds, !editor.CapturesMouse(), !editor.CapturesKeyboard());
         if (!editor.CapturesKeyboard() && glfwGetKey(engine.window, GLFW_KEY_Z) == GLFW_PRESS) {
             sunElevation -= kSunTurnSpeed * deltaSeconds;
         }
@@ -379,12 +378,17 @@ int RunScreenshot(Engine& engine, const Options& options) {
     const float finalSeconds = options.worldTimeSeconds.value_or(renderedSeconds);
     const float firstFrameSeconds = std::max(finalSeconds - renderedSeconds, 0.0f);
     engine.crowd.SetFocusPoint(camera.Position());
-    PreRollWorld(engine, firstFrameSeconds);
-    // Only a screenshot that asks for the editor has one; every other screenshot is drawn exactly as before.
+    // Only a screenshot that asks for the editor has one; every other screenshot is drawn exactly as before. A graph that cannot be
+    // loaded ends the run before the long part: nobody is there to read a message, and a screenshot of the wrong graph would mislead.
     std::optional<editor_ui::EditorSession> editor;
     if (options.editor) {
         editor.emplace(*engine.renderer, engine.window, options);
+        if (!editor->StartupError().empty()) {
+            std::cerr << "Cannot take the screenshot: " << editor->StartupError() << "\n";
+            return 1;
+        }
     }
+    PreRollWorld(engine, firstFrameSeconds);
 
     for (int frameIndex = 0; frameIndex < frames; ++frameIndex) {
         if (!KeepRunning(engine.window)) {

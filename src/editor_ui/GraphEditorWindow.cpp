@@ -27,6 +27,7 @@ void GraphEditorWindow::Draw(graph_editor::EditorModel& model) {
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
                                    ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
     ImGui::Begin("Graph editor", nullptr, flags);
+    focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
 
     // A value dragged in a panel is one undo step, which ends when the control is let go of.
     if (state.editingValue && !ImGui::IsAnyItemActive()) {
