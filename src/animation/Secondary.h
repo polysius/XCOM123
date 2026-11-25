@@ -64,7 +64,7 @@ public:
     // pelvis shifts and the trunk follows, while the feet stay where the gait planted them.
     BodyLayer Update(float dt);
 
-    // The largest of the displacements now, as a fraction of what they were at their peak: 0 once the body has settled.
+    // True once the body is still again: the displacements and their speeds have died away.
     bool Settled() const;
 
 private:
