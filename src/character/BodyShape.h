@@ -73,9 +73,11 @@ private:
 class ShapeAssembler {
 public:
     // Adds a tapered capsule or an ellipsoid and returns its number. `depthDirection` is where the shallow axis of a
-    // capsule's cross section points. An ellipsoid has radii along X, Y and Z.
+    // capsule's cross section points. `endCapDepth` is how far the rounded ends reach beyond the ends of the capsule; the
+    // default, the mean of the radii, is a dome as high as the capsule is wide, and a smaller value makes a flatter end.
+    // An ellipsoid has radii along X, Y and Z.
     int Capsule(Joint bone, glm::vec3 start, glm::vec3 end, float sideStart, float depthStart, float sideEnd, float depthEnd,
-                glm::vec3 depthDirection = glm::vec3(0.0f, 0.0f, 1.0f));
+                glm::vec3 depthDirection = glm::vec3(0.0f, 0.0f, 1.0f), float endCapDepth = 0.0f);
     int Ellipsoid(Joint bone, glm::vec3 centre, float radiusX, float radiusY, float radiusZ);
 
     // The nodes of the tree. A leaf is a part. A join unites two nodes, with the crease between them rounded off over
@@ -108,5 +110,13 @@ struct BodyShapeOptions {
 };
 
 BodyShape BuildBodyShape(const Skeleton& skeleton, const CharacterParameters& parameters, const BodyShapeOptions& options = {});
+
+// The cross section of the forearm where it ends at the wrist, for a body of this girth. The cuff of the hand is made to
+// this size, so that the two meet without a step at any build.
+struct WristSection {
+    float side = 0.0f;
+    float depth = 0.0f;
+};
+WristSection ForearmWristSection(const CharacterParameters& parameters, float girth, float minimumRadius = 0.0f);
 
 }  // namespace character

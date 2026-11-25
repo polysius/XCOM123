@@ -44,34 +44,7 @@ glm::vec3 Gradient(const ImplicitShape& shape, glm::vec3 point) {
            (2.0f * kStep);
 }
 
-// The volume of the body found by counting the cells of a coarse grid whose centre is inside it. Quick, and good to a
-// percent or two, which is enough to find the girth that gives a mass.
-float CoarseVolumeOf(const ImplicitShape& shape, JobSystem* jobs) {
-    constexpr float kVoxel = 0.025f;
-    const glm::vec3 low = shape.BoundsMin();
-    const glm::vec3 size = shape.BoundsMax() - low;
-    const int nx = static_cast<int>(std::ceil(size.x / kVoxel));
-    const int ny = static_cast<int>(std::ceil(size.y / kVoxel));
-    const int nz = static_cast<int>(std::ceil(size.z / kVoxel));
-    std::vector<int> insidePerRow(static_cast<size_t>(ny) * nz, 0);
-    ParallelEach(jobs, ny * nz, [&](int row) {
-        const int j = row % ny;
-        const int k = row / ny;
-        int count = 0;
-        for (int i = 0; i < nx; ++i) {
-            const glm::vec3 centre = low + (glm::vec3(i, j, k) + 0.5f) * kVoxel;
-            count += shape.Distance(centre) < 0.0f ? 1 : 0;
-        }
-        insidePerRow[row] = count;
-    });
-    long long inside = 0;
-    for (const int count : insidePerRow) {
-        inside += count;
-    }
-    return static_cast<float>(inside) * kVoxel * kVoxel * kVoxel;
-}
-
-// Marching tetrahedra: every cube of the grid is cut into six tetrahedra that share the cube's long diagonal, and the
+// Marching tetrahedra: every cube of the grid is cut into five tetrahedra, and the
 // surface crosses each tetrahedron in nothing, one triangle or two. The cuts of two neighbouring cubes agree on the
 // face they share, and a vertex is made once for each edge of the grid it sits on, so the triangles always join up into
 // a closed surface in which every edge has exactly two triangles, however thin the shape is. Each vertex is then moved
@@ -411,8 +384,31 @@ SurfaceQuality MeasureSurface(const Surface& surface, size_t droppedTriangles) {
 
 }  // namespace
 
+// The volume of a shape found by counting the cells of a coarse grid whose centre is inside it. Quick, and good to a
+// percent or two, which is enough to find the girth that gives a mass.
 float CoarseVolume(const ImplicitShape& shape, JobSystem* jobs) {
-    return CoarseVolumeOf(shape, jobs);
+    constexpr float kVoxel = 0.025f;
+    const glm::vec3 low = shape.BoundsMin();
+    const glm::vec3 size = shape.BoundsMax() - low;
+    const int nx = static_cast<int>(std::ceil(size.x / kVoxel));
+    const int ny = static_cast<int>(std::ceil(size.y / kVoxel));
+    const int nz = static_cast<int>(std::ceil(size.z / kVoxel));
+    std::vector<int> insidePerRow(static_cast<size_t>(ny) * nz, 0);
+    ParallelEach(jobs, ny * nz, [&](int row) {
+        const int j = row % ny;
+        const int k = row / ny;
+        int count = 0;
+        for (int i = 0; i < nx; ++i) {
+            const glm::vec3 centre = low + (glm::vec3(i, j, k) + 0.5f) * kVoxel;
+            count += shape.Distance(centre) < 0.0f ? 1 : 0;
+        }
+        insidePerRow[row] = count;
+    });
+    long long inside = 0;
+    for (const int count : insidePerRow) {
+        inside += count;
+    }
+    return static_cast<float>(inside) * kVoxel * kVoxel * kVoxel;
 }
 
 Surface ExtractSoundSurface(const ImplicitShape& shape, float voxel, CuttingMethod method, JobSystem* jobs) {
@@ -420,14 +416,21 @@ Surface ExtractSoundSurface(const ImplicitShape& shape, float voxel, CuttingMeth
                                          {0.75f, 0.25f, 0.5f}, {0.33f, 0.17f, 0.83f}, {0.6f, 0.4f, 0.15f}};
     Surface best;
     long long bestBadness = -1;
-    // Surface nets that will not come out sound on any grid fall back to tetrahedra on a slightly coarser one, which are
-    // closed whatever the shape, so a thin feature never leaves a handle or a bad edge in a piece.
-    const CuttingMethod methods[2] = {method, CuttingMethod::Tetrahedra};
-    const int methodCount = method == CuttingMethod::SurfaceNets ? 2 : 1;
-    for (int attempt = 0; attempt < methodCount; ++attempt) {
-        const float cell = attempt == 0 ? voxel : voxel * 1.25f;
+    // A cut that will not come out sound on any shift of the grid is tried again, with tetrahedra, on a coarser grid, and
+    // then a coarser one again, until the thin gap that made a tunnel is closed over. Tetrahedra give a closed surface
+    // whatever the shape, so the last of them always is sound or close to it.
+    struct Attempt {
+        CuttingMethod method;
+        float cellScale;
+    };
+    std::vector<Attempt> attempts = {{method, 1.0f}};
+    for (const float scale : {1.25f, 1.6f, 2.0f}) {
+        attempts.push_back({CuttingMethod::Tetrahedra, scale});
+    }
+    for (const Attempt& attempt : attempts) {
+        const float cell = voxel * attempt.cellScale;
         for (const glm::vec3& shift : kShifts) {
-            Surface surface = ExtractSurface(shape, cell, shift, methods[attempt], jobs);
+            Surface surface = ExtractSurface(shape, cell, shift, attempt.method, jobs);
             const size_t before = surface.indices.size();
             KeepLargestPiece(surface);
             const SurfaceQuality quality = MeasureSurface(surface, (before - surface.indices.size()) / 3);

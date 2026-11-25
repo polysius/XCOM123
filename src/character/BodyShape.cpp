@@ -65,8 +65,8 @@ public:
     glm::vec3 At(Joint joint) const { return skeleton[joint].restPosition; }
 
     int Capsule(Joint bone, glm::vec3 start, glm::vec3 end, float sideStart, float depthStart, float sideEnd, float depthEnd,
-                glm::vec3 depthDirection = glm::vec3(0.0f, 0.0f, 1.0f)) {
-        return assembler.Capsule(bone, start, end, sideStart, depthStart, sideEnd, depthEnd, depthDirection);
+                glm::vec3 depthDirection = glm::vec3(0.0f, 0.0f, 1.0f), float endCapDepth = 0.0f) {
+        return assembler.Capsule(bone, start, end, sideStart, depthStart, sideEnd, depthEnd, depthDirection, endCapDepth);
     }
 
     int Ellipsoid(Joint bone, glm::vec3 centre, float radiusX, float radiusY, float radiusZ) {
@@ -124,9 +124,10 @@ float BodyShape::Distance(glm::vec3 point) const {
 }
 
 int ShapeAssembler::Capsule(Joint bone, glm::vec3 start, glm::vec3 end, float sideStart, float depthStart, float sideEnd, float depthEnd,
-                            glm::vec3 depthDirection) {
+                            glm::vec3 depthDirection, float endCapDepth) {
     ShapePart part;
     part.bone = bone;
+    part.alongRadius = endCapDepth;
     part.start = start;
     part.end = end;
     part.sideStart = sideStart;
@@ -210,6 +211,13 @@ BodyShape ShapeAssembler::Finish(int root, float margin, float cullDistance) {
     return shape;
 }
 
+WristSection ForearmWristSection(const CharacterParameters& parameters, float girth, float minimumRadius) {
+    const CharacterParameters clean = Sanitised(parameters);
+    const Proportions p = ProportionsOf(clean, girth);
+    const auto radius = [&](float value) { return std::max(value * p.scale * p.girth, minimumRadius); };
+    return {radius(0.026f * (0.9f + 0.1f * p.fat)), radius(0.024f)};
+}
+
 BodyShape BuildBodyShape(const Skeleton& skeleton, const CharacterParameters& parameters, const BodyShapeOptions& options) {
     const CharacterParameters clean = Sanitised(parameters);
     Builder b(skeleton, clean, options.girth, options.minimumRadius);
@@ -230,11 +238,15 @@ BodyShape BuildBodyShape(const Skeleton& skeleton, const CharacterParameters& pa
     const int abdomen = b.Capsule(J::Spine1, b.At(J::Spine1) - glm::vec3(0.0f, 0.035f * s, 0.0f), b.At(J::Spine2), b.R(waistSide + 0.012f * p.fat),
                                   b.R(0.098f + 0.022f * p.fat), b.R(chestSide - 0.006f), b.R(0.108f));
     const glm::vec3 upperChest = glm::vec3(0.0f, 0.790f * height, 0.0f);
-    const int chest = b.Capsule(J::Spine2, b.At(J::Spine2), upperChest, b.R(chestSide - 0.006f), b.R(0.108f), b.R(chestSide + 0.004f), b.R(0.116f));
+    // The top of the chest is flat, with a shallow cap: a dome as high as the chest is wide would rise to the face on a heavy person.
+    const int chest = b.Capsule(J::Spine2, b.At(J::Spine2), upperChest, b.R(chestSide - 0.006f), b.R(0.108f), b.R(chestSide + 0.004f), b.R(0.116f),
+                                glm::vec3(0.0f, 0.0f, 1.0f), b.R(0.06f));
     const glm::vec3 neckBase = b.At(J::Neck);
-    const int neck = b.Capsule(J::Neck, neckBase - glm::vec3(0.0f, 0.020f * s, 0.0f), b.At(J::Head) + glm::vec3(0.0f, 0.012f * s, 0.006f * s),
-                               b.R(Lerp(0.050f, 0.058f, p.male), 0.5f), b.R(Lerp(0.050f, 0.058f, p.male), 0.5f), b.R(Lerp(0.045f, 0.052f, p.male), 0.5f),
-                               b.R(Lerp(0.045f, 0.052f, p.male), 0.5f));
+    // The neck grows less with the build than the rest of the body, and ends at the base of the skull, so that on a heavy
+    // person it stays under the chin instead of rising in front of the mouth.
+    const int neck = b.Capsule(J::Neck, neckBase - glm::vec3(0.0f, 0.020f * s, 0.0f), b.At(J::Head) + glm::vec3(0.0f, 0.0f, 0.004f * s),
+                               b.R(Lerp(0.050f, 0.058f, p.male), 0.35f), b.R(Lerp(0.050f, 0.058f, p.male), 0.35f), b.R(Lerp(0.043f, 0.049f, p.male), 0.30f),
+                               b.R(Lerp(0.043f, 0.049f, p.male), 0.30f));
 
     // The head does not grow with the body mass. Its size follows the stature.
     int skull = -1;
@@ -306,7 +318,8 @@ BodyShape BuildBodyShape(const Skeleton& skeleton, const CharacterParameters& pa
                                            b.R(0.064f * (0.85f + 0.3f * p.muscle), 0.8f), b.R(0.056f * (0.85f + 0.3f * p.muscle), 0.8f)));
         const glm::vec3 bicepsCentre = shoulder + (elbow - shoulder) * 0.38f + glm::vec3(0.0f, 0.0f, 0.010f * s);
         out.upperArm.push_back(b.Ellipsoid(upperArm, bicepsCentre, b.R(0.045f * (0.5f + p.muscle), 0.8f), b.R(0.085f), b.R(0.044f * (0.5f + p.muscle), 0.8f)));
-        out.forearm.push_back(b.Capsule(forearm, elbow, wrist, b.R(0.041f * armBuild), b.R(0.040f * armBuild), b.R(0.026f * (0.9f + 0.1f * p.fat)), b.R(0.024f)));
+        const WristSection wristSection = ForearmWristSection(clean, options.girth, options.minimumRadius);
+        out.forearm.push_back(b.Capsule(forearm, elbow, wrist, b.R(0.041f * armBuild), b.R(0.040f * armBuild), wristSection.side, wristSection.depth));
 
         // The hand: a flat palm, the fingers together as one, and the thumb. The cross section is thin along `medial`. When
         // the body is cut without its hands, the forearm simply ends at the wrist.

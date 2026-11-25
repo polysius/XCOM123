@@ -25,9 +25,8 @@ float Variation(uint32_t seed, uint32_t salt, float amount) {
 
 }  // namespace
 
-BodyShape BuildHeadShape(const Skeleton& skeleton, const CharacterParameters& parameters) {
+BodyShape BuildHeadShape(const CharacterParameters& parameters) {
     const CharacterParameters clean = Sanitised(parameters);
-    (void)skeleton;
     const float s = clean.statureMeters / 1.75f;
     const float male = clean.masculinity;
     const float female = 1.0f - clean.masculinity;
@@ -91,8 +90,11 @@ BodyShape BuildHeadShape(const Skeleton& skeleton, const CharacterParameters& pa
     }
 
     // The lips, with the groove above the upper lip.
-    const int upperLip = tree.Ellipsoid(kHead, P(0.0f, 1.5725f, 0.0875f), 0.0235f * lipSize * s, 0.0065f * lipSize * s, 0.0095f * lipSize * s);
-    const int lowerLip = tree.Ellipsoid(kHead, P(0.0f, 1.5595f, 0.0855f), 0.0215f * lipSize * s, 0.0078f * lipSize * s, 0.0110f * lipSize * s);
+    // Thin lips are kept at least a cell and a half thick, or the grid the head is cut from would tear them.
+    const float upperThickness = std::max(0.0075f, 0.0065f * lipSize);
+    const float lowerThickness = std::max(0.0085f, 0.0078f * lipSize);
+    const int upperLip = tree.Ellipsoid(kHead, P(0.0f, 1.5725f, 0.0875f), 0.0235f * lipSize * s, upperThickness * s, 0.0095f * lipSize * s);
+    const int lowerLip = tree.Ellipsoid(kHead, P(0.0f, 1.5595f, 0.0855f), 0.0215f * lipSize * s, lowerThickness * s, 0.0110f * lipSize * s);
     const int philtrum = tree.Ellipsoid(kHead, P(0.0f, 1.583f, 0.088f), 0.0120f * s, 0.0100f * s, 0.0090f * s);
     head = tree.Join(head, tree.Merge({upperLip, lowerLip, philtrum}, 0.004f * s), 0.006f * s);
 
@@ -111,7 +113,7 @@ BodyShape BuildHeadShape(const Skeleton& skeleton, const CharacterParameters& pa
     return tree.Finish(head, 0.015f * s, 0.05f * s);
 }
 
-BodyShape BuildHandShape(const Skeleton& skeleton, const CharacterParameters& parameters, bool left) {
+BodyShape BuildHandShape(const Skeleton& skeleton, const CharacterParameters& parameters, bool left, float girth) {
     const CharacterParameters clean = Sanitised(parameters);
     const float s = clean.statureMeters / 1.75f;
     const float sign = left ? 1.0f : -1.0f;
@@ -138,8 +140,13 @@ BodyShape BuildHandShape(const Skeleton& skeleton, const CharacterParameters& pa
 
     ShapeAssembler tree;
     // The palm, a cuff that overlaps the forearm, and the pad at the base of the thumb.
-    const int palm = tree.Capsule(bone, P(0.0f, 0.0f, 0.0f), P(0.088f, 0.0f, 0.0f), 0.0395f * s, 0.0150f * s, 0.0425f * s, 0.0125f * s, inward);
-    const int cuff = tree.Capsule(bone, P(-0.025f, 0.0f, 0.0f), P(0.004f, 0.0f, 0.0f), 0.0272f * s, 0.0252f * s, 0.0290f * s, 0.0240f * s, inward);
+    // The palm starts a little beyond the wrist and narrow: its rounded end must not reach back over the cuff and swell it.
+    const int palm = tree.Capsule(bone, P(0.012f, 0.0f, 0.0f), P(0.088f, 0.0f, 0.0f), 0.0320f * s, 0.0135f * s, 0.0425f * s, 0.0125f * s, inward);
+    // The cuff is a little wider than the forearm it covers, by the same share at every build. The forearm has its section
+    // turned the other way, with its depth across the arm (forwards) and its side along it, so the radii are swapped.
+    const WristSection wristSection = ForearmWristSection(clean, girth);
+    const int cuff = tree.Capsule(bone, P(-0.025f, 0.0f, 0.0f), P(0.004f, 0.0f, 0.0f), 1.04f * wristSection.depth, 1.04f * wristSection.side, 1.10f * wristSection.depth,
+                                  1.10f * wristSection.side, inward);
     const int thenar = tree.Capsule(bone, P(0.020f, 0.030f, 0.004f), P(0.040f, 0.030f, 0.004f), 0.0160f * s, 0.0110f * s, 0.0140f * s, 0.0100f * s, inward);
     const int core = tree.Join(tree.Merge({palm, cuff}, 0.012f * s), tree.Leaf(thenar), 0.010f * s);
 
@@ -151,10 +158,11 @@ BodyShape BuildHandShape(const Skeleton& skeleton, const CharacterParameters& pa
         float fan;          // degrees from the line of the hand
         float extraCurl;    // degrees more than the others
     };
-    const std::array<Finger, 4> fingers = {{{0.031f, 0.071f, 0.0088f, 4.0f, 0.0f},
-                                            {0.0105f, 0.078f, 0.0092f, 0.5f, 2.0f},
-                                            {-0.0105f, 0.072f, 0.0088f, -3.0f, 4.0f},
-                                            {-0.030f, 0.058f, 0.0076f, -7.0f, 8.0f}}};
+    // The bases are far enough apart, and the fingers fan far enough, that the gap between two is at least a cell of the grid.
+    const std::array<Finger, 4> fingers = {{{0.0335f, 0.071f, 0.0086f, 5.5f, 0.0f},
+                                            {0.0112f, 0.078f, 0.0090f, 1.5f, 2.0f},
+                                            {-0.0112f, 0.072f, 0.0086f, -2.0f, 4.0f},
+                                            {-0.0335f, 0.058f, 0.0075f, -6.0f, 8.0f}}};
     const float segmentShare[3] = {0.43f, 0.32f, 0.25f};
     const float segmentBend[3] = {10.0f, 38.0f, 52.0f};  // the bend of each segment from the line of the hand
     int hand = -1;

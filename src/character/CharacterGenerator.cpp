@@ -115,6 +115,10 @@ void ComputeSkinWeights(const BodyShape& shape, const Skeleton& skeleton, Charac
 
 MeshTopology MeasureTopology(const CharacterMesh& mesh, size_t pieceIndex) {
     MeshTopology topology;
+    if (pieceIndex >= mesh.pieces.size()) {
+        topology.badEdges = 1;  // there is no such piece, which is not a closed sphere
+        return topology;
+    }
     const MeshPiece& piece = mesh.pieces[pieceIndex];
     const uint32_t firstVertex = piece.firstVertex;
     const size_t vertexCount = piece.vertexCount;
@@ -238,18 +242,27 @@ CharacterMesh GenerateCharacter(const CharacterParameters& parameters, const Mes
         girth = std::clamp(next, 0.45f, 2.2f);
     }
 
-    // The head and the hands do not depend on the girth, so they are cut once.
+    // The head does not depend on the girth, so it is cut once. A hand has a cuff as wide as the forearm, which does, so the
+    // hands are cut again if the girth ends up more than a hundredth from the one they were made for.
     Surface head;
     Surface hands[2];
     float detailVolume = 0.0f;
+    float handsGirth = 0.0f;
+    const float handVoxel = std::clamp(finiteOr(settings.handVoxelMeters, defaults.handVoxelMeters), 0.002f, 0.02f);
+    const auto cutHands = [&](float forGirth) {
+        handsGirth = forGirth;
+        // The gaps between the fingers are thinner than two cells, which surface nets cannot hold: tetrahedra can.
+        hands[0] = ExtractSoundSurface(BuildHandShape(mesh.skeleton, mesh.parameters, true, forGirth), handVoxel, CuttingMethod::Tetrahedra, jobs);
+        hands[1] = ExtractSoundSurface(BuildHandShape(mesh.skeleton, mesh.parameters, false, forGirth), handVoxel, CuttingMethod::Tetrahedra, jobs);
+    };
+    const auto measureDetails = [&]() {
+        detailVolume = MeshVolume(head.positions, head.indices) + MeshVolume(hands[0].positions, hands[0].indices) + MeshVolume(hands[1].positions, hands[1].indices);
+    };
     if (settings.faceAndHands) {
         const float headVoxel = std::clamp(finiteOr(settings.headVoxelMeters, defaults.headVoxelMeters), 0.002f, 0.02f);
-        const float handVoxel = std::clamp(finiteOr(settings.handVoxelMeters, defaults.handVoxelMeters), 0.002f, 0.02f);
-        head = ExtractSoundSurface(BuildHeadShape(mesh.skeleton, mesh.parameters), headVoxel, CuttingMethod::SurfaceNets, jobs);
-        // The gaps between the fingers are thinner than two cells, which surface nets cannot hold: tetrahedra can.
-        hands[0] = ExtractSoundSurface(BuildHandShape(mesh.skeleton, mesh.parameters, true), handVoxel, CuttingMethod::Tetrahedra, jobs);
-        hands[1] = ExtractSoundSurface(BuildHandShape(mesh.skeleton, mesh.parameters, false), handVoxel, CuttingMethod::Tetrahedra, jobs);
-        detailVolume = MeshVolume(head.positions, head.indices) + MeshVolume(hands[0].positions, hands[0].indices) + MeshVolume(hands[1].positions, hands[1].indices);
+        head = ExtractSoundSurface(BuildHeadShape(mesh.parameters), headVoxel, CuttingMethod::SurfaceNets, jobs);
+        cutHands(girth);
+        measureDetails();
     }
 
     // Cut the body, then correct the girth with the volume of the mesh itself, which the coarse count only estimates.
@@ -266,6 +279,10 @@ CharacterMesh GenerateCharacter(const CharacterParameters& parameters, const Mes
             break;
         }
         girth = std::clamp(girth / std::sqrt(error), 0.45f, 2.2f);
+        if (settings.faceAndHands && std::abs(girth / handsGirth - 1.0f) > 0.01f) {
+            cutHands(girth);
+            measureDetails();
+        }
     }
     mesh.girth = girth;
 
@@ -280,6 +297,9 @@ CharacterMesh GenerateCharacter(const CharacterParameters& parameters, const Mes
     bodyPiece.indexCount = static_cast<uint32_t>(mesh.indices.size());
     mesh.pieces.push_back(bodyPiece);
     if (settings.faceAndHands) {
+        if (std::abs(mesh.girth / handsGirth - 1.0f) > 0.01f) {
+            cutHands(mesh.girth);  // the last correction of the girth was not followed by another pass
+        }
         AppendPiece(mesh, head, MeshPieceKind::Head, Joint::Head);
         AppendPiece(mesh, hands[0], MeshPieceKind::HandLeft, Joint::HandL);
         AppendPiece(mesh, hands[1], MeshPieceKind::HandRight, Joint::HandR);

@@ -22,7 +22,7 @@ class JobSystem;
 namespace character {
 
 struct MeshSettings {
-    float voxelMeters = 0.024f;  // the size of the grid the body is cut from, 6 mm to 4 cm; 2.4 cm gives 16000 to 50000 triangles
+    float voxelMeters = 0.024f;  // the size of the grid the body is cut from, 6 mm to 4 cm; 2.4 cm gives 16000 to 50000 triangles of body
     // The head and the hands are cut from finer grids, as pieces of their own (see DetailShapes.h). Without them the body
     // is made whole, with a plain head and mitten hands.
     bool faceAndHands = true;
@@ -59,7 +59,9 @@ struct CharacterMesh {
     std::vector<MeshPiece> pieces;  // the closed surfaces the lists above are made of, in order
     float girth = 1.0f;             // the factor on the radii of the trunk and limbs that gave the mass
     float volumeCubicMeters = 0.0f;
-    float massKg = 0.0f;            // the volume at the density of a living body
+    // The volume at the density of a living body. The head and the hands overlap the body a little at the neck and the wrists,
+    // and the overlap is counted twice, which is less than 1 percent of the mass.
+    float massKg = 0.0f;
 };
 
 // Makes a character. `jobs` may be null, which runs on the calling thread; the result is the same either way.
