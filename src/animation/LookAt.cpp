@@ -57,6 +57,12 @@ glm::vec3 HeadForward(const BodyModel& body, const Pose& pose) {
 }
 
 LookAtResult LookAt(const BodyModel& body, Pose& pose, const glm::vec3& targetWorld, float weight, const LookAtSettings& settings) {
+    // A target that is not a number cannot be looked at: leave the pose as it is.
+    if (!std::isfinite(targetWorld.x + targetWorld.y + targetWorld.z) || !std::isfinite(weight)) {
+        LookAtResult nothing;
+        nothing.errorDegrees = 180.0f;
+        return nothing;
+    }
     const Skeleton& skeleton = body.skeleton;
     const Pose before = pose;
     const WorldPose world = ForwardKinematics(skeleton, pose);

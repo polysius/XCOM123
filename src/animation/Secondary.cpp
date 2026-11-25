@@ -43,8 +43,13 @@ glm::vec3 ClampLength(const glm::vec3& v, float maxLength) {
 
 }  // namespace
 
+static bool IsFinite(const glm::vec3& v) {
+    return std::isfinite(v.x + v.y + v.z);
+}
+
 void StepCriticallyDamped(SpringState& spring, const glm::vec3& force, float omega, float dt) {
-    if (dt <= 0.0f) {
+    // Nothing that is not a number goes into a spring: it would never come out.
+    if (!std::isfinite(dt) || dt <= 0.0f || !std::isfinite(omega) || omega <= 0.0f || !IsFinite(force)) {
         return;
     }
     // About the point where the push balances the spring, the offset y obeys y'' = -2 w y' - w^2 y, which has the solution
@@ -68,7 +73,7 @@ void SecondaryMotion::Reset() {
 BodyLayer SecondaryMotion::Update(float dt, const glm::vec3& acceleration, float heading) {
     // In the frame of the body: forward acceleration tips the chest back (a negative pitch), acceleration to the left leans it
     // to the right (a positive roll lifts the left side).
-    const glm::vec3 local = ToBodyFrame(acceleration, heading);
+    const glm::vec3 local = IsFinite(acceleration) && std::isfinite(heading) ? ToBodyFrame(acceleration, heading) : glm::vec3(0.0f);
     const float gain = settings.chestGain * kDegreesToRadians;
     const glm::vec3 chestForce = glm::vec3(-local.z * gain, 0.0f, local.x * gain);
     // A spring pushed by a constant force rests at force / omega^2, so the force is scaled to rest at the lean the gain asks for.
@@ -92,6 +97,9 @@ BodyLayer SecondaryMotion::Update(float dt, const glm::vec3& acceleration, float
 HitReaction::HitReaction() = default;
 
 void HitReaction::Push(const glm::vec3& deltaVelocity, float heading) {
+    if (!IsFinite(deltaVelocity) || !std::isfinite(heading)) {
+        return;
+    }
     const glm::vec3 local = ToBodyFrame(deltaVelocity, heading);
     // A critically damped spring released with a velocity v0 from rest reaches its largest displacement, v0 / (e w), after 1 / w.
     const float e = 2.71828183f;

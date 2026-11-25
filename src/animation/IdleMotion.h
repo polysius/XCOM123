@@ -15,7 +15,7 @@ public:
     explicit IdleMotion(uint32_t seed = 1);
 
     // The layer at a time in seconds. The feet stay planted: the pelvis shifts and tilts and the legs follow.
-    BodyLayer Evaluate(float timeSeconds) const;
+    BodyLayer Evaluate(double timeSeconds) const;
 
 private:
     uint32_t seed;

@@ -84,6 +84,12 @@ float RestReach(const Skeleton& skeleton, const Limb& limb) {
 }
 
 IkResult SolveTwoBone(const Skeleton& skeleton, Pose& pose, const Limb& limb, const glm::vec3& targetWorld, const glm::vec3& poleDirection) {
+    // A target or a pole that is not a number would put NaN in the pose for good: leave the limb as it is.
+    if (!std::isfinite(targetWorld.x + targetWorld.y + targetWorld.z) || !std::isfinite(poleDirection.x + poleDirection.y + poleDirection.z)) {
+        IkResult unchanged;
+        unchanged.endPosition = ForwardKinematics(skeleton, pose).position[character::Index(limb.end)];
+        return unchanged;
+    }
     const BoneLengths bones = MeasureLimb(skeleton, limb);
     const character::JointInfo& lowerInfo = skeleton[limb.lower];
     const WorldPose before = ForwardKinematics(skeleton, pose);
@@ -94,8 +100,11 @@ IkResult SolveTwoBone(const Skeleton& skeleton, Pose& pose, const Limb& limb, co
     const float minFlexion = std::max(lowerInfo.minAngleDegrees.x, 0.0f);
     const float maxFlexion = lowerInfo.maxAngleDegrees.x;
     const glm::vec3 toTarget = targetWorld - upperPosition;
+    // A target on the upper joint itself has no direction: the limb folds along the way it points at rest.
     const float wantedDistance = std::max(glm::length(toTarget), 1e-5f);
-    const glm::vec3 along = toTarget / wantedDistance;
+    const glm::vec3 along = glm::length(toTarget) > 1e-5f
+                                ? toTarget / wantedDistance
+                                : glm::normalize(parentRotation * (skeleton[limb.end].restPosition - skeleton[limb.upper].restPosition));
     const float distance = std::clamp(wantedDistance, ReachAtFlexion(bones, maxFlexion), ReachAtFlexion(bones, minFlexion));
 
     // Triangle upper joint, hinge, end: the angle at the upper joint from the law of cosines.

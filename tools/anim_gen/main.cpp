@@ -237,7 +237,8 @@ struct Measurements {
 std::array<glm::vec3, 3> FootContactPoints(const character::Skeleton& skeleton, const Pose& pose, bool left) {
     const character::FootContacts& contacts = left ? skeleton.leftFoot : skeleton.rightFoot;
     const glm::mat4 skin = character::SkinMatrices(skeleton, pose)[character::Index(left ? Joint::FootL : Joint::FootR)];
-    return {Transform(skin, contacts.heel), Transform(skin, contacts.ball), Transform(skin, contacts.toe)};
+    const glm::mat4 toesSkin = character::SkinMatrices(skeleton, pose)[character::Index(left ? Joint::ToesL : Joint::ToesR)];
+    return {Transform(skin, contacts.heel), Transform(skin, contacts.ball), Transform(toesSkin, contacts.toe)};
 }
 
 // A sheet of sitting down onto a seat: the side and the front view at `frames` moments from standing to seated.
@@ -314,7 +315,7 @@ int main(int argc, char** argv) {
     for (int i = 0; i <= steps; ++i) {
         walker.Update(dt, command);
         const Pose& pose = walker.CurrentPose();
-        all.push_back({pose, walker.Time()});
+        all.push_back({pose, static_cast<float>(walker.Time())});
         const std::array<glm::vec3, kJointCount> joints = character::JointPositions(body.skeleton, pose);
         if (options.trace) {
             std::cout << "trace " << i << " pelvisY " << joints[0].y - walker.Position().y << " x " << joints[0].x << " phase " << walker.Phase() << " reach "
@@ -333,7 +334,8 @@ int main(int argc, char** argv) {
                 // The pivot is the heel while it is on the ground and the ball once the heel has lifted: the lower of the two moves least.
                 const float heelSpeed = glm::length(glm::vec2(contact[0].x - previousHeel[index].x, contact[0].z - previousHeel[index].z)) / dt;
                 const float ballSpeed = glm::length(glm::vec2(contact[1].x - previousBall[index].x, contact[1].z - previousBall[index].z)) / dt;
-                measured.worstStanceSlip = std::max(measured.worstStanceSlip, std::min(heelSpeed, ballSpeed));            }
+                measured.worstStanceSlip = std::max(measured.worstStanceSlip, std::min(heelSpeed, ballSpeed));
+            }
             previousHeel[index] = contact[0];
             previousBall[index] = contact[1];
             wasPlanted[index] = planted;

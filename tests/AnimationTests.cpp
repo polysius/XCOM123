@@ -13,6 +13,7 @@
 #include <functional>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -1470,6 +1471,144 @@ void AMixOfAllTheLayersStaysInsideTheLimitsAndContinuous() {
     Check(worst < 2300.0f, "the whole stack has no pops: " + std::to_string(worst));
 }
 
+// ---------------------------------------------------------------------------
+// Bad input, long frames and long runs
+// ---------------------------------------------------------------------------
+
+bool PoseIsFinite(const Pose& pose) {
+    bool finite = std::isfinite(pose.rootTranslation.x + pose.rootTranslation.y + pose.rootTranslation.z);
+    for (const glm::quat& q : pose.rotation) {
+        finite = finite && std::isfinite(q.x + q.y + q.z + q.w) && std::abs(glm::length(q) - 1.0f) < 1e-3f;
+    }
+    return finite;
+}
+
+void NumbersThatAreNotNumbersLeaveLaterFramesFinite() {
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float inf = std::numeric_limits<float>::infinity();
+    const BodyModel body = MakeBodyModel(Person(0.5f, 30, 1.75f, 70, 0.4f));
+
+    // The walker: a time step, a speed and a turn that are not numbers.
+    Walker walker(body, PersonalityFrom(body.parameters));
+    walker.Reset(glm::vec3(0.0f), 0.0f);
+    for (int i = 0; i < 120; ++i) {
+        walker.Update(1.0f / 60.0f, LocomotionCommand{1.4f, 0.0f});
+    }
+    const float badValues[] = {nan, inf, -inf};
+    for (const float bad : badValues) {
+        walker.Update(bad, LocomotionCommand{1.4f, 0.0f});
+        walker.Update(1.0f / 60.0f, LocomotionCommand{bad, 0.0f});
+        walker.Update(1.0f / 60.0f, LocomotionCommand{1.4f, bad});
+        walker.Update(1.0f / 60.0f, LocomotionCommand{bad, bad});
+        Check(PoseIsFinite(walker.CurrentPose()), "the walker's pose is finite after a bad input");
+        BodyLayer poisoned;
+        poisoned.pelvisOffset = glm::vec3(bad);
+        poisoned.additive.rotation[3] = glm::quat(bad, bad, bad, bad);
+        walker.SetLayer(poisoned);
+    }
+    for (int i = 0; i < 120; ++i) {
+        walker.Update(1.0f / 60.0f, LocomotionCommand{1.4f, 0.0f});
+        Check(PoseIsFinite(walker.CurrentPose()), "later frames are finite");
+        Check(std::isfinite(walker.Position().x + walker.Position().z + walker.Heading() + walker.Speed()), "the walker's place is finite");
+    }
+    const std::vector<Frame> after = {RecordFrame(walker)};
+    Check(after[0].foot[0].heel.y > -0.01f && after[0].foot[1].heel.y > -0.01f, "the feet are not under the ground after the bad frames");
+
+    // Inverse kinematics: a target that is not a number, and a target on the hip itself.
+    Pose pose;
+    const Limb leg = LegLimb(true);
+    SolveTwoBone(body.skeleton, pose, leg, glm::vec3(nan, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+    SolveTwoBone(body.skeleton, pose, leg, glm::vec3(0.0f, 0.5f, 0.0f), glm::vec3(inf, 0.0f, 1.0f));
+    Check(PoseIsFinite(pose), "inverse kinematics leaves the pose alone for a target that is not a number");
+    SolveTwoBone(body.skeleton, pose, leg, body.skeleton[leg.upper].restPosition, glm::vec3(0.0f, 0.0f, 1.0f));
+    Check(PoseIsFinite(pose), "a target on the hip itself gives a finite pose");
+    const WorldPose folded = ForwardKinematics(body.skeleton, pose);
+    Check(std::isfinite(folded.position[character::Index(leg.end)].x), "and a finite ankle");
+    SolveTwoBone(body.skeleton, pose, leg, body.skeleton[leg.upper].restPosition + glm::vec3(0, -0.5f, 0), glm::vec3(0.0f));
+    Check(PoseIsFinite(pose), "a pole of nothing gives a finite pose");
+
+    // Looking, springs, hits and blends.
+    Pose standing = StandingPose(body);
+    LookAt(body, standing, glm::vec3(nan, 1.0f, 1.0f));
+    LookAt(body, standing, glm::vec3(1.0f, 1.0f, 1.0f), nan);
+    Check(PoseIsFinite(standing), "a look at nothing leaves a finite pose");
+    SecondaryMotion secondary;
+    HitReaction hit;
+    for (const float bad : badValues) {
+        secondary.Update(bad, glm::vec3(1.0f), 0.0f);
+        secondary.Update(0.01f, glm::vec3(bad), bad);
+        hit.Push(glm::vec3(bad, 0.0f, 1.0f), 0.0f);
+        hit.Push(glm::vec3(1.0f, 0.0f, 0.0f), bad);
+    }
+    const BodyLayer afterBad = CombinedLayers(secondary.Update(0.01f, glm::vec3(1.0f, 0.0f, 0.0f), 0.0f), hit.Update(0.01f));
+    Check(std::isfinite(afterBad.pelvisOffset.x + afterBad.pelvisOffset.y + afterBad.pelvisOffset.z), "a spring is not poisoned by bad numbers");
+    for (const glm::quat& q : afterBad.additive.rotation) {
+        Check(std::isfinite(q.x + q.y + q.z + q.w), "a layer is finite after bad numbers");
+    }
+    const Pose a = StandingPose(body);
+    const Pose b = standing;
+    for (const float bad : badValues) {
+        Check(PoseIsFinite(BlendPoses(a, b, bad)), "a blend with a weight that is not a number is finite");
+        const WeightedPose entries[] = {{&a, bad}, {&b, 1.0f}};
+        Check(PoseIsFinite(BlendWeighted(entries)), "a weighted blend with a bad weight is finite");
+        Check(PoseIsFinite(ApplyAdditive(a, b, bad)), "an additive layer with a bad weight is finite");
+    }
+    CrossFade fade;
+    fade.Begin(nan);
+    fade.Advance(nan);
+    Check(std::isfinite(fade.Weight()), "a cross fade with bad times has a finite weight");
+}
+
+void ALongFrameIsTakenInSmallSteps() {
+    // A frame of a quarter of a second, or of ten seconds, plants and lifts the feet as shorter frames would.
+    const BodyModel body = MakeBodyModel(Person(0.5f, 30, 1.75f, 70, 0.4f));
+    for (const float frame : {0.1f, 0.25f, 0.5f, 10.0f}) {
+        Walker walker(body, PersonalityFrom(body.parameters));
+        walker.Reset(glm::vec3(0.0f), 0.0f);
+        std::vector<Frame> frames;
+        for (int i = 0; i < 40; ++i) {
+            walker.Update(frame, LocomotionCommand{1.4f, 0.0f});
+            frames.push_back(RecordFrame(walker));
+        }
+        for (const Frame& f : frames) {
+            Check(PoseIsFinite(f.pose), "a pose after a long frame is finite");
+            for (const FootSample& foot : f.foot) {
+                Check(foot.heel.y > -0.008f && foot.ball.y > -0.008f, "a foot is not under the ground after a frame of " + std::to_string(frame) + " seconds");
+                Check(foot.legReaches, "the leg reaches the foot after a frame of " + std::to_string(frame) + " seconds");
+            }
+        }
+    }
+}
+
+void LongRunsKeepCounting() {
+    // A float of seconds stops counting when its step is smaller than its last digit, at about a million seconds; the time of
+    // the walker and the fidgets of an idle person go on.
+    const BodyModel body = MakeBodyModel(Person(0.5f, 30, 1.75f, 70, 0.4f));
+    Walker walker(body, PersonalityFrom(body.parameters));
+    walker.Reset(glm::vec3(0.0f), 0.0f);
+    for (int i = 0; i < 3; ++i) {
+        walker.Update(0.5f, LocomotionCommand{});
+    }
+    Check(std::abs(walker.Time() - 1.5) < 1e-4, "the time of a walker adds up");
+    IdleMotion idle(3);
+    for (const double start : {1.0e6, 1.0e7, 1.0e9}) {
+        const BodyLayer first = idle.Evaluate(start);
+        const BodyLayer later = idle.Evaluate(start + 0.3);
+        float change = 0.0f;
+        for (int j = 0; j < kJointCount; ++j) {
+            Check(std::isfinite(first.additive.rotation[j].w), "idle motion is finite at a very late time");
+            change += DegreesBetween(first.additive.rotation[j], later.additive.rotation[j]);
+        }
+        Check(change > 0.01f, "idle motion still moves at a very late time");
+        const BodyLayer close = idle.Evaluate(start + 0.001);
+        float jump = 0.0f;
+        for (int j = 0; j < kJointCount; ++j) {
+            jump = std::max(jump, DegreesBetween(first.additive.rotation[j], close.additive.rotation[j]));
+        }
+        Check(jump < 0.1f, "idle motion is smooth at a very late time: " + std::to_string(jump));
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -1523,6 +1662,9 @@ int main(int argc, char** argv) {
         {"AdditiveLayersApplyOnTopOfAPose", AdditiveLayersApplyOnTopOfAPose},
         {"ACrossFadeIsSmoothAndHasNoPops", ACrossFadeIsSmoothAndHasNoPops},
         {"AMixOfAllTheLayersStaysInsideTheLimitsAndContinuous", AMixOfAllTheLayersStaysInsideTheLimitsAndContinuous},
+        {"NumbersThatAreNotNumbersLeaveLaterFramesFinite", NumbersThatAreNotNumbersLeaveLaterFramesFinite},
+        {"ALongFrameIsTakenInSmallSteps", ALongFrameIsTakenInSmallSteps},
+        {"LongRunsKeepCounting", LongRunsKeepCounting},
     };
 
     int ran = 0;

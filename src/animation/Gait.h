@@ -77,7 +77,7 @@ public:
     float Speed() const { return speed; }
     float TurnRate() const { return turnRate; }
     float Phase() const { return phase; }  // 0 to 1: how far through the cycle of the left foot
-    float Time() const { return time; }
+    double Time() const { return time; }
 
     // True while a foot is planted: the part of the cycle from heel strike to toe-off.
     bool IsPlanted(bool left) const { return feet[left ? 0 : 1].planted; }
@@ -121,6 +121,7 @@ private:
     void PoseLeg(Pose& built, bool left);
     FootPose SwingingFoot(const FootTrack& foot, float swingProgress, const Footfall& landing) const;
     void UpdateFoot(bool left, float cyclePosition);
+    void Step(float dt, float wantedSpeed, float wantedTurnRate);
     float PelvisHeight(float dt, const glm::vec3& pelvisPosition, const glm::quat& pelvisWorld, float moveWeight, float pelvisPitchDegrees, float extraHeight);
     void BuildPose(float dt);
 
@@ -137,7 +138,7 @@ private:
     float acceleration = 0.0f;
     float turnRate = 0.0f;
     float phase = 0.0f;
-    float time = 0.0f;
+    double time = 0.0;  // a double: a float stops counting after about a million seconds
     GaitShape shape;
     float pelvisHeightState = 0.0f;  // the smoothed height of the pelvis
     bool pelvisHeightKnown = false;

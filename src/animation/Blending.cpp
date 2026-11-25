@@ -8,10 +8,15 @@ namespace {
 
 const glm::quat kIdentity(1.0f, 0.0f, 0.0f, 0.0f);
 
+// A weight that is not a number, or is negative, counts as nothing.
+float SafeWeight(float weight) {
+    return std::isfinite(weight) && weight > 0.0f ? weight : 0.0f;
+}
+
 }  // namespace
 
 Pose BlendPoses(const Pose& a, const Pose& b, float t) {
-    const float blend = std::clamp(t, 0.0f, 1.0f);
+    const float blend = std::isfinite(t) ? std::clamp(t, 0.0f, 1.0f) : 0.0f;
     Pose result;
     for (int i = 0; i < kJointCount; ++i) {
         result.rotation[i] = glm::normalize(glm::slerp(a.rotation[i], b.rotation[i], blend));
@@ -26,7 +31,7 @@ Pose BlendWeighted(std::span<const WeightedPose> poses) {
     }
     float total = 0.0f;
     for (const WeightedPose& entry : poses) {
-        total += std::max(entry.weight, 0.0f);
+        total += SafeWeight(entry.weight);
     }
     if (total <= 0.0f) {
         return *poses.front().pose;
@@ -41,12 +46,12 @@ Pose BlendWeighted(std::span<const WeightedPose> poses) {
             if (glm::dot(q, reference) < 0.0f) {
                 q = -q;
             }
-            sum += std::max(entry.weight, 0.0f) / total * glm::vec4(q.x, q.y, q.z, q.w);
+            sum += SafeWeight(entry.weight) / total * glm::vec4(q.x, q.y, q.z, q.w);
         }
         result.rotation[i] = glm::normalize(glm::quat(sum.w, sum.x, sum.y, sum.z));
     }
     for (const WeightedPose& entry : poses) {
-        result.rootTranslation += std::max(entry.weight, 0.0f) / total * entry.pose->rootTranslation;
+        result.rootTranslation += SafeWeight(entry.weight) / total * entry.pose->rootTranslation;
     }
     return result;
 }
@@ -63,9 +68,9 @@ Pose MakeAdditive(const Pose& pose, const Pose& reference) {
 Pose ApplyAdditive(const Pose& base, const Pose& additive, float weight) {
     Pose result;
     for (int i = 0; i < kJointCount; ++i) {
-        result.rotation[i] = glm::normalize(base.rotation[i] * glm::slerp(kIdentity, additive.rotation[i], weight));
+        result.rotation[i] = glm::normalize(base.rotation[i] * glm::slerp(kIdentity, additive.rotation[i], SafeWeight(weight)));
     }
-    result.rootTranslation = base.rootTranslation + additive.rootTranslation * weight;
+    result.rootTranslation = base.rootTranslation + additive.rootTranslation * SafeWeight(weight);
     return result;
 }
 
@@ -99,12 +104,12 @@ Pose BlendTree::Evaluate() const {
 }
 
 void CrossFade::Begin(float durationSeconds) {
-    duration = std::max(durationSeconds, 0.0f);
+    duration = SafeWeight(durationSeconds);
     elapsed = 0.0f;
 }
 
 void CrossFade::Advance(float dt) {
-    elapsed = std::min(elapsed + std::max(dt, 0.0f), duration);
+    elapsed = std::min(elapsed + SafeWeight(dt), duration);
 }
 
 float CrossFade::Weight() const {

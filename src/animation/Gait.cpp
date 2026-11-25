@@ -12,6 +12,9 @@ namespace {
 constexpr float kPi = 3.14159265359f;
 constexpr float kTwoPi = 6.28318530718f;
 constexpr float kGravity = 9.81f;
+// Updates are made in steps of at most a sixtieth of a second, and an update never covers more than half a second.
+constexpr float kMaxStep = 1.0f / 60.0f;
+constexpr float kLongestUpdate = 0.5f;
 constexpr float kReferenceLegLength = 0.92f;  // of the person the cadence and speed numbers below were fitted on
 
 // The pitch of the foot, toes up, at heel strike and at toe-off, at full roll (the toes can only bend up 10 degrees, so toe-off is modest).
@@ -235,7 +238,12 @@ Walker::Walker(const BodyModel& body_, const Personality& personality_, GroundFu
 }
 
 void Walker::SetLayer(const BodyLayer& newLayer) {
-    layer = newLayer;
+    // A layer with a number that is not finite would poison every pose after it: it is replaced by no layer at all.
+    bool finite = std::isfinite(newLayer.pelvisOffset.x + newLayer.pelvisOffset.y + newLayer.pelvisOffset.z);
+    for (const glm::quat& q : newLayer.additive.rotation) {
+        finite = finite && std::isfinite(q.x + q.y + q.z + q.w) && glm::dot(q, q) > 1e-6f;
+    }
+    layer = finite ? newLayer : BodyLayer();
 }
 
 float Walker::GroundHeight(float x, float z) const {
@@ -257,7 +265,7 @@ void Walker::Reset(const glm::vec3& startPosition, float headingRadians) {
     acceleration = 0.0f;
     turnRate = 0.0f;
     phase = 0.0f;
-    time = 0.0f;
+    time = 0.0;
     shape = ComputeGaitShape(body, personality, 0.0f);
     for (const bool left : {true, false}) {
         FootTrack& foot = feet[left ? 0 : 1];
@@ -271,15 +279,26 @@ void Walker::Reset(const glm::vec3& startPosition, float headingRadians) {
 }
 
 void Walker::Update(float dt, const LocomotionCommand& command) {
-    if (dt <= 0.0f) {
+    // A time step that is not a number, or not positive, is ignored; a long one is taken in small steps, so that the feet
+    // are planted and lifted at the right moments however long the frame was.
+    if (!std::isfinite(dt) || dt <= 0.0f) {
         return;
     }
+    const float wantedSpeed = std::isfinite(command.speed) ? std::clamp(command.speed, 0.0f, MaximumSpeed(body)) : 0.0f;
+    const float wantedTurnRate = std::isfinite(command.turnRate) ? command.turnRate : 0.0f;
+    const float total = std::min(dt, kLongestUpdate);
+    const int steps = std::max(1, static_cast<int>(std::ceil(total / kMaxStep)));
+    for (int i = 0; i < steps; ++i) {
+        Step(total / static_cast<float>(steps), wantedSpeed, wantedTurnRate);
+    }
+}
+
+void Walker::Step(float dt, float wantedSpeed, float wantedTurnRate) {
     // Speed and turning follow the command at a limited rate.
-    const float wantedSpeed = std::clamp(command.speed, 0.0f, MaximumSpeed(body));
     const float previousSpeed = speed;
     speed = wantedSpeed > speed ? std::min(wantedSpeed, speed + settings.acceleration * dt) : std::max(wantedSpeed, speed - settings.deceleration * dt);
     acceleration = (speed - previousSpeed) / dt;
-    turnRate += (command.turnRate - turnRate) * (1.0f - std::exp(-settings.turnResponse * dt));
+    turnRate += (wantedTurnRate - turnRate) * (1.0f - std::exp(-settings.turnResponse * dt));
 
     shape = ComputeGaitShape(body, personality, speed);
     phase += dt / shape.period;
