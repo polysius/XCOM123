@@ -46,6 +46,11 @@ struct Options {
     bool dynamicResolution = true;
     float gpuBudgetMs = 14.0f;
 
+    // The graph editor, drawn over the scene. It is off unless asked for, and only an interactive run or a screenshot can have it.
+    bool editor = false;          // open the editor from the start (F1 opens and closes it in an interactive run either way)
+    std::string editorGraphPath;  // a graph file for the editor to load at the start; implies editor
+    bool editorPlay = false;      // run the graph in the editor from the start; implies editor
+
     bool IsBenchmark() const { return benchmarkFrames > 0; }
     bool IsScreenshot() const { return !screenshotPath.empty(); }
 };

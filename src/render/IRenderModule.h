@@ -8,6 +8,7 @@
 
 #include "core/Module_Interface.h"
 #include "material/MaterialLibrary.h"
+#include "render/IFrameOverlay.h"
 #include "scene/SceneTypes.h"
 
 // GPU time spent in one render pass.
@@ -58,4 +59,7 @@ public:
     virtual bool RenderAndCapture(const FrameInput& frame, const std::string& pngPath) = 0;
     virtual RenderStats GetStats() const = 0;
     virtual std::string GetDeviceName() const = 0;
+    // Puts something to draw over every finished frame, such as an editor, or takes it away again with null. The renderer
+    // does not own it: the caller takes it away before it is destroyed. Without one, frames are drawn as they always were.
+    virtual void SetOverlay(IFrameOverlay* overlay) = 0;
 };

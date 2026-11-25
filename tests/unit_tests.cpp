@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "core/CommandLine.h"
+#include "core/FlyCamera.h"
 #include "core/FrameStatistics.h"
 #include "physics/PropField.h"
 #include "world/Crowd.h"
@@ -119,6 +120,37 @@ void CommandLineReadsSatellites() {
     Check(Parse({"--satellites", "4"}).satelliteCount == 4, "four");
     Check(IsRejected({"--satellites", "9"}), "too many satellites");
     Check(IsRejected({"--satellites", "-1"}), "negative satellites");
+}
+
+void CommandLineReadsTheEditorOptions() {
+    const Options defaults = Parse({});
+    Check(!defaults.editor && defaults.editorGraphPath.empty() && !defaults.editorPlay, "the editor is off by default");
+    Check(Parse({"--editor"}).editor, "--editor opens the editor");
+    const Options withGraph = Parse({"--editor-graph", "my graph.json"});
+    Check(withGraph.editor && withGraph.editorGraphPath == "my graph.json", "--editor-graph names a file and opens the editor");
+    Check(Parse({"--editor-play"}).editor && Parse({"--editor-play"}).editorPlay, "--editor-play opens the editor and runs the graph");
+    Check(Parse({"--editor", "--screenshot", "a.png"}).editor, "a screenshot may show the editor");
+    Check(IsRejected({"--editor", "--benchmark", "100"}), "the benchmark must not have the editor");
+    Check(IsRejected({"--editor-graph"}), "a missing graph file name");
+    Check(IsRejected({"--editor-graph", "--novsync"}), "an option where the graph file name should be");
+    Check(!IsRejected({"--editor-graph", "graphs/a.json"}), "a path is a file name");
+    bool namesWhatWasTyped = false;
+    try {
+        Parse({"--benchmark", "10", "--editor-play"});
+    } catch (const std::invalid_argument& error) {
+        namesWhatWasTyped = std::string(error.what()).find("--editor-play") != std::string::npos;
+    }
+    Check(namesWhatWasTyped, "the editor options rejected with --benchmark are named by the message, not only --editor");
+}
+
+void ALookEndsWhenTheButtonIsLetGoAndOnlyStartsWhenAllowed() {
+    Check(FlyCamera::IsLookingAfter(false, true, true), "a look does not start when the button goes down");
+    Check(!FlyCamera::IsLookingAfter(false, true, false), "a look started while the editor held the pointer");
+    Check(FlyCamera::IsLookingAfter(true, true, true), "a look ended while the button was held");
+    Check(FlyCamera::IsLookingAfter(true, true, false), "a look that was going stopped when the editor asked for the pointer");
+    Check(!FlyCamera::IsLookingAfter(true, false, true), "a look went on after the button was let go");
+    Check(!FlyCamera::IsLookingAfter(true, false, false), "a look went on after the button was let go while the editor held the pointer, leaving the cursor hidden");
+    Check(!FlyCamera::IsLookingAfter(false, false, false), "a camera is looking with no button down");
 }
 
 void BenchmarkAndScreenshotTurnVsyncOff() {
@@ -954,6 +986,8 @@ int main() {
         {"CommandLineReadsSatellites", CommandLineReadsSatellites},
         {"CommandLineReadsProps", CommandLineReadsProps},
         {"CommandLineReadsTheRiverSimulation", CommandLineReadsTheRiverSimulation},
+        {"CommandLineReadsTheEditorOptions", CommandLineReadsTheEditorOptions},
+        {"ALookEndsWhenTheButtonIsLetGoAndOnlyStartsWhenAllowed", ALookEndsWhenTheButtonIsLetGoAndOnlyStartsWhenAllowed},
         {"BenchmarkAndScreenshotTurnVsyncOff", BenchmarkAndScreenshotTurnVsyncOff},
         {"FrameSummaryOfNothingIsEmpty", FrameSummaryOfNothingIsEmpty},
         {"FrameSummaryUsesNearestRank", FrameSummaryUsesNearestRank},

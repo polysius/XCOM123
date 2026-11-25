@@ -48,6 +48,7 @@ public:
     bool RenderAndCapture(const FrameInput& frame, const std::string& pngPath) override;
     RenderStats GetStats() const override;
     std::string GetDeviceName() const override;
+    void SetOverlay(IFrameOverlay* newOverlay) override;
 
 private:
     // Two frames in flight: the CPU prepares one frame while the GPU draws the previous one.
@@ -87,6 +88,7 @@ private:
                             const glm::mat4& lightViewProjection) const;
     void RecordCommands(uint32_t frameSlot, uint32_t imageIndex, const glm::mat4& cameraViewProjection,
                         const glm::mat4& lightViewProjection, bool captureScreenshot);
+    void RecordOverlay(VkCommandBuffer cmd, VkImage swapchainImage, VkImageView swapchainView);
     void Submit(const FrameResources& frame, uint32_t imageIndex);
     void Present(uint32_t imageIndex);
 
@@ -112,6 +114,7 @@ private:
     GpuProfiler profiler;
     DynamicResolution dynamicResolution;
     ScreenshotCapture screenshot;
+    IFrameOverlay* overlay = nullptr;  // drawn after the tonemap pass; not owned, see SetOverlay
 
     uint64_t lastFedMeasurement = 0;
     float currentRenderScale = 1.0f;

@@ -56,11 +56,32 @@ FetchContent_Declare(glslang
     GIT_TAG 15.0.0
     GIT_SHALLOW TRUE)
 
-FetchContent_MakeAvailable(glfw glm VulkanHeaders volk glslang)
+# Dear ImGui draws the graph editor. The tag is the release of the master branch (not the docking one); like volk it is
+# compiled below as part of this project, so its own files are not built by FetchContent.
+FetchContent_Declare(imgui
+    GIT_REPOSITORY https://github.com/ocornut/imgui.git
+    GIT_TAG v1.91.9b
+    GIT_SHALLOW TRUE
+    SOURCE_SUBDIR do-not-build)
+
+FetchContent_MakeAvailable(glfw glm VulkanHeaders volk glslang imgui)
 
 add_library(volk STATIC ${volk_SOURCE_DIR}/volk.c)
 target_include_directories(volk PUBLIC ${volk_SOURCE_DIR})
 target_link_libraries(volk PUBLIC Vulkan::Headers)
+
+# ImGui with the GLFW and Vulkan backends. The renderer loads Vulkan through volk, so the Vulkan backend must call volk's
+# functions too (IMGUI_IMPL_VULKAN_USE_VOLK) and not the loader's. The demo window is not compiled.
+add_library(imgui STATIC
+    ${imgui_SOURCE_DIR}/imgui.cpp
+    ${imgui_SOURCE_DIR}/imgui_draw.cpp
+    ${imgui_SOURCE_DIR}/imgui_tables.cpp
+    ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp)
+target_include_directories(imgui SYSTEM PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends)
+target_compile_definitions(imgui PUBLIC IMGUI_IMPL_VULKAN_USE_VOLK GLFW_INCLUDE_NONE)
+target_link_libraries(imgui PUBLIC glfw volk)
 
 # ---------------------------------------------------------------------------
 # Shaders: GLSL in shaders/ is compiled to SPIR-V in the build folder.
@@ -99,7 +120,7 @@ file(GLOB_RECURSE ENGINE_HEADERS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/s
 add_executable(XCOM123 ${ENGINE_SOURCES} ${ENGINE_HEADERS})
 
 target_include_directories(XCOM123 PRIVATE src)
-target_link_libraries(XCOM123 PRIVATE glfw glm::glm volk)
+target_link_libraries(XCOM123 PRIVATE glfw glm::glm volk imgui)
 target_compile_definitions(XCOM123 PRIVATE
     GLFW_INCLUDE_NONE
     GLM_FORCE_RADIANS
@@ -233,6 +254,18 @@ if(MSVC)
     target_compile_options(graph_tests PRIVATE /W4 /permissive- /MP)
 endif()
 add_test(NAME graph_tests COMMAND graph_tests)
+
+# graph_editor_tests checks the model behind the graph editor: selection, moving, wires, the palette, copy and paste, undo, play
+# and saving. It builds only the model sources (src/graph_editor, not src/editor_ui) and the graph, so it needs no GPU or window.
+file(GLOB GRAPH_EDITOR_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/graph_editor/*.cpp)
+add_executable(graph_editor_tests tests/GraphEditorTests.cpp ${GRAPH_EDITOR_SOURCES} ${GRAPH_SOURCES})
+target_include_directories(graph_editor_tests PRIVATE src)
+target_link_libraries(graph_editor_tests PRIVATE glm::glm)
+target_compile_definitions(graph_editor_tests PRIVATE GLM_FORCE_RADIANS GLM_FORCE_DEPTH_ZERO_TO_ONE)
+if(MSVC)
+    target_compile_options(graph_editor_tests PRIVATE /W4 /permissive- /MP)
+endif()
+add_test(NAME graph_editor_tests COMMAND graph_editor_tests)
 
 # ---------------------------------------------------------------------------
 # City generator tests

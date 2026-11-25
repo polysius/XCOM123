@@ -45,8 +45,11 @@ glm::vec3 FlyCamera::Forward() const {
     return {std::cos(pitch) * std::sin(yaw), std::sin(pitch), std::cos(pitch) * std::cos(yaw)};
 }
 
-void FlyCamera::Update(GLFWwindow* window, float deltaSeconds) {
-    UpdateLook(window);
+void FlyCamera::Update(GLFWwindow* window, float deltaSeconds, bool mayStartLook, bool mayMove) {
+    UpdateLook(window, mayStartLook);
+    if (!mayMove) {
+        return;
+    }
 
     const glm::vec3 forward = Forward();
     const glm::vec3 right = glm::normalize(glm::cross(forward, kWorldUp));
@@ -65,20 +68,21 @@ void FlyCamera::Update(GLFWwindow* window, float deltaSeconds) {
     }
 }
 
-void FlyCamera::UpdateLook(GLFWwindow* window) {
+void FlyCamera::UpdateLook(GLFWwindow* window, bool mayStartLook) {
     const bool rightButtonHeld = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
     double cursorX = 0.0;
     double cursorY = 0.0;
     glfwGetCursorPos(window, &cursorX, &cursorY);
 
-    if (rightButtonHeld && !isLooking) {
+    const bool looksNow = IsLookingAfter(isLooking, rightButtonHeld, mayStartLook);
+    if (looksNow && !isLooking) {
         // Hide and lock the cursor while looking so it never hits the edge of the screen.
         isLooking = true;
         glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
         glfwGetCursorPos(window, &cursorX, &cursorY);
         lastCursorX = cursorX;
         lastCursorY = cursorY;
-    } else if (!rightButtonHeld && isLooking) {
+    } else if (!looksNow && isLooking) {
         isLooking = false;
         glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
     }
