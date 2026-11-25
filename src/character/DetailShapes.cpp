@@ -23,28 +23,78 @@ float Variation(uint32_t seed, uint32_t salt, float amount) {
     return 1.0f + amount * (static_cast<float>(h >> 8) * (2.0f / 16777216.0f) - 1.0f);
 }
 
-}  // namespace
+// The features differ with sex and with the person. These factors scale the numbers in BuildHeadShape, and the landmarks
+// are read from the same factors, so that whatever is fitted to the head (eyes, brows) always agrees with the shape.
+struct FaceProportions {
+    float headWidth;
+    float jawWidth;
+    float chinSize;
+    float browSize;
+    float cheekSize;
+    float noseSize;
+    float noseLength;
+    float lipSize;
+    float earSize;
+};
 
-BodyShape BuildHeadShape(const CharacterParameters& parameters) {
-    const CharacterParameters clean = Sanitised(parameters);
-    const float s = clean.statureMeters / 1.75f;
+FaceProportions MakeFaceProportions(const CharacterParameters& clean) {
     const float male = clean.masculinity;
     const float female = 1.0f - clean.masculinity;
     const float age = std::clamp((clean.ageYears - 30.0f) / 50.0f, 0.0f, 1.0f);
     const uint32_t seed = clean.seed;
+    FaceProportions f;
+    f.headWidth = (1.0f - 0.03f * female) * Variation(seed, 11, 0.04f);
+    f.jawWidth = (0.92f + 0.14f * male) * Variation(seed, 12, 0.06f);
+    f.chinSize = (0.90f + 0.18f * male) * Variation(seed, 13, 0.10f);
+    f.browSize = (0.70f + 0.65f * male) * Variation(seed, 14, 0.12f);
+    f.cheekSize = (1.10f - 0.15f * male) * Variation(seed, 15, 0.08f);
+    f.noseSize = (0.96f + 0.08f * male) * Variation(seed, 16, 0.06f);
+    f.noseLength = Variation(seed, 17, 0.08f) * (1.0f + 0.04f * age);
+    f.lipSize = (0.85f + 0.35f * female) * Variation(seed, 18, 0.12f) * (1.0f - 0.25f * age);
+    f.earSize = Variation(seed, 19, 0.08f) * (1.0f + 0.06f * age);
+    return f;
+}
 
-    // The features differ with sex and with the person. Every number below is in metres for a person of 1.75 m, as
-    // measured on a face: the points are given where they sit on the head, from the chin at 1.5225 m up to the crown at
-    // 1.75 m, and from the middle of the head forwards.
-    const float headWidth = (1.0f - 0.03f * female) * Variation(seed, 11, 0.04f);
-    const float jawWidth = (0.92f + 0.14f * male) * Variation(seed, 12, 0.06f);
-    const float chinSize = (0.90f + 0.18f * male) * Variation(seed, 13, 0.10f);
-    const float browSize = (0.70f + 0.65f * male) * Variation(seed, 14, 0.12f);
-    const float cheekSize = (1.10f - 0.15f * male) * Variation(seed, 15, 0.08f);
-    const float noseSize = (0.96f + 0.08f * male) * Variation(seed, 16, 0.06f);
-    const float noseLength = Variation(seed, 17, 0.08f) * (1.0f + 0.04f * age);
-    const float lipSize = (0.85f + 0.35f * female) * Variation(seed, 18, 0.12f) * (1.0f - 0.25f * age);
-    const float earSize = Variation(seed, 19, 0.08f) * (1.0f + 0.06f * age);
+}  // namespace
+
+HeadLandmarks ComputeHeadLandmarks(const CharacterParameters& parameters) {
+    const CharacterParameters clean = Sanitised(parameters);
+    const float s = clean.statureMeters / 1.75f;
+    const FaceProportions f = MakeFaceProportions(clean);
+    HeadLandmarks landmarks;
+    landmarks.scale = s;
+    landmarks.headWidth = f.headWidth;
+    for (int i = 0; i < 2; ++i) {
+        const float side = i == 0 ? 1.0f : -1.0f;  // the character's left side is +X
+        landmarks.eyeSockets[i].centre = glm::vec3(side * 0.031f * f.headWidth, 1.636f, 0.089f) * s;
+        landmarks.eyeSockets[i].radii = glm::vec3(0.0165f, 0.0115f, 0.0125f) * s;
+        landmarks.eyeSockets[i].smoothing = 0.007f * s;
+        landmarks.ears[i] = glm::vec3(side * 0.0800f * f.headWidth, 1.625f, -0.005f) * s;
+    }
+    landmarks.noseTip = glm::vec3(0.0f, 1.646f - 0.046f * f.noseLength, 0.1020f * f.noseSize + 0.0100f) * s;
+    landmarks.browFront = glm::vec3(0.0f, 1.667f, 0.078f + 0.0100f * f.browSize) * s;
+    landmarks.mouth = glm::vec3(0.0f, 1.566f, 0.0900f) * s;
+    landmarks.chin = glm::vec3(0.0f, 1.539f, 0.070f + 0.020f * f.chinSize) * s;
+    landmarks.crown = glm::vec3(0.0f, 1.750f, -0.010f) * s;
+    return landmarks;
+}
+
+BodyShape BuildHeadShape(const CharacterParameters& parameters) {
+    const CharacterParameters clean = Sanitised(parameters);
+    const float s = clean.statureMeters / 1.75f;
+    const FaceProportions proportions = MakeFaceProportions(clean);
+    const float headWidth = proportions.headWidth;
+    const float jawWidth = proportions.jawWidth;
+    const float chinSize = proportions.chinSize;
+    const float browSize = proportions.browSize;
+    const float cheekSize = proportions.cheekSize;
+    const float noseSize = proportions.noseSize;
+    const float noseLength = proportions.noseLength;
+    const float lipSize = proportions.lipSize;
+    const float earSize = proportions.earSize;
+
+    // Every number below is in metres for a person of 1.75 m, as measured on a face: the points are given where they
+    // sit on the head, from the chin at 1.5225 m up to the crown at 1.75 m, and from the middle of the head forwards.
 
     const auto P = [&](float x, float y, float z) { return glm::vec3(x * s, y * s, z * s); };
     ShapeAssembler tree;
@@ -106,9 +156,10 @@ BodyShape BuildHeadShape(const CharacterParameters& parameters) {
     }
 
     // The hollows of the eyes, cut last. An eyeball and its lids will sit in them.
-    for (const float side : {1.0f, -1.0f}) {
-        const int socket = tree.Ellipsoid(kHead, P(side * 0.031f * headWidth, 1.636f, 0.089f), 0.0165f * s, 0.0115f * s, 0.0125f * s);
-        head = tree.Carve(head, tree.Leaf(socket), 0.007f * s);
+    const HeadLandmarks landmarks = ComputeHeadLandmarks(clean);
+    for (const EyeSocket& eyeSocket : landmarks.eyeSockets) {
+        const int socket = tree.Ellipsoid(kHead, eyeSocket.centre, eyeSocket.radii.x, eyeSocket.radii.y, eyeSocket.radii.z);
+        head = tree.Carve(head, tree.Leaf(socket), eyeSocket.smoothing);
     }
     return tree.Finish(head, 0.015f * s, 0.05f * s);
 }
