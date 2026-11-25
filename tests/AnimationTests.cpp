@@ -688,6 +688,25 @@ void ABodyTurnsAndLeansIntoTheTurn() {
     }
 }
 
+void EveryTurnRateIsFollowedOrLimitedWithoutBreakingTheLegs() {
+    // Turn rates from nothing to 4 radians a second, to the left and to the right, standing, walking and running: the legs
+    // reach, the knees stay inside their range and the feet do not slide. The walker limits what it follows.
+    const float dt = 1.0f / 120.0f;
+    const CharacterParameters person = Person(0.5f, 30, 1.75f, 70, 0.4f);
+    const BodyModel body = MakeBodyModel(person);
+    for (const float speed : {0.0f, 1.4f, 3.0f}) {
+        for (const float rate : {0.0f, 0.5f, 1.0f, 1.5f, 2.0f, 3.0f, 4.0f, -1.0f, -2.5f, -4.0f}) {
+            const std::vector<Frame> frames = Simulate(person, FlatGround(), {{4.0f, speed, 0.0f}, {6.0f, speed, rate}}, dt);
+            const std::string label = "speed " + std::to_string(speed) + " turning at " + std::to_string(rate);
+            CheckWalk(frames, FlatGround(), dt, label, static_cast<size_t>(4.0f / dt), 0.4f);
+            // The heading turns by at most what the gait allows.
+            const float turned = std::abs(frames.back().heading - frames[static_cast<size_t>(4.0f / dt) + static_cast<size_t>(3.0f / dt)].heading) / 3.0f;
+            Check(turned <= MaximumTurnRate(body, speed) + 0.05f, label + ": the body turns faster than the gait follows: " + std::to_string(turned));
+            Check(std::abs(rate) > MaximumTurnRate(body, speed) || std::abs(turned - std::abs(rate)) < 0.1f, label + ": a turn that the gait can follow is followed: " + std::to_string(turned));
+        }
+    }
+}
+
 void AWalkerStartsAndStopsGently() {
     const float dt = 1.0f / 60.0f;
     const CharacterParameters person = Person(0.5f, 30, 1.75f, 70, 0.4f);
@@ -1678,6 +1697,7 @@ int main(int argc, char** argv) {
         {"ThePelvisMovesSmoothly", ThePelvisMovesSmoothly},
         {"FeetFollowSlopesAndHills", FeetFollowSlopesAndHills},
         {"ABodyTurnsAndLeansIntoTheTurn", ABodyTurnsAndLeansIntoTheTurn},
+        {"EveryTurnRateIsFollowedOrLimitedWithoutBreakingTheLegs", EveryTurnRateIsFollowedOrLimitedWithoutBreakingTheLegs},
         {"AWalkerStartsAndStopsGently", AWalkerStartsAndStopsGently},
         {"EveryChangeOfGaitIsContinuous", EveryChangeOfGaitIsContinuous},
         {"AStepOfAFrameShrinksWithTheFrame", AStepOfAFrameShrinksWithTheFrame},

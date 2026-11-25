@@ -15,6 +15,10 @@ constexpr float kGravity = 9.81f;
 // Updates are made in steps of at most a sixtieth of a second, and an update never covers more than half a second.
 constexpr float kMaxStep = 1.0f / 60.0f;
 constexpr float kLongestUpdate = 0.5f;
+// The quickest the steps of a turn on the spot can be, a cycle of two steps in seconds.
+constexpr float kShortestPeriod = 0.3f;
+// The turn of the pelvis, in radians, that a planted foot is asked to stand through, from landing to toe-off.
+constexpr float kTurnOverStance = 0.6f;
 // How fast the lift that a swinging foot needs over and above its planned path may change, in metres a second.
 constexpr float kCorrectionSpeed = 1.5f;
 constexpr float kReferenceLegLength = 0.92f;  // of the person the cadence and speed numbers below were fitted on
@@ -205,8 +209,16 @@ float MaximumSpeed(const BodyModel& body) {
     return 3.2f * std::sqrt(body.legLength / kReferenceLegLength);
 }
 
-GaitShape ComputeGaitShape(const BodyModel& body, const Personality& personality, float speed) {
+float MaximumTurnRate(const BodyModel& body, float speed) {
+    const float similar = SimilarSpeed(body, std::max(speed, 0.0f));
+    const float walking = Lerp(2.5f, 0.75f, Smoothstep(0.0f, 1.2f, similar));
+    return walking * (1.0f - 0.4f * Smoothstep(1.9f, 2.6f, similar));
+}
+
+GaitShape ComputeGaitShape(const BodyModel& body, const Personality& personality, float speed, float turnRate) {
     GaitShape shape;
+    speed = std::isfinite(speed) ? speed : 0.0f;
+    turnRate = std::isfinite(turnRate) ? turnRate : 0.0f;
     shape.speed = std::clamp(speed, 0.0f, MaximumSpeed(body));
     const float similar = SimilarSpeed(body, shape.speed);
     const float legScale = std::sqrt(body.legLength / kReferenceLegLength);
@@ -217,12 +229,19 @@ GaitShape ComputeGaitShape(const BodyModel& body, const Personality& personality
     const float runCadence = 2.45f + 0.15f * similar;
     shape.cadence = Lerp(walkCadence, runCadence, shape.runBlend) / legScale * personality.tempoScale / personality.strideScale;
     shape.period = 2.0f / shape.cadence;
-    shape.strideLength = shape.speed * shape.period;
 
     // The share of the cycle on the ground: about 0.6 for a slow walk, shrinking through 0.5 to 0.3 in a run.
     const float walkDuty = std::clamp(0.64f - 0.07f * similar, 0.50f, 0.64f);
     const float runDuty = std::clamp(0.42f - 0.025f * (similar - 2.5f), 0.26f, 0.42f);
     shape.dutyFactor = std::clamp(Lerp(walkDuty, runDuty, shape.runBlend) + personality.dutyFactorOffset, 0.24f, 0.70f);
+
+    // A foot is planted for `duty` of the period, and the pelvis turns by turnRate over that time: quicker steps for quicker turns.
+    if (std::abs(turnRate) > 1e-3f) {
+        const float quickestAllowed = kTurnOverStance / (std::abs(turnRate) * shape.dutyFactor);
+        shape.period = std::min(shape.period, std::max(quickestAllowed, kShortestPeriod));
+        shape.cadence = 2.0f / shape.period;
+    }
+    shape.strideLength = shape.speed * shape.period;
 
     shape.stepHalfWidth = body.footHalfWidth * personality.stepWidthScale * (1.0f - 0.35f * shape.runBlend);
     shape.rollAmount = Smoothstep(0.05f, 0.5f, 0.5f * shape.strideLength);
@@ -300,9 +319,11 @@ void Walker::Step(float dt, float wantedSpeed, float wantedTurnRate) {
     const float previousSpeed = speed;
     speed = wantedSpeed > speed ? std::min(wantedSpeed, speed + settings.acceleration * dt) : std::max(wantedSpeed, speed - settings.deceleration * dt);
     acceleration = (speed - previousSpeed) / dt;
-    turnRate += (wantedTurnRate - turnRate) * (1.0f - std::exp(-settings.turnResponse * dt));
+    // The turning is limited to what the legs can follow at this speed, and follows the command smoothly.
+    const float turnLimit = MaximumTurnRate(body, speed);
+    turnRate += (std::clamp(wantedTurnRate, -turnLimit, turnLimit) - turnRate) * (1.0f - std::exp(-settings.turnResponse * dt));
 
-    shape = ComputeGaitShape(body, personality, speed);
+    shape = ComputeGaitShape(body, personality, speed, turnRate);
     phase += dt / shape.period;
     phase -= std::floor(phase);
     time += dt;

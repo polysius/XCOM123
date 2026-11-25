@@ -42,10 +42,16 @@ struct GaitShape {
     float rollAmount = 0.0f;     // 0 for tiny steps, 1 from half a metre of step: scales the heel strike and toe-off
 };
 
-GaitShape ComputeGaitShape(const BodyModel& body, const Personality& personality, float speed);
+// `turnRate` (radians a second) shortens the period: a body that turns quickly has to take its steps quickly, or the planted foot
+// would be twisted past what an ankle and a hip allow before the body had passed over it.
+GaitShape ComputeGaitShape(const BodyModel& body, const Personality& personality, float speed, float turnRate = 0.0f);
 
 // The fastest speed the gait supports for this body: a sprint scaled by the length of the leg.
 float MaximumSpeed(const BodyModel& body);
+
+// The fastest turn the gait can follow at a speed, radians a second: a body turns on the spot with quick small steps, and
+// less at a walk and less again at a run, where the turn is also a lean.
+float MaximumTurnRate(const BodyModel& body, float speed);
 
 struct WalkerSettings {
     float acceleration = 2.5f;   // metres a second, each second
