@@ -394,6 +394,23 @@ void ALoopWithAnEmptyBodyAndALongChainOfComputationsAreStoppedToo() {
     Interpreter chained(chain.graph, chain.registry);
     chained.Start();
     Check(!chained.RuntimeError().empty(), "a very long chain of computing nodes is stopped: " + chained.RuntimeError());
+    Check(chained.Log().empty(), "an action fed by a stopped chain does not run");
+
+    Scene store;
+    store.graph.Variables().push_back({"kept", PinType::Float, 5.0f});
+    const uint32_t set = store.AfterStart("variable.set");
+    store.graph.FindNode(set)->properties["variable"] = std::string("kept");
+    uint32_t tail = store.Add("math.add");
+    store.Wire(tail, 0, set, 1);
+    for (int i = 0; i < 1000; ++i) {
+        const uint32_t next = store.Add("math.add");
+        store.Wire(next, 0, tail, 0);
+        tail = next;
+    }
+    Interpreter stored(store.graph, store.registry);
+    stored.Start();
+    Check(!stored.RuntimeError().empty(), "the chain feeding a variable is stopped");
+    Check(std::get<float>(*stored.FindVariable("kept")) == 5.0f, "a variable keeps its value when its input was stopped");
 }
 
 void RandomNumbersRepeatWhenAGraphStartsAgain() {
