@@ -270,6 +270,9 @@ int Interpreter::RunNode(const Node& node) {
     for (size_t i = 0; i < pins.inputs.size(); ++i) {
         context.inputs[i] = pins.inputs[i].type == PinType::Exec ? Value(false) : EvaluateInput(node, pins, static_cast<int>(i));
     }
+    if (stopped) {
+        return -1;
+    }
     context.outputs.resize(pins.outputs.size());
     for (size_t i = 0; i < pins.outputs.size(); ++i) {
         context.outputs[i] = DefaultValue(pins.outputs[i].type);
@@ -346,7 +349,7 @@ const std::vector<Value>& Interpreter::EvaluatePure(const Node& node) {
                 context.variableName = std::get<std::string>(named->second);
             }
         }
-        if (pins.description->run) {
+        if (!stopped && pins.description->run) {
             pins.description->run(context);
         }
     }
