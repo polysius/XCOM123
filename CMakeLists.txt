@@ -234,6 +234,18 @@ if(MSVC)
 endif()
 add_test(NAME graph_tests COMMAND graph_tests)
 
+# graph_editor_tests checks the model behind the graph editor: selection, moving, wires, the palette, copy and paste, undo, play
+# and saving. It builds only the model sources (src/graph_editor, not src/editor_ui) and the graph, so it needs no GPU or window.
+file(GLOB GRAPH_EDITOR_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/graph_editor/*.cpp)
+add_executable(graph_editor_tests tests/GraphEditorTests.cpp ${GRAPH_EDITOR_SOURCES} ${GRAPH_SOURCES})
+target_include_directories(graph_editor_tests PRIVATE src)
+target_link_libraries(graph_editor_tests PRIVATE glm::glm)
+target_compile_definitions(graph_editor_tests PRIVATE GLM_FORCE_RADIANS GLM_FORCE_DEPTH_ZERO_TO_ONE)
+if(MSVC)
+    target_compile_options(graph_editor_tests PRIVATE /W4 /permissive- /MP)
+endif()
+add_test(NAME graph_editor_tests COMMAND graph_editor_tests)
+
 # ---------------------------------------------------------------------------
 # City generator tests
 # ---------------------------------------------------------------------------
