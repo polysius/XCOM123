@@ -282,3 +282,22 @@ if(MSVC)
     target_compile_options(CityTests PRIVATE /W4 /permissive- /MP)
 endif()
 add_test(NAME CityTests COMMAND CityTests)
+
+# ---------------------------------------------------------------------------
+# Animation: procedural motion for the characters of src/character
+# ---------------------------------------------------------------------------
+# anim_gen draws stick figure contact sheets of a walk, and animation_tests checks the module. Both build the animation
+# sources with the skeleton and the parameters of the character, and nothing else of src/character (no mesh generator).
+file(GLOB ANIMATION_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/animation/*.cpp)
+set(ANIMATION_CHARACTER_SOURCES src/character/Skeleton.cpp src/character/CharacterParameters.cpp)
+add_executable(anim_gen tools/anim_gen/main.cpp src/core/PngWriter.cpp ${ANIMATION_SOURCES} ${ANIMATION_CHARACTER_SOURCES})
+add_executable(animation_tests tests/AnimationTests.cpp ${ANIMATION_SOURCES} ${ANIMATION_CHARACTER_SOURCES})
+foreach(animation_target anim_gen animation_tests)
+    target_include_directories(${animation_target} PRIVATE src)
+    target_link_libraries(${animation_target} PRIVATE glm::glm)
+    target_compile_definitions(${animation_target} PRIVATE GLM_FORCE_RADIANS GLM_FORCE_DEPTH_ZERO_TO_ONE)
+    if(MSVC)
+        target_compile_options(${animation_target} PRIVATE /W4 /permissive- /MP)
+    endif()
+endforeach()
+add_test(NAME animation_tests COMMAND animation_tests)
