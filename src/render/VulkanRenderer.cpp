@@ -87,6 +87,7 @@ void VulkanRenderer::Shutdown() {
     VkDevice device = context.device;
     vkDeviceWaitIdle(device);
 
+    SetOverlay(nullptr);  // whatever draws over the frames goes before the device does
     screenshot.Destroy(device);
     profiler.Destroy(device);
     tonemapPass.Destroy(device);
@@ -498,6 +499,10 @@ void VulkanRenderer::RecordCommands(uint32_t frameSlot, uint32_t imageIndex, con
                        currentRenderExtent);
     profiler.EndPass(cmd, frameSlot, kTonemapPassIndex);
 
+    if (overlay != nullptr && overlay->IsActive()) {
+        RecordOverlay(cmd, swapchainImage, context.swapchainViews[imageIndex]);
+    }
+
     if (captureScreenshot) {
         screenshot.RecordCopy(context, cmd, swapchainImage, context.swapchainExtent);
     } else {
@@ -513,6 +518,43 @@ void VulkanRenderer::RecordCommands(uint32_t frameSlot, uint32_t imageIndex, con
 
     profiler.EndFrame(cmd, frameSlot);
     VkCheck(vkEndCommandBuffer(cmd), "vkEndCommandBuffer");
+}
+
+void VulkanRenderer::RecordOverlay(VkCommandBuffer cmd, VkImage swapchainImage, VkImageView swapchainView) {
+    // The overlay blends over what the tonemap pass just wrote, so those writes have to be finished and visible first.
+    TransitionImage(cmd, {.image = swapchainImage,
+                          .aspect = VK_IMAGE_ASPECT_COLOR_BIT,
+                          .oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                          .newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                          .srcStage = kColorOutputStage,
+                          .srcAccess = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                          .dstStage = kColorOutputStage,
+                          .dstAccess = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT});
+    overlay->Record(cmd, swapchainImage, swapchainView, context.swapchainExtent);
+}
+
+void VulkanRenderer::SetOverlay(IFrameOverlay* newOverlay) {
+    if (newOverlay == overlay) {
+        return;
+    }
+    if (overlay != nullptr) {
+        vkDeviceWaitIdle(context.device);  // a frame in flight may still be drawing it
+        overlay->Detach();
+    }
+    overlay = newOverlay;
+    if (overlay == nullptr) {
+        return;
+    }
+    OverlayTarget target;
+    target.window = window;
+    target.instance = context.instance;
+    target.physicalDevice = context.physicalDevice;
+    target.device = context.device;
+    target.queueFamily = context.queueFamily;
+    target.queue = context.queue;
+    target.colorFormat = context.swapchainFormat;
+    target.imageCount = static_cast<uint32_t>(context.swapchainImages.size());
+    overlay->Attach(target);
 }
 
 void VulkanRenderer::Submit(const FrameResources& frame, uint32_t imageIndex) {

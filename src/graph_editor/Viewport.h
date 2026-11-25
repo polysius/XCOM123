@@ -40,6 +40,9 @@ public:
     // so that the wheel zooms toward the pointer. The zoom stays within kMinZoom and kMaxZoom.
     void ZoomAt(glm::vec2 screenPoint, float factor);
 
+    // Moves the view so that a canvas point is in the middle of a window of `screenSize`, at the same zoom.
+    void CenterOn(glm::vec2 canvasPoint, glm::vec2 screenSize) { origin = canvasPoint - screenSize * 0.5f / zoom; }
+
     // Shows `area` of the canvas, as large as fits in a window of `screenSize` with a margin around it, and centred.
     void Frame(const Rect& area, glm::vec2 screenSize, float screenMargin = 40.0f);
 

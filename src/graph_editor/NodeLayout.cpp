@@ -9,8 +9,8 @@ float TextWidth(const std::string& text) {
     return static_cast<float>(text.size()) * kCharacterWidth;
 }
 
-bool NeedsValueBox(const graph::PinDescription& pin) {
-    return pin.type != graph::PinType::Exec;
+float ValueBoxWidth(const graph::PinDescription& pin) {
+    return pin.type == graph::PinType::Exec ? 0.0f : InlineValueWidth(pin.type);
 }
 
 // The width that the names of one row and the box for a value need, so that no row runs into its neighbour.
@@ -20,7 +20,7 @@ float WidestRow(const graph::NodePins& pins) {
     for (size_t row = 0; row < rows; ++row) {
         float width = 0.0f;
         if (row < pins.inputs.size()) {
-            width += 2.0f * kPinRadius + TextWidth(pins.inputs[row].name) + (NeedsValueBox(pins.inputs[row]) ? kInlineValueWidth : 0.0f);
+            width += 2.0f * kPinRadius + TextWidth(pins.inputs[row].name) + ValueBoxWidth(pins.inputs[row]);
         }
         if (row < pins.outputs.size()) {
             width += 2.0f * kPinRadius + TextWidth(pins.outputs[row].name);
@@ -31,6 +31,14 @@ float WidestRow(const graph::NodePins& pins) {
 }
 
 }  // namespace
+
+float InlineValueWidth(graph::PinType type) {
+    switch (type) {
+    case graph::PinType::Vec3: return 3.0f * kInlineValueWidth;
+    case graph::PinType::String: return 2.0f * kInlineValueWidth;
+    default: return kInlineValueWidth;
+    }
+}
 
 std::string NodeTitle(const graph::NodeRegistry& registry, const graph::Node& node) {
     const graph::NodeDescription* description = registry.Find(node.type);

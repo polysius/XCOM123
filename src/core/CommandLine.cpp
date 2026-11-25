@@ -91,6 +91,9 @@ void CheckCombinations(const Options& options) {
     if (options.IsBenchmark() && options.camera) {
         throw std::invalid_argument("--camera cannot be combined with --benchmark, which flies its own path");
     }
+    if (options.IsBenchmark() && options.editor) {
+        throw std::invalid_argument("--editor cannot be combined with --benchmark, which measures the engine without it");
+    }
     if (options.targetFps && !options.IsBenchmark()) {
         throw std::invalid_argument("--target-fps only applies to --benchmark");
     }
@@ -158,6 +161,14 @@ Options ParseCommandLine(int argc, char** argv) {
             options.dynamicResolution = false;
         } else if (option == "--gpu-budget") {
             options.gpuBudgetMs = ParseFloatInRange(option, arguments.ValueFor(option), 1.0f, 100.0f);
+        } else if (option == "--editor") {
+            options.editor = true;
+        } else if (option == "--editor-graph") {
+            options.editorGraphPath = arguments.ValueFor(option);
+            options.editor = true;
+        } else if (option == "--editor-play") {
+            options.editorPlay = true;
+            options.editor = true;
         } else if (option == "--help") {
             options.showHelp = true;
         } else {
@@ -198,6 +209,10 @@ void PrintUsage() {
         "  --render-scale X         draw the scene at a fixed X (0.5 to 1.0) of the window size\n"
         "  --no-dynres              keep the render scale fixed (1.0 unless --render-scale is given)\n"
         "  --gpu-budget MS          GPU frame time the dynamic resolution aims to stay under (default 14)\n"
+        "Editor:\n"
+        "  --editor                 open the graph editor over the scene at the start (F1 opens and closes it)\n"
+        "  --editor-graph FILE      load a graph into the editor at the start (implies --editor)\n"
+        "  --editor-play            run the graph in the editor at the start (implies --editor)\n"
         "Measuring:\n"
         "  --benchmark FRAMES       fly a fixed camera path for FRAMES frames without vsync, then report\n"
         "                           (exit code 2 if the window closes before all frames are measured)\n"

@@ -197,6 +197,8 @@ public:
     // Each returns why it failed, or an empty string.
     std::string SaveToFile(const std::string& path);
     std::string LoadFromFile(const std::string& path);
+    // Loads a graph from its text. `path` is where it came from, or empty; it becomes the path that Save writes to.
+    std::string LoadFromText(const std::string& text, const std::string& path);
     void NewGraph();
     const std::string& FilePath() const { return filePath; }
     bool IsModified() const { return modified; }

@@ -112,11 +112,15 @@ std::string EditorModel::LoadFromFile(const std::string& path) {
     }
     std::stringstream text;
     text << file.rdbuf();
+    return LoadFromText(text.str(), path);
+}
 
+std::string EditorModel::LoadFromText(const std::string& text, const std::string& path) {
+    const std::string name = path.empty() ? "the graph" : path;
     graph::Graph loaded;
-    const graph::LoadResult result = graph::LoadGraph(text.str(), loaded);
+    const graph::LoadResult result = graph::LoadGraph(text, loaded);
     if (!result.ok) {
-        status = path + " is not a graph this editor can read: " + result.error;
+        status = name + " is not a graph this editor can read: " + result.error;
         return status;
     }
 
@@ -137,7 +141,7 @@ std::string EditorModel::LoadFromFile(const std::string& path) {
         AutoLayout(graph, registry);
     }
     GraphChanged();
-    status = "Loaded " + path + (result.warnings.empty() ? "." : " with " + std::to_string(result.warnings.size()) + " warning(s): " + result.warnings.front());
+    status = "Loaded " + name + (result.warnings.empty() ? "." : " with " + std::to_string(result.warnings.size()) + " warning(s): " + result.warnings.front());
     return {};
 }
 

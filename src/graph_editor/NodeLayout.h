@@ -21,7 +21,7 @@ constexpr float kRowHeight = 24.0f;
 constexpr float kNodePadding = 10.0f;
 constexpr float kPinRadius = 6.0f;
 constexpr float kMinNodeWidth = 120.0f;
-constexpr float kInlineValueWidth = 64.0f;
+constexpr float kInlineValueWidth = 64.0f;  // the box for a number or a yes/no; text and vectors have wider ones, see InlineValueWidth
 constexpr float kCharacterWidth = 7.0f;  // an estimate of the width of the font, so that a name does not run out of its node
 
 struct PinSlot {
@@ -38,6 +38,9 @@ struct NodeGeometry {
     std::vector<PinSlot> inputs;
     std::vector<PinSlot> outputs;
 };
+
+// How much room the box for a typed value takes beside the name of an input of this type.
+float InlineValueWidth(graph::PinType type);
 
 // What a node is called on the canvas: its kind's title, followed by the variable for the nodes that work on one.
 std::string NodeTitle(const graph::NodeRegistry& registry, const graph::Node& node);

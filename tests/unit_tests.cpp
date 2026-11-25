@@ -121,6 +121,18 @@ void CommandLineReadsSatellites() {
     Check(IsRejected({"--satellites", "-1"}), "negative satellites");
 }
 
+void CommandLineReadsTheEditorOptions() {
+    const Options defaults = Parse({});
+    Check(!defaults.editor && defaults.editorGraphPath.empty() && !defaults.editorPlay, "the editor is off by default");
+    Check(Parse({"--editor"}).editor, "--editor opens the editor");
+    const Options withGraph = Parse({"--editor-graph", "my graph.json"});
+    Check(withGraph.editor && withGraph.editorGraphPath == "my graph.json", "--editor-graph names a file and opens the editor");
+    Check(Parse({"--editor-play"}).editor && Parse({"--editor-play"}).editorPlay, "--editor-play opens the editor and runs the graph");
+    Check(Parse({"--editor", "--screenshot", "a.png"}).editor, "a screenshot may show the editor");
+    Check(IsRejected({"--editor", "--benchmark", "100"}), "the benchmark must not have the editor");
+    Check(IsRejected({"--editor-graph"}), "a missing graph file name");
+}
+
 void BenchmarkAndScreenshotTurnVsyncOff() {
     Check(!Parse({"--benchmark", "100"}).vsync, "benchmark disables vsync");
     Check(!Parse({"--screenshot", "a.png"}).vsync, "screenshot disables vsync");
@@ -954,6 +966,7 @@ int main() {
         {"CommandLineReadsSatellites", CommandLineReadsSatellites},
         {"CommandLineReadsProps", CommandLineReadsProps},
         {"CommandLineReadsTheRiverSimulation", CommandLineReadsTheRiverSimulation},
+        {"CommandLineReadsTheEditorOptions", CommandLineReadsTheEditorOptions},
         {"BenchmarkAndScreenshotTurnVsyncOff", BenchmarkAndScreenshotTurnVsyncOff},
         {"FrameSummaryOfNothingIsEmpty", FrameSummaryOfNothingIsEmpty},
         {"FrameSummaryUsesNearestRank", FrameSummaryUsesNearestRank},

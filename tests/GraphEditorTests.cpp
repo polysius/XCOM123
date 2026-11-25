@@ -190,6 +190,23 @@ void ANodeIsAsWideAsItsNamesNeed() {
     Check(geometry.bounds.Size().x >= 2.0f * kPinRadius + 4.0f * kCharacterWidth + kInlineValueWidth, "the node is narrower than its row");
 }
 
+void PinsAreGrabbedWithinTheSameNumberOfScreenPixelsAtAnyZoom() {
+    Editor editor;
+    const uint32_t add = editor.Add("math.add", 0.0f, 0.0f);
+    const glm::vec2 pin = editor.Output(add, 0);
+
+    // Zoomed out, a canvas unit is half a pixel: 15 units off is under 8 pixels, close enough to grab.
+    editor.model.View().ZoomAt({0.0f, 0.0f}, 0.5f);
+    Check(editor.model.PinAt(pin + glm::vec2(15.0f, 0.0f)).has_value(), "a pin was not grabbed 8 screen pixels away when zoomed out");
+    Check(!editor.model.PinAt(pin + glm::vec2(40.0f, 0.0f)).has_value(), "a pin was grabbed 20 screen pixels away when zoomed out");
+
+    // Zoomed in, 8 units off is 16 pixels, too far.
+    editor.model.View().ZoomAt({0.0f, 0.0f}, 4.0f);
+    Check(editor.model.View().Zoom() >= 2.0f, "the test did not zoom in");
+    Check(!editor.model.PinAt(pin + glm::vec2(8.0f, 0.0f)).has_value(), "a pin was grabbed 16 screen pixels away when zoomed in");
+    Check(editor.model.PinAt(pin + glm::vec2(3.0f, 0.0f)).has_value(), "a pin was not grabbed 6 screen pixels away when zoomed in");
+}
+
 // ---------------------------------------------------------------------------
 // Selection
 // ---------------------------------------------------------------------------
@@ -1250,6 +1267,7 @@ int main() {
         {"FramingShowsAnAreaCentredAndInsideTheWindow", FramingShowsAnAreaCentredAndInsideTheWindow},
         {"PinsSitOnTheEdgesOfTheirNodeInTheOrderOfTheirRows", PinsSitOnTheEdgesOfTheirNodeInTheOrderOfTheirRows},
         {"ANodeIsAsWideAsItsNamesNeed", ANodeIsAsWideAsItsNamesNeed},
+        {"PinsAreGrabbedWithinTheSameNumberOfScreenPixelsAtAnyZoom", PinsAreGrabbedWithinTheSameNumberOfScreenPixelsAtAnyZoom},
         {"AClickSelectsTheTopmostNodeAndEmptyCanvasClearsTheSelection", AClickSelectsTheTopmostNodeAndEmptyCanvasClearsTheSelection},
         {"AdditiveClicksAddAndToggle", AdditiveClicksAddAndToggle},
         {"ABoxSelectsWhatItTouchesAndAddsWhenAdditive", ABoxSelectsWhatItTouchesAndAddsWhenAdditive},

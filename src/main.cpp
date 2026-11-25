@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -20,6 +21,7 @@
 #include "core/FlyCamera.h"
 #include "core/Module_Interface.h"
 #include "core/JobSystem.h"
+#include "editor_ui/EditorSession.h"
 #include "fluid/RiverWater.h"
 #include "material/MaterialLibrary.h"
 #include "physics/PropField.h"
@@ -142,10 +144,11 @@ void UpdateRiver(Engine& engine, float deltaSeconds, FrameInput& frame) {
                    .height = engine.river.Height()};
 }
 
-// Polls window events. Returns false once the window should close.
-bool KeepRunning(GLFWwindow* window) {
+// Polls window events. Returns false once the window should close. Escape closes it unless `escapeCloses` is false, which is
+// the case while the editor is open, where Escape cancels what is being done and must not end the program.
+bool KeepRunning(GLFWwindow* window, bool escapeCloses = true) {
     glfwPollEvents();
-    if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
+    if (escapeCloses && glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
         glfwSetWindowShouldClose(window, GLFW_TRUE);
     }
     return glfwWindowShouldClose(window) == GLFW_FALSE;
@@ -217,10 +220,11 @@ int RunInteractive(Engine& engine, const Options& options) {
     FlyCamera camera = MakeStartCamera(options, engine.city);
     float sunElevation = options.sunElevationDegrees.value_or(kDefaultSunElevation);
     TitleBar title(engine.window, engine.renderer->GetDeviceName());
+    editor_ui::EditorSession editor(*engine.renderer, engine.window, options);
 
     const Clock::time_point startTime = Clock::now();
     Clock::time_point previousFrame = startTime;
-    while (KeepRunning(engine.window)) {
+    while (KeepRunning(engine.window, !editor.IsVisible())) {
         const float aspect = WindowAspectRatio(engine.window);
         if (aspect == 0.0f) {
             glfwWaitEvents();  // minimised: sleep until something happens
@@ -233,11 +237,15 @@ int RunInteractive(Engine& engine, const Options& options) {
         const float deltaSeconds = static_cast<float>(std::min(MillisecondsBetween(previousFrame, now) / 1000.0, 0.1));
         previousFrame = now;
 
-        camera.Update(engine.window, deltaSeconds);
-        if (glfwGetKey(engine.window, GLFW_KEY_Z) == GLFW_PRESS) {
+        editor.BeginFrame(deltaSeconds);
+        // The camera and the sun keys leave the pointer and the keys to the editor while it is using them.
+        if (!editor.CapturesMouse() && !editor.CapturesKeyboard()) {
+            camera.Update(engine.window, deltaSeconds);
+        }
+        if (!editor.CapturesKeyboard() && glfwGetKey(engine.window, GLFW_KEY_Z) == GLFW_PRESS) {
             sunElevation -= kSunTurnSpeed * deltaSeconds;
         }
-        if (glfwGetKey(engine.window, GLFW_KEY_X) == GLFW_PRESS) {
+        if (!editor.CapturesKeyboard() && glfwGetKey(engine.window, GLFW_KEY_X) == GLFW_PRESS) {
             sunElevation += kSunTurnSpeed * deltaSeconds;
         }
         sunElevation = std::clamp(sunElevation, -5.0f, 85.0f);
@@ -372,6 +380,11 @@ int RunScreenshot(Engine& engine, const Options& options) {
     const float firstFrameSeconds = std::max(finalSeconds - renderedSeconds, 0.0f);
     engine.crowd.SetFocusPoint(camera.Position());
     PreRollWorld(engine, firstFrameSeconds);
+    // Only a screenshot that asks for the editor has one; every other screenshot is drawn exactly as before.
+    std::optional<editor_ui::EditorSession> editor;
+    if (options.editor) {
+        editor.emplace(*engine.renderer, engine.window, options);
+    }
 
     for (int frameIndex = 0; frameIndex < frames; ++frameIndex) {
         if (!KeepRunning(engine.window)) {
@@ -383,6 +396,9 @@ int RunScreenshot(Engine& engine, const Options& options) {
         UpdateCrowd(engine, kFixedTimeStep, frame);
         UpdateProps(engine, kFixedTimeStep, frame);
         UpdateRiver(engine, kFixedTimeStep, frame);
+        if (editor) {
+            editor->BeginFrame(kFixedTimeStep);
+        }
 
         const bool lastFrame = frameIndex + 1 == frames;
         if (!lastFrame) {
@@ -421,7 +437,8 @@ void PrintWorldSummary(const Options& options, const Engine& engine) {
     std::cout << "\n";
     if (!options.IsBenchmark() && !options.IsScreenshot()) {
         std::cout << "Controls: hold the right mouse button to look, WASD to move, E/Q to go up/down,\n"
-                  << "          Shift to go faster, Z/X to lower/raise the sun, Esc to quit\n";
+                  << "          Shift to go faster, Z/X to lower/raise the sun, Esc to quit\n"
+                  << "          F1 opens the graph editor\n";
     }
 }
 
