@@ -15,6 +15,7 @@
 #include "render/SceneGeometry.h"
 #include "render/ScenePass.h"
 #include "render/ScreenshotCapture.h"
+#include "render/SkinnedGeometry.h"
 #include "render/ShadowPass.h"
 #include "render/TonemapPass.h"
 #include "render/VulkanContext.h"
@@ -23,7 +24,7 @@
 // Vulkan 1.3 implementation of the render module.
 //
 // Every frame runs three passes, each in its own class:
-//   1. ShadowPass:  depth of the city and the crowd, seen from the sun, into a shadow map.
+//   1. ShadowPass:  depth of the city, the crowd and the skinned characters, seen from the sun, into a shadow map.
 //   2. ScenePass:   lit geometry and the sky into a multisampled HDR image, drawn at the current
 //                   render scale into the top-left part of full-size targets.
 //   3. TonemapPass: HDR image to the window with exposure, a filmic curve and a vignette,
@@ -44,6 +45,7 @@ public:
     void UploadStaticScene(std::span<const BoxInstance> boxes) override;
     void UploadMaterials(const material::MaterialLibrary& library) override;
     void ReserveNpcCapacity(size_t npcCount) override;
+    CharacterHandle UploadCharacterMesh(const skinning::MeshData& mesh) override;
     void Render(const FrameInput& frame) override;
     bool RenderAndCapture(const FrameInput& frame, const std::string& pngPath) override;
     RenderStats GetStats() const override;
@@ -71,6 +73,8 @@ private:
     void CreateFrameResources();
     void CreateSceneLayouts();
     void CreateSceneDescriptors();
+    // Points a frame's descriptor set at the buffer that holds the skinning palettes of that frame.
+    void WritePaletteDescriptor(const FrameResources& frame, uint32_t frameSlot);
     // Points the descriptor sets of every frame at the material textures, and notes their tile sizes for the shaders.
     void WriteMaterialDescriptors();
     void CreateSwapchainSemaphores();
@@ -108,6 +112,7 @@ private:
     std::array<glm::vec4, 3> scanTiles{};     // the real size of each material tile, four to a vector
     RenderTargets targets;
     SceneGeometry geometry;
+    SkinnedGeometry skinned;
     ShadowPass shadowPass;
     ScenePass scenePass;
     TonemapPass tonemapPass;

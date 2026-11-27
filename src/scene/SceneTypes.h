@@ -72,6 +72,26 @@ struct NpcInstance {
 };
 static_assert(sizeof(NpcInstance) == 48, "NpcInstance must match the shader instance layout");
 
+// A skinned character mesh that was uploaded to the renderer (see IRenderModule::UploadCharacterMesh).
+struct CharacterHandle {
+    static constexpr uint32_t kInvalid = 0xFFFFFFFFu;
+    uint32_t index = kInvalid;
+
+    bool IsValid() const { return index != kInvalid; }
+};
+
+// One skinned character to draw this frame. The renderer copies what it needs during the call, so the palette only has to
+// stay valid until Render returns.
+struct SkinnedInstance {
+    CharacterHandle mesh;
+    glm::mat4 world{1.0f};                  // places the character's own space (feet on y = 0, facing +Z) in the world
+    std::span<const glm::mat4> palette;     // the skinning matrices of the pose, one for each joint of the mesh
+    glm::vec3 tint{0.6f, 0.6f, 0.65f};      // base colour (albedo), linear RGB
+    float roughness = 0.7f;                 // 0 = mirror-like, 1 = fully matte
+    SurfaceMaterial material = SurfaceMaterial::Character;
+    float seed = 0.0f;                      // varies procedural detail, as for boxes
+};
+
 // Something that stands in people's way and may move from one frame to the next, such as a crate: a box seen from
 // above, between two heights. People keep clear of it while it stands where they walk.
 struct MovableObstacle {
@@ -110,5 +130,6 @@ struct FrameInput {
     std::span<const NpcInstance> npcs;
     std::span<const BodyInstance> bodyBoxes;    // props drawn as boxes
     std::span<const BodyInstance> bodySpheres;  // props drawn as spheres
+    std::span<const SkinnedInstance> characters;  // skinned characters; frames without any draw exactly as before
     WaterField water;                           // the simulated river, if there is one
 };

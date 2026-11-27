@@ -277,6 +277,9 @@ void CommandLineReadsProps() {
     Check(Parse({"--props", "50"}).propCount == 50, "fifty props");
     Check(IsRejected({"--props", "99999"}), "too many props");
     Check(IsRejected({"--props", "-3"}), "negative props");
+    Check(Parse({}).characterCount == 0, "no characters by default");
+    Check(Parse({"--characters", "8"}).characterCount == 8, "eight characters");
+    Check(IsRejected({"--characters", "99999"}), "too many characters");
 }
 
 void CommandLineReadsTheRiverSimulation() {

@@ -8,6 +8,7 @@
 #include "render/PipelineBuilder.h"
 #include "render/RenderTargets.h"
 #include "render/SceneGeometry.h"
+#include "render/SkinnedGeometry.h"
 #include "render/VulkanContext.h"
 
 void ShadowPass::Create(const VulkanContext& context, VkPipelineLayout sceneLayout) {
@@ -49,15 +50,20 @@ void ShadowPass::Create(const VulkanContext& context, VkPipelineLayout sceneLayo
     shadow.vertexShader = "npc.vert";
     shadow.meshInput = MeshInput::People;
     npcPipeline = CreateGraphicsPipeline(context.device, shadow);
+    shadow.vertexShader = "skinned.vert";
+    shadow.meshInput = MeshInput::Skinned;
+    skinnedPipeline = CreateGraphicsPipeline(context.device, shadow);
 }
 
 void ShadowPass::Destroy(VkDevice device) {
     vkDestroyPipeline(device, boxPipeline, nullptr);
     vkDestroyPipeline(device, npcPipeline, nullptr);
     vkDestroyPipeline(device, bodyPipeline, nullptr);
+    vkDestroyPipeline(device, skinnedPipeline, nullptr);
     vkDestroySampler(device, comparisonSampler, nullptr);
     DestroyImage(device, shadowMap);
     bodyPipeline = VK_NULL_HANDLE;
+    skinnedPipeline = VK_NULL_HANDLE;
     boxPipeline = VK_NULL_HANDLE;
     npcPipeline = VK_NULL_HANDLE;
     comparisonSampler = VK_NULL_HANDLE;
@@ -102,8 +108,8 @@ glm::mat4 ShadowPass::ComputeLightViewProjection(const FrameInput& input) {
     return projection * lightRotation;
 }
 
-void ShadowPass::Record(VkCommandBuffer cmd, const SceneGeometry& geometry, uint32_t frameSlot,
-                        const glm::mat4& lightViewProjection) const {
+void ShadowPass::Record(VkCommandBuffer cmd, const SceneGeometry& geometry, const SkinnedGeometry& skinned,
+                        uint32_t frameSlot, const glm::mat4& lightViewProjection) const {
     // The previous frame's scene pass may still be reading the shadow map; wait for it.
     TransitionImage(cmd, {.image = shadowMap.image,
                           .aspect = VK_IMAGE_ASPECT_DEPTH_BIT,
@@ -127,6 +133,7 @@ void ShadowPass::Record(VkCommandBuffer cmd, const SceneGeometry& geometry, uint
     geometry.DrawBoxes(cmd, boxPipeline);
     geometry.DrawBodies(cmd, bodyPipeline, frameSlot);
     geometry.DrawNpcs(cmd, npcPipeline, frameSlot);
+    skinned.DrawForSun(cmd, skinnedPipeline, frameSlot);
     vkCmdEndRendering(cmd);
 
     TransitionImage(cmd, {.image = shadowMap.image,
