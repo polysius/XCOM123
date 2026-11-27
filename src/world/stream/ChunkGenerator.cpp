@@ -253,7 +253,7 @@ private:
             {{land.max.x, land.min.y}, {0.0f, 1.0f}, {1.0f, 0.0f}, land.Size().y},
         };
         for (const Edge& edge : edges) {
-            if (!random.Chance(kPropChancePerEdge)) {
+            if (edge.length < 2.0f * kPropEdgeMargin || !random.Chance(kPropChancePerEdge)) {
                 continue;
             }
             const glm::vec2 spot = edge.start + edge.along * random.Range(kPropEdgeMargin, edge.length - kPropEdgeMargin) +
