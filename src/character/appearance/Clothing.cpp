@@ -617,7 +617,7 @@ Garment BuildGarment(const CharacterMesh& character, const TriangleMesh& body, c
     for (size_t v = 0; v < unwrapped.vertices.size(); ++v) {
         garment.vertexLayer[v] = unwrapped.vertices[v].attribute.z > 0.5f ? 1 : 0;
     }
-    garment.minimumClearance = MeasureClearance(bodyOnly, garment);
+    garment.minimumClearance = MeasureClearance(bodyOnly, garment, jobs);
 
     // The texture is baked from the outer surface alone: its triangles are the ones with no vertex on the inner one.
     TriangleMesh outer;
@@ -667,20 +667,18 @@ float MeasureClearance(const CharacterMesh& character, const Garment& garment) {
     return MeasureClearance(grid, garment);
 }
 
-float MeasureClearance(const TriangleGrid& character, const Garment& garment) {
-    float least = 1e9f;
-    for (const glm::vec3& p : garment.mesh.positions) {
-        least = std::min(least, character.FindNearest(p, 0.06f).signedDistance);
-    }
+float MeasureClearance(const TriangleGrid& character, const Garment& garment, JobSystem* jobs) {
+    std::vector<glm::vec3> points = garment.mesh.positions;
     for (size_t t = 0; t + 2 < garment.mesh.indices.size(); t += 3) {
         const uint32_t id[3] = {garment.mesh.indices[t], garment.mesh.indices[t + 1], garment.mesh.indices[t + 2]};
         if (garment.vertexLayer[id[0]] != garment.vertexLayer[id[1]] || garment.vertexLayer[id[1]] != garment.vertexLayer[id[2]]) {
             continue;  // a triangle of the edge strip: its corners are counted
         }
-        const glm::vec3 middle = (garment.mesh.positions[id[0]] + garment.mesh.positions[id[1]] + garment.mesh.positions[id[2]]) / 3.0f;
-        least = std::min(least, character.FindNearest(middle, 0.06f).signedDistance);
+        points.push_back((garment.mesh.positions[id[0]] + garment.mesh.positions[id[1]] + garment.mesh.positions[id[2]]) / 3.0f);
     }
-    return least;
+    std::vector<float> clearance(points.size());
+    ParallelEach(jobs, static_cast<int>(points.size()), [&](int i) { clearance[i] = character.FindNearest(points[i], 0.06f).signedDistance; });
+    return *std::min_element(clearance.begin(), clearance.end());
 }
 
 Outfit BuildOutfit(const CharacterMesh& character, const OutfitSettings& rawSettings, JobSystem* jobs) {

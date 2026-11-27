@@ -105,6 +105,6 @@ Outfit BuildOutfit(const CharacterMesh& character, const OutfitSettings& setting
 // The least distance from the vertices and the triangle middles of a garment's inner surface (layer 0) to the triangles of the character. The
 // garment itself records this, and the tests measure it again independently with this function.
 float MeasureClearance(const CharacterMesh& character, const Garment& garment);
-float MeasureClearance(const TriangleGrid& character, const Garment& garment);
+float MeasureClearance(const TriangleGrid& character, const Garment& garment, JobSystem* jobs = nullptr);
 
 }  // namespace character

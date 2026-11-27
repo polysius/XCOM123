@@ -5,11 +5,17 @@
 // hollows the head carves for them without poking out of the head; hair that grows from the scalp and the brow and the jaw; garments
 // that are closed shells, skinned like the body, that never touch it, whatever the build; and skin textures with values in range that
 // change with the age and sex of the person.
+//
+// The default run tests two typical people and the five worst builds found so far (about two minutes), each dressed once and shared by
+// every test. `appearance_tests --full` adds a sweep of fifteen more builds, which takes about four minutes; run it after a change to
+// the clothes, the hair or the eyes. A word that is not --full filters the tests by name.
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <functional>
 #include <iostream>
 #include <map>
+#include <unordered_map>
 #include <string>
 #include <vector>
 
@@ -45,17 +51,38 @@ CharacterParameters Person(float masculinity, float age, float stature, float ma
     return parameters;
 }
 
-// A spread of people: a tall heavy man, a short light woman, an old man, a young muscular woman.
+// Whether this is a full run (`appearance_tests --full`): the whole sweep of builds is tested, not only the default set, which takes a few
+// times as long.
+bool gFullRun = false;
+
+// Two typical people: a tall heavy man and a short light woman.
 std::vector<CharacterParameters> SomePeople() {
-    return {Person(1.0f, 30.0f, 1.90f, 100.0f, 0.8f, 1), Person(0.0f, 25.0f, 1.55f, 48.0f, 0.2f, 2), Person(1.0f, 72.0f, 1.70f, 82.0f, 0.2f, 3),
-            Person(0.0f, 28.0f, 1.72f, 66.0f, 0.9f, 4)};
+    return {Person(1.0f, 30.0f, 1.90f, 100.0f, 0.8f, 1), Person(0.0f, 25.0f, 1.55f, 48.0f, 0.2f, 2)};
 }
 
-// Builds at the ends of the range, where a fixed-size feature meets a body that has grown or shrunk around it.
-std::vector<CharacterParameters> ExtremePeople() {
-    return {Person(0.0f, 80.0f, 1.45f, 45.0f * 1.45f * 1.45f, 0.2f, 31), Person(1.0f, 60.0f, 1.45f, 45.0f * 1.45f * 1.45f, 0.5f, 32),
-            Person(1.0f, 25.0f, 2.05f, 15.0f * 2.05f * 2.05f, 1.0f, 33), Person(0.0f, 30.0f, 1.45f, 15.0f * 1.45f * 1.45f, 0.0f, 34),
-            Person(1.0f, 40.0f, 2.05f, 45.0f * 2.05f * 2.05f, 0.5f, 35)};
+// The builds that were found to bury cloth in the body: a short man of body mass index 15, a 2.05 m man of body mass index 45, and three
+// random people. Every test of a person runs on these as well as on the typical people.
+std::vector<CharacterParameters> WorstBuilds() {
+    return {Person(1.0f, 50.0f, 1.45f, 15.0f * 1.45f * 1.45f, 0.2f, 1003), Person(1.0f, 40.0f, 2.05f, 45.0f * 2.05f * 2.05f, 0.5f, 1013), RandomParameters(7002),
+            RandomParameters(7003), RandomParameters(5012)};
+}
+
+// The rest of the sweep, for a full run: a muscular woman, the ends of the range, another random person, and eight ordinary builds (body
+// mass index 19 to 26).
+std::vector<CharacterParameters> FullSweepBuilds() {
+    std::vector<CharacterParameters> builds = {Person(0.0f, 28.0f, 1.72f, 66.0f, 0.9f, 4),
+                                               Person(0.0f, 80.0f, 1.45f, 45.0f * 1.45f * 1.45f, 0.2f, 31),
+                                               Person(1.0f, 60.0f, 1.45f, 45.0f * 1.45f * 1.45f, 0.5f, 32),
+                                               Person(1.0f, 25.0f, 2.05f, 15.0f * 2.05f * 2.05f, 1.0f, 33),
+                                               Person(0.0f, 30.0f, 1.45f, 15.0f * 1.45f * 1.45f, 0.0f, 34),
+                                               Person(1.0f, 40.0f, 2.05f, 45.0f * 2.05f * 2.05f, 0.5f, 35),
+                                               RandomParameters(7006)};
+    for (uint32_t i = 0; i < 8; ++i) {
+        const float height = 1.55f + 0.04f * static_cast<float>(i);
+        const float bmi = 19.0f + 1.0f * static_cast<float>(i);
+        builds.push_back(Person(static_cast<float>(i % 2), 22.0f + 7.0f * static_cast<float>(i), height, bmi * height * height, 0.2f + 0.1f * static_cast<float>(i % 5), 900 + i));
+    }
+    return builds;
 }
 
 // Small textures keep the tests quick; the shapes are the same at any texture size. Every garment is worn, and hair and a beard are
@@ -103,72 +130,70 @@ const std::vector<Dressed>& CachedPeople() {
     return cache;
 }
 
-const std::vector<Dressed>& CachedExtremes() {
+const std::vector<Dressed>& CachedWorstBuilds() {
     static std::vector<Dressed> cache;
     if (cache.empty()) {
-        for (const CharacterParameters& person : ExtremePeople()) {
+        for (const CharacterParameters& person : WorstBuilds()) {
             cache.push_back(Dress(person));
         }
     }
     return cache;
 }
 
+const std::vector<Dressed>& CachedFullSweep() {
+    static std::vector<Dressed> cache;
+    if (cache.empty()) {
+        for (const CharacterParameters& person : FullSweepBuilds()) {
+            cache.push_back(Dress(person));
+        }
+    }
+    return cache;
+}
+
+// Everyone that the tests of a person run on. Each is dressed once and shared by every test: the typical people and the worst builds, and
+// in a full run the rest of the sweep too.
+std::vector<const Dressed*> AllPeople() {
+    std::vector<const Dressed*> people;
+    for (const std::vector<Dressed>* group : {&CachedPeople(), &CachedWorstBuilds()}) {
+        for (const Dressed& person : *group) {
+            people.push_back(&person);
+        }
+    }
+    if (gFullRun) {
+        for (const Dressed& person : CachedFullSweep()) {
+            people.push_back(&person);
+        }
+    }
+    return people;
+}
+
 // A mesh is a closed, consistently oriented surface when every directed edge of a triangle is matched by exactly one triangle that goes
-// the other way. Vertices that lie at the same place count as one, since a texture seam splits them.
+// the other way.
 int gBadEdges = 0;  // how many edges the last call of IsClosedAndOriented found that are not matched, for the failure message
 
 bool IsClosedAndOriented(const RenderMesh& mesh) {
     gBadEdges = 0;
-    // Weld: a vertex joins the first earlier vertex within 3 micrometres (a seam splits a vertex into copies that differ by rounding), found through a grid of cells and the cells around it.
-    constexpr float kCell = 2e-5f;
-    constexpr float kTolerance = 3e-6f;
-    std::map<std::array<long long, 3>, std::vector<uint32_t>> grid;
-    std::vector<uint32_t> representative(mesh.positions.size());
-    for (size_t v = 0; v < mesh.positions.size(); ++v) {
-        const glm::vec3 p = mesh.positions[v];
-        const std::array<long long, 3> cell = {std::llround(std::floor(p.x / kCell)), std::llround(std::floor(p.y / kCell)), std::llround(std::floor(p.z / kCell))};
-        representative[v] = static_cast<uint32_t>(v);
-        for (int dz = -1; dz <= 1 && representative[v] == v; ++dz) {
-            for (int dy = -1; dy <= 1 && representative[v] == v; ++dy) {
-                for (int dx = -1; dx <= 1 && representative[v] == v; ++dx) {
-                    const auto found = grid.find({cell[0] + dx, cell[1] + dy, cell[2] + dz});
-                    if (found == grid.end()) {
-                        continue;
-                    }
-                    for (const uint32_t other : found->second) {
-                        if (glm::distance(mesh.positions[other], p) < kTolerance) {
-                            representative[v] = other;
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-        if (representative[v] == v) {
-            grid[cell].push_back(static_cast<uint32_t>(v));
-        }
-    }
-    std::map<std::pair<uint32_t, uint32_t>, int> edges;
+    // Directed edges by the indices of their ends: the surfaces tested here (eyes, the watertight shell of a garment) share a vertex between
+    // all the triangles that meet at it.
+    std::unordered_map<uint64_t, int> edges;
+    edges.reserve(mesh.indices.size());
+    const auto key = [](uint32_t from, uint32_t to) { return (static_cast<uint64_t>(from) << 32) | to; };
     for (size_t t = 0; t + 2 < mesh.indices.size(); t += 3) {
-        uint32_t id[3];
         for (int c = 0; c < 3; ++c) {
-            id[c] = representative[mesh.indices[t + c]];
-        }
-        if (id[0] == id[1] || id[1] == id[2] || id[0] == id[2]) {
-            continue;  // a sliver that collapsed in the welding
-        }
-        for (int c = 0; c < 3; ++c) {
-            ++edges[{id[c], id[(c + 1) % 3]}];
+            ++edges[key(mesh.indices[t + c], mesh.indices[t + (c + 1) % 3])];
         }
     }
     for (const auto& [edge, uses] : edges) {
-        const auto reverse = edges.find({edge.second, edge.first});
+        const uint32_t from = static_cast<uint32_t>(edge >> 32);
+        const uint32_t to = static_cast<uint32_t>(edge & 0xFFFFFFFFu);
+        const auto reverse = edges.find(key(to, from));
         if (uses != 1 || reverse == edges.end() || reverse->second != 1) {
             ++gBadEdges;
         }
     }
     return gBadEdges == 0 && !edges.empty();
 }
+
 
 bool IndicesAreValid(const RenderMesh& mesh) {
     if (mesh.indices.size() % 3 != 0 || mesh.normals.size() != mesh.positions.size() || mesh.uvs.size() != mesh.positions.size() ||
@@ -231,19 +256,25 @@ bool SameAppearance(const CharacterAppearance& a, const CharacterAppearance& b) 
 
 void TheSameParametersGiveTheSameAppearanceOnAnyNumberOfThreads() {
     const CharacterParameters parameters = Person(0.8f, 52.0f, 1.78f, 80.0f, 0.5f, 77);
-    const CharacterMesh mesh = GenerateCharacter(parameters);
-    const AppearanceSettings settings = TestSettings(parameters);
+    const CharacterMesh mesh = GenerateCharacter(parameters, {}, &JobSystem::Shared());
+    const AppearanceSettings settings = LowDetail(TestSettings(parameters));
     JobSystem jobs(3);
-    const CharacterAppearance first = GenerateAppearance(mesh, settings);
-    const CharacterAppearance again = GenerateAppearance(mesh, settings);
-    const CharacterAppearance threaded = GenerateAppearance(mesh, settings, &jobs);
-    Check(SameAppearance(first, again), "the same call twice gives the same appearance");
-    Check(SameAppearance(first, threaded), "and so does a call on three worker threads");
+    const CharacterAppearance first = GenerateAppearance(mesh, settings, &jobs);
+    const CharacterAppearance threaded = GenerateAppearance(mesh, settings, &JobSystem::Shared());
+    Check(SameAppearance(first, threaded), "three worker threads and all the threads of the machine give the same appearance, whole outfit and all");
+    // The calling thread alone is the slowest way, so it is tried on a lighter outfit (a shirt and shorts).
+    AppearanceSettings light = settings;
+    light.outfit.top = TopKind::TShirt;
+    light.outfit.legs = LegwearKind::Shorts;
+    light.outfit.feet = FootwearKind::None;
+    const CharacterAppearance alone = GenerateAppearance(mesh, light);
+    const CharacterAppearance alongside = GenerateAppearance(mesh, light, &jobs);
+    Check(SameAppearance(alone, alongside), "and the calling thread alone gives the same appearance as three worker threads");
 
     CharacterParameters other = parameters;
     other.seed = 78;
-    const CharacterMesh otherMesh = GenerateCharacter(other);
-    const CharacterAppearance different = GenerateAppearance(otherMesh, TestSettings(other));
+    const CharacterMesh otherMesh = GenerateCharacter(other, {}, &JobSystem::Shared());
+    const CharacterAppearance different = GenerateAppearance(otherMesh, LowDetail(TestSettings(other)), &JobSystem::Shared());
     Check(!SameImage(first.skin.textures.albedo, different.skin.textures.albedo), "another seed gives other skin");
 }
 
@@ -294,8 +325,9 @@ bool InFleshOrSocket(const BodyShape& head, const EyeSocket& socket, glm::vec3 p
 }
 
 void EyesSitInTheSocketsAndDoNotPokeThroughTheHead() {
-    for (const std::vector<Dressed>* group : {&CachedPeople(), &CachedExtremes()}) {
-        for (const Dressed& person : *group) {
+    for (const Dressed* personPointer : AllPeople()) {
+        const Dressed& person = *personPointer;
+        {
             const std::string who = " (seed " + std::to_string(person.parameters.seed) + ")";
             const HeadLandmarks landmarks = ComputeHeadLandmarks(person.mesh.parameters);
             const BodyShape head = BuildHeadShape(person.mesh.parameters);
@@ -438,14 +470,14 @@ void HairGrowsFromTheScalpAndNeverEntersTheHead() {
 }
 
 void HairStylesDifferAsTheirNamesSay() {
-    const Dressed& base = CachedPeople()[3];  // a young woman, so that every style has plenty of hair
+    const Dressed& base = CachedPeople()[1];  // a young woman, so that every style has plenty of hair
     float lowest[5] = {};
     float highest[5] = {};
     size_t locks[5] = {};
     for (int style = 0; style < 5; ++style) {
         AppearanceSettings settings = TestSettings(base.parameters);
         settings.hairStyle = static_cast<HairStyle>(style);
-        const HairSet hair = BuildHair(base.mesh, base.appearance.traits, {settings.hairStyle, FacialHair::None});
+        const HairSet hair = BuildHair(base.mesh, base.appearance.traits, {settings.hairStyle, FacialHair::None}, nullptr, &JobSystem::Shared());
         locks[style] = hair.scalp.RibbonCount();
         lowest[style] = 1e9f;
         highest[style] = -1e9f;
@@ -507,8 +539,9 @@ void FacialHairGrowsOnTheJawAndNotOnTheLips() {
 // ---------------------------------------------------------------------------------------------------------------------------------
 
 void GarmentsAreClosedShellsWithValidSkinning() {
-    for (const std::vector<Dressed>* group : {&CachedPeople(), &CachedExtremes()}) {
-        for (const Dressed& person : *group) {
+    for (const Dressed* personPointer : AllPeople()) {
+        const Dressed& person = *personPointer;
+        {
             const std::string who = " (seed " + std::to_string(person.parameters.seed) + ")";
             const Outfit& outfit = person.appearance.outfit;
             Check(outfit.garments.size() == 4, "a shirt, a jacket, trousers and boots make four garments: " + std::to_string(outfit.garments.size()) + who);
@@ -534,21 +567,41 @@ void GarmentsAreClosedShellsWithValidSkinning() {
     }
 }
 
+// What a surface says of a point: how far the point is from it and on which side (negative inside), and which way the surface faces there.
+struct Probe {
+    float signedDistance = 1e9f;  // 1e9 when no triangle is within the radius
+    glm::vec3 normal{0.0f, 1.0f, 0.0f};
+};
+
+// Probes a surface at every point, on the job system: each query is its own, so this is the same as asking one at a time.
+std::vector<Probe> ProbeAll(const TriangleGrid& surface, const std::vector<glm::vec3>& points, float radius) {
+    std::vector<Probe> probes(points.size());
+    JobSystem::Shared().ParallelFor(points.size(), 256, [&](size_t begin, size_t end) {
+        for (size_t i = begin; i < end; ++i) {
+            const TriangleGrid::Nearest nearest = surface.FindNearest(points[i], radius);
+            if (nearest.distance < 1e8f) {
+                probes[i] = {nearest.signedDistance, nearest.surfaceNormal};
+            }
+        }
+    });
+    return probes;
+}
+
 // The least signed distance, from the surface of the character, of every vertex of a garment (on the inner and the outer surface and along
 // the edge strip alike) and of the middle of every triangle of its watertight shell. Negative means inside the body.
 float LeastSignedClearance(const TriangleGrid& character, const Garment& garment, glm::vec3* where = nullptr) {
-    float least = 1e9f;
-    for (const glm::vec3& p : garment.solid.positions) {
-        const float d = character.FindNearest(p, 0.04f).signedDistance;
-        if (d < least && where != nullptr) {
-            *where = p;
-        }
-        least = std::min(least, d);
-    }
+    std::vector<glm::vec3> points = garment.solid.positions;
     const std::vector<uint32_t>& indices = garment.solid.indices;
     for (size_t t = 0; t + 2 < indices.size(); t += 3) {
-        const glm::vec3 middle = (garment.solid.positions[indices[t]] + garment.solid.positions[indices[t + 1]] + garment.solid.positions[indices[t + 2]]) / 3.0f;
-        least = std::min(least, character.FindNearest(middle, 0.04f).signedDistance);
+        points.push_back((garment.solid.positions[indices[t]] + garment.solid.positions[indices[t + 1]] + garment.solid.positions[indices[t + 2]]) / 3.0f);
+    }
+    const std::vector<Probe> probes = ProbeAll(character, points, 0.04f);
+    float least = 1e9f;
+    for (size_t i = 0; i < probes.size(); ++i) {
+        if (probes[i].signedDistance < least && where != nullptr) {
+            *where = points[i];
+        }
+        least = std::min(least, probes[i].signedDistance);
     }
     return least;
 }
@@ -562,7 +615,7 @@ void CheckOutfit(const CharacterMesh& mesh, const Outfit& outfit, const std::str
         glm::vec3 where(0.0f);
         const float clearance = LeastSignedClearance(body, garment, &where);
         Check(clearance >= 0.9f * kMinimumClearance, what + " stays " + std::to_string(clearance * 1000.0f) + " mm clear of the body, outside it, on every surface, worst at (" + std::to_string(where.x) + ", " + std::to_string(where.y) + ", " + std::to_string(where.z) + ")");
-        Check(std::abs(MeasureClearance(body, garment) - garment.minimumClearance) < 1e-4f, "the garment's own record of its clearance agrees, " + what);
+        Check(std::abs(MeasureClearance(body, garment, &JobSystem::Shared()) - garment.minimumClearance) < 1e-4f, "the garment's own record of its clearance agrees, " + what);
         RenderMesh solid;
         solid.positions = garment.solid.positions;
         solid.indices = garment.solid.indices;
@@ -576,15 +629,16 @@ void CheckOutfit(const CharacterMesh& mesh, const Outfit& outfit, const std::str
             const std::vector<glm::vec3> facing = VertexNormals(garment.solid.positions, garment.solid.indices);
             float least = 1e9f;
             glm::vec3 worst(0.0f);
+            const std::vector<glm::vec3> innerPoints(garment.solid.positions.begin(), garment.solid.positions.begin() + garment.solid.outerFirstVertex);
+            const std::vector<Probe> probes = ProbeAll(*below.grid, innerPoints, 0.04f);
             for (uint32_t v = 0; v < garment.solid.outerFirstVertex; ++v) {
                 // The outer surface of a garment is a wall to be outside of, not its far wall: only a surface that faces the way the vertex does counts.
                 // (The way a vertex of the inner surface faces is the way its partner on the outer surface does: the inner surface itself faces inwards.)
-                const TriangleGrid::Nearest nearest = below.grid->FindNearest(garment.solid.positions[v], 0.04f);
-                if (nearest.distance < 1e8f && glm::dot(nearest.surfaceNormal, facing[garment.solid.outerFirstVertex + v]) > 0.3f) {
-                    if (nearest.signedDistance < least) {
-                        worst = garment.solid.positions[v];
+                if (probes[v].signedDistance < 1e8f && glm::dot(probes[v].normal, facing[garment.solid.outerFirstVertex + v]) > 0.3f) {
+                    if (probes[v].signedDistance < least) {
+                        worst = innerPoints[v];
                     }
-                    least = std::min(least, nearest.signedDistance);
+                    least = std::min(least, probes[v].signedDistance);
                 }
             }
             Check(least >= -0.0001f, std::string(GarmentName(garment.kind)) + " is outside the " + GarmentName(outfit.garments[lower].kind) + " below it" + who + ": " + std::to_string(least * 1000.0f) + " mm at (" + std::to_string(worst.x) + ", " + std::to_string(worst.y) + ", " + std::to_string(worst.z) + ")");
@@ -611,36 +665,11 @@ void CheckOutfit(const CharacterMesh& mesh, const Outfit& outfit, const std::str
 }
 
 void GarmentsNeverTouchTheBody() {
-    for (const std::vector<Dressed>* group : {&CachedPeople(), &CachedExtremes()}) {
-        for (const Dressed& person : *group) {
+    for (const Dressed* personPointer : AllPeople()) {
+        const Dressed& person = *personPointer;
+        {
             CheckOutfit(person.mesh, person.appearance.outfit, " (seed " + std::to_string(person.parameters.seed) + ")");
         }
-    }
-}
-
-// The builds that were found to bury cloth in the body, the ends of the range, and a spread of ordinary builds (body mass index 19 to 30).
-std::vector<CharacterParameters> SweepOfBuilds() {
-    std::vector<CharacterParameters> builds;
-    for (uint32_t i = 0; i < 4; ++i) {
-        const float height = 1.55f + 0.04f * static_cast<float>(i);
-        const float bmi = 19.0f + 1.5f * static_cast<float>(i);
-        builds.push_back(Person(static_cast<float>(i % 2), 22.0f + 7.0f * static_cast<float>(i), height, bmi * height * height, 0.2f + 0.1f * static_cast<float>(i % 5), 900 + i));
-    }
-    for (const uint32_t seed : {7002u, 7003u, 7006u, 5012u}) {
-        builds.push_back(RandomParameters(seed));
-    }
-    builds.push_back(Person(1.0f, 50.0f, 1.45f, 15.0f * 1.45f * 1.45f, 0.2f, 1003));  // a short man of body mass index 15
-    builds.push_back(Person(1.0f, 40.0f, 2.05f, 45.0f * 2.05f * 2.05f, 0.5f, 1013));  // a 2.05 m man of body mass index 45
-    return builds;
-}
-
-void GarmentsFitTypicalAndExtremeBuildsWithoutBurying() {
-    for (const CharacterParameters& parameters : SweepOfBuilds()) {
-        const CharacterMesh mesh = GenerateCharacter(parameters, {}, &JobSystem::Shared());
-        const AppearanceSettings settings = TestSettings(parameters);
-        const Outfit outfit = BuildOutfit(mesh, settings.outfit, &JobSystem::Shared());
-        Check(outfit.garments.size() == 4, "the whole outfit is made (seed " + std::to_string(parameters.seed) + ")");
-        CheckOutfit(mesh, outfit, " (seed " + std::to_string(parameters.seed) + ")");
     }
 }
 
@@ -696,6 +725,9 @@ void LowDetailKeepsTheShapesAndSavesTheTextures() {
     const CharacterParameters parameters = Person(1.0f, 45.0f, 1.80f, 80.0f, 0.4f, 17);
     const CharacterMesh mesh = GenerateCharacter(parameters, {}, &JobSystem::Shared());
     AppearanceSettings full = TestSettings(parameters);
+    full.outfit.top = TopKind::TShirt;  // a lighter outfit: what is compared is the textures and the cards
+    full.outfit.legs = LegwearKind::Shorts;
+    full.outfit.feet = FootwearKind::Shoes;
     full.skinTileSize = 256;
     full.eyeTextureSize = 256;
     full.outfit.tileSize = 256;
@@ -745,10 +777,10 @@ void ShoesHaveASoleAndTheOutfitCanBeLeftOut() {
     nothing.legs = LegwearKind::None;
     nothing.feet = FootwearKind::None;
     nothing.tileSize = 64;
-    Check(BuildOutfit(person.mesh, nothing).garments.empty(), "an outfit of nothing is no garment");
+    Check(BuildOutfit(person.mesh, nothing, &JobSystem::Shared()).garments.empty(), "an outfit of nothing is no garment");
     OutfitSettings shortsOnly = nothing;
     shortsOnly.legs = LegwearKind::Shorts;
-    const Outfit outfit = BuildOutfit(person.mesh, shortsOnly);
+    const Outfit outfit = BuildOutfit(person.mesh, shortsOnly, &JobSystem::Shared());
     Check(outfit.garments.size() == 1 && outfit.garments[0].kind == GarmentKind::Shorts && outfit.soleHeightMeters == 0.0f, "shorts alone are one garment with no sole");
     // Shorts end above the knee, a t-shirt above the hip, and trousers below the knee.
     float lowest = 1e9f;
@@ -763,8 +795,9 @@ void ShoesHaveASoleAndTheOutfitCanBeLeftOut() {
 // ---------------------------------------------------------------------------------------------------------------------------------
 
 void SkinMeshAndTexturesAreValid() {
-    for (const std::vector<Dressed>* group : {&CachedPeople(), &CachedExtremes()}) {
-        for (const Dressed& person : *group) {
+    for (const Dressed* personPointer : AllPeople()) {
+        const Dressed& person = *personPointer;
+        {
             const std::string who = " (seed " + std::to_string(person.parameters.seed) + ")";
             const SkinResult& skin = person.appearance.skin;
             Check(IndicesAreValid(skin.mesh), "the skin mesh has valid indices and weights" + who);
@@ -890,12 +923,15 @@ void AgeAddsWrinklesSpotsAndGreyAndSexChangesTheFace() {
     const CharacterParameters youngParameters = Person(0.5f, 20.0f, 1.70f, 70.0f, 0.4f, 9);
     CharacterParameters oldParameters = youngParameters;
     oldParameters.ageYears = 78.0f;
-    const CharacterMesh youngMesh = GenerateCharacter(youngParameters);
-    const CharacterMesh oldMesh = GenerateCharacter(oldParameters);
+    const CharacterMesh youngMesh = GenerateCharacter(youngParameters, {}, &JobSystem::Shared());
+    const CharacterMesh oldMesh = GenerateCharacter(oldParameters, {}, &JobSystem::Shared());
     AppearanceSettings settings = TestSettings(youngParameters);
     settings.skinTileSize = 128;
-    const CharacterAppearance youngSkin = GenerateAppearance(youngMesh, settings);
-    const CharacterAppearance oldSkin = GenerateAppearance(oldMesh, settings);
+    settings.outfit.top = TopKind::None;  // the skin is what is compared
+    settings.outfit.legs = LegwearKind::None;
+    settings.outfit.feet = FootwearKind::None;
+    const CharacterAppearance youngSkin = GenerateAppearance(youngMesh, settings, &JobSystem::Shared());
+    const CharacterAppearance oldSkin = GenerateAppearance(oldMesh, settings, &JobSystem::Shared());
     Check(MeanRelief(oldSkin.skin.textures) > MeanRelief(youngSkin.skin.textures) * 1.05, "the normal map of an old head has more relief: " + std::to_string(MeanRelief(oldSkin.skin.textures)) + " against " +
                                                                                               std::to_string(MeanRelief(youngSkin.skin.textures)));
 
@@ -930,7 +966,7 @@ void DifferentSeedsGiveDifferentFacesAndFeatures() {
 // ---------------------------------------------------------------------------------------------------------------------------------
 
 void ExtremeBuildsKeepEyesHairAndClothesInOrder() {
-    for (const Dressed& person : CachedExtremes()) {
+    for (const Dressed& person : CachedWorstBuilds()) {
         const std::string who = " (seed " + std::to_string(person.parameters.seed) + ")";
         const CharacterAppearance& appearance = person.appearance;
         Check(appearance.hair.scalp.RibbonCount() > 500, "hair on every build" + who);
@@ -959,8 +995,9 @@ void ExtremeBuildsKeepEyesHairAndClothesInOrder() {
 // The skin that is drawn (the copy of the character mesh that is fitted round the eyes) has no vertex inside an eyeball, and so no
 // skin shows through the eye near the opening; the same on every build.
 void NoSkinVertexIsInsideAnEyeball() {
-    for (const std::vector<Dressed>* group : {&CachedPeople(), &CachedExtremes()}) {
-        for (const Dressed& person : *group) {
+    for (const Dressed* personPointer : AllPeople()) {
+        const Dressed& person = *personPointer;
+        {
             const std::string who = " (seed " + std::to_string(person.parameters.seed) + ")";
             const SkinResult& skin = person.appearance.skin;
             int inside = 0;
@@ -986,19 +1023,19 @@ void NoSkinVertexIsInsideAnEyeball() {
 
 // Hair and beard lie outside every garment: a beard over the collar of a jacket, hair over its shoulders.
 void HairAndBeardLieOutsideTheClothes() {
-    for (const std::vector<Dressed>* group : {&CachedPeople(), &CachedExtremes()}) {
-        for (const Dressed& person : *group) {
+    for (const Dressed* personPointer : AllPeople()) {
+        const Dressed& person = *personPointer;
+        {
             const std::string who = " (seed " + std::to_string(person.parameters.seed) + ")";
             for (const Garment& garment : person.appearance.outfit.garments) {
                 const OuterSurface outer(garment);
                 for (const RibbonSet* set : {&person.appearance.hair.scalp, &person.appearance.hair.facial, &person.appearance.hair.eyebrows}) {
                     int inside = 0;
                     float deepest = 0.0f;
-                    for (const glm::vec3& p : set->mesh.positions) {
-                        const TriangleGrid::Nearest nearest = outer.grid->FindNearest(p, 0.03f);
-                        if (nearest.distance < 1e8f && nearest.signedDistance < -0.0010f) {
+                    for (const Probe& probe : ProbeAll(*outer.grid, set->mesh.positions, 0.03f)) {
+                        if (probe.signedDistance < -0.0010f) {
                             ++inside;
-                            deepest = std::min(deepest, nearest.signedDistance);
+                            deepest = std::min(deepest, probe.signedDistance);
                         }
                     }
                     Check(inside == 0, std::to_string(inside) + " hair vertices are inside the " + GarmentName(garment.kind) + ", up to " + std::to_string(-deepest * 1000.0f) + " mm" + who);
@@ -1033,8 +1070,12 @@ void ACharacterWithoutAHeadPieceStillGetsClothes() {
     MeshSettings settings;
     settings.faceAndHands = false;
     const CharacterParameters parameters = Person(0.5f, 35.0f, 1.72f, 72.0f, 0.4f, 11);
-    const CharacterMesh mesh = GenerateCharacter(parameters, settings);
-    const CharacterAppearance appearance = GenerateAppearance(mesh, TestSettings(parameters));
+    const CharacterMesh mesh = GenerateCharacter(parameters, settings, &JobSystem::Shared());
+    AppearanceSettings lighter = TestSettings(parameters);
+    lighter.outfit.top = TopKind::TShirt;
+    lighter.outfit.legs = LegwearKind::Shorts;
+    lighter.outfit.feet = FootwearKind::None;
+    const CharacterAppearance appearance = GenerateAppearance(mesh, lighter, &JobSystem::Shared());
     Check(appearance.hair.scalp.mesh.positions.empty() && appearance.eyes.eyes[0].eyeball.positions.empty(), "no head piece, no hair and no eyes");
     Check(!appearance.outfit.garments.empty() && !appearance.skin.mesh.positions.empty(), "but skin and clothes");
 }
@@ -1043,7 +1084,15 @@ void ACharacterWithoutAHeadPieceStillGetsClothes() {
 
 // With a word on the command line, only the tests whose names contain it run, which is quick when one test is being worked on.
 int main(int argc, char** argv) {
-    const std::string filter = argc > 1 ? argv[1] : "";
+    // `--full` tests the whole sweep of builds, not only the default set; any other word is a filter on the names of the tests.
+    std::string filter;
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--full") {
+            gFullRun = true;
+        } else {
+            filter = argv[i];
+        }
+    }
     struct Test {
         const char* name;
         std::function<void()> run;
@@ -1069,7 +1118,6 @@ int main(int argc, char** argv) {
         {"AgeAddsWrinklesSpotsAndGreyAndSexChangesTheFace", AgeAddsWrinklesSpotsAndGreyAndSexChangesTheFace},
         {"DifferentSeedsGiveDifferentFacesAndFeatures", DifferentSeedsGiveDifferentFacesAndFeatures},
         {"ExtremeBuildsKeepEyesHairAndClothesInOrder", ExtremeBuildsKeepEyesHairAndClothesInOrder},
-        {"GarmentsFitTypicalAndExtremeBuildsWithoutBurying", GarmentsFitTypicalAndExtremeBuildsWithoutBurying},
         {"EveryoneIsDressedAndMostWearShoes", EveryoneIsDressedAndMostWearShoes},
         {"LowDetailKeepsTheShapesAndSavesTheTextures", LowDetailKeepsTheShapesAndSavesTheTextures},
         {"NoSkinVertexIsInsideAnEyeball", NoSkinVertexIsInsideAnEyeball},
@@ -1082,13 +1130,15 @@ int main(int argc, char** argv) {
             continue;
         }
         const int failuresBefore = failureCount;
+        const auto started = std::chrono::steady_clock::now();
         try {
             test.run();
         } catch (const std::exception& error) {
             ++failureCount;
             std::cerr << "  threw: " << error.what() << "\n";
         }
-        std::cout << (failureCount == failuresBefore ? "PASS  " : "FAIL  ") << test.name << "\n";
+        const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+        std::cout << (failureCount == failuresBefore ? "PASS  " : "FAIL  ") << test.name << " (" << static_cast<int>(seconds + 0.5) << " s)\n" << std::flush;
     }
     std::cout << (failureCount == 0 ? "all appearance tests passed\n" : "appearance tests failed\n");
     return failureCount == 0 ? 0 : 1;
