@@ -59,10 +59,12 @@ StreamedWorld::StreamedWorld(IRenderModule& renderer, const StreamedWorldSetting
       peoplePerChunk(std::max<uint32_t>(1u, (settings.peopleTotal + ChunksInRadius(settings.loadRadius) - 1) /
                                                 ChunksInRadius(settings.loadRadius))),
       manager(MakeManagerSettings(settings),
-              [seed = settings.seed, people = settings.peopleTotal == 0 ? 0u : peoplePerChunk](ChunkCoord coord) {
+              [seed = settings.seed, people = settings.peopleTotal == 0 ? 0u : peoplePerChunk,
+               jobs = &crowdJobs](ChunkCoord coord) {
                   world::ChunkSettings chunk;
                   chunk.seed = seed;
                   chunk.agentCount = people;
+                  chunk.crowdJobs = jobs;
                   return std::shared_ptr<const ChunkPayload>(world::GenerateChunk(chunk, coord));
               }) {}
 
@@ -73,6 +75,8 @@ StreamedWorld::~StreamedWorld() {
 }
 
 void StreamedWorld::Receive(const StreamingFrame& frame) {
+    deliveredByLastUpdate = frame.delivered.size();
+    unloadedByLastUpdate = frame.unloaded.size();
     for (const ResidentChunk& delivered : frame.delivered) {
         auto data = std::static_pointer_cast<const world::ChunkData>(delivered.payload);
         // The renderer keeps the chunk alive until its boxes are copied to the GPU, so no copy is made here.
@@ -84,6 +88,14 @@ void StreamedWorld::Receive(const StreamingFrame& frame) {
         if (found != loaded.end()) {
             renderer.RemoveStreamedChunk(found->second.handle);
             loaded.erase(found);
+        }
+    }
+    if (!frame.delivered.empty() || !frame.unloaded.empty()) {
+        crowded.clear();
+        for (auto& [coord, chunk] : loaded) {
+            if (chunk.data->crowd) {
+                crowded.push_back(&chunk);
+            }
         }
     }
 }
@@ -104,22 +116,30 @@ void StreamedWorld::LoadAround(glm::vec3 position) {
 }
 
 void StreamedWorld::UpdateCrowd(float deltaSeconds, glm::vec3 focus) {
-    for (auto& [coord, chunk] : loaded) {
-        if (chunk.data->crowd) {
-            chunk.data->crowd->SetFocusPoint(focus);
-            chunk.data->crowd->Update(deltaSeconds);
+    // One crowd per task: each crowd runs its own loops on the thread that has it (see ChunkSettings::crowdJobs), and the
+    // crowds are spread over the shared pool.
+    JobSystem::Shared().ParallelFor(crowded.size(), 1, [&](size_t begin, size_t end) {
+        for (size_t i = begin; i < end; ++i) {
+            Crowd& crowd = *crowded[i]->data->crowd;
+            crowd.SetFocusPoint(focus);
+            crowd.Update(deltaSeconds);
         }
-    }
+    });
 }
 
 void StreamedWorld::CollectVisible(const Frustum& frustum, std::vector<NpcInstance>& visible) const {
-    visible.clear();
-    std::vector<NpcInstance> fromChunk;
-    for (const auto& [coord, chunk] : loaded) {
-        if (!chunk.data->crowd || !frustum.ContainsBox(chunk.data->bounds.min, chunk.data->bounds.max)) {
-            continue;
+    visibleByChunk.resize(crowded.size());
+    JobSystem::Shared().ParallelFor(crowded.size(), 1, [&](size_t begin, size_t end) {
+        for (size_t i = begin; i < end; ++i) {
+            const world::ChunkData& data = *crowded[i]->data;
+            visibleByChunk[i].clear();
+            if (frustum.ContainsBox(data.bounds.min, data.bounds.max)) {
+                data.crowd->CollectVisible(frustum, visibleByChunk[i]);
+            }
         }
-        chunk.data->crowd->CollectVisible(frustum, fromChunk);
+    });
+    visible.clear();
+    for (const std::vector<NpcInstance>& fromChunk : visibleByChunk) {
         visible.insert(visible.end(), fromChunk.begin(), fromChunk.end());
     }
 }

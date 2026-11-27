@@ -108,6 +108,19 @@ foreach(SHADER_SOURCE ${SHADER_SOURCES})
         VERBATIM)
     list(APPEND SHADER_BINARIES ${SHADER_BINARY})
 endforeach()
+
+# The streamed world draws with a variant of the lit shader that fades the far edge of the loaded chunks into the haze. The
+# fixed city keeps the plain lit.frag, which compiles to exactly the SPIR-V it always did.
+set(STREAM_LIT_BINARY ${SHADER_OUTPUT_DIR}/lit_stream.frag.spv)
+add_custom_command(
+    OUTPUT ${STREAM_LIT_BINARY}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${SHADER_OUTPUT_DIR}
+    COMMAND $<TARGET_FILE:glslang-standalone> -V --target-env vulkan1.3 -DSTREAM_FADE
+            -I${SHADER_SOURCE_DIR} -o ${STREAM_LIT_BINARY} ${SHADER_SOURCE_DIR}/lit.frag
+    DEPENDS ${SHADER_SOURCE_DIR}/lit.frag ${SHADER_INCLUDES} glslang-standalone
+    COMMENT "Compiling shader lit_stream.frag"
+    VERBATIM)
+list(APPEND SHADER_BINARIES ${STREAM_LIT_BINARY})
 add_custom_target(shaders DEPENDS ${SHADER_BINARIES})
 
 # ---------------------------------------------------------------------------

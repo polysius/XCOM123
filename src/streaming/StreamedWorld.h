@@ -8,6 +8,7 @@
 
 #include <glm/glm.hpp>
 
+#include "core/JobSystem.h"
 #include "render/IRenderModule.h"
 #include "scene/Frustum.h"
 #include "streaming/ChunkCoord.h"
@@ -57,6 +58,9 @@ public:
     void LoadAround(glm::vec3 position);
 
     size_t LoadedChunkCount() const { return loaded.size(); }
+    // What the last Update did, for finding the frames in which chunks came and went.
+    size_t DeliveredByLastUpdate() const { return deliveredByLastUpdate; }
+    size_t UnloadedByLastUpdate() const { return unloadedByLastUpdate; }
     StreamingStats Stats() const { return manager.Stats(); }
     const StreamingSettings& ManagerSettings() const { return manager.Settings(); }
     uint32_t PeoplePerChunk() const { return peoplePerChunk; }
@@ -72,9 +76,15 @@ private:
     void Receive(const StreamingFrame& frame);
 
     IRenderModule& renderer;
+    // Declared before everything that holds a crowd, so that it is destroyed after all of them.
+    JobSystem crowdJobs{0u};
     uint32_t peoplePerChunk = 0;
+    size_t deliveredByLastUpdate = 0;
+    size_t unloadedByLastUpdate = 0;
     StreamingManager manager;
     std::map<ChunkCoord, LoadedChunk> loaded;  // ordered, so the crowds update and are collected in one fixed order
+    std::vector<LoadedChunk*> crowded;         // the loaded chunks that have a crowd, rebuilt whenever chunks come or go
+    mutable std::vector<std::vector<NpcInstance>> visibleByChunk;  // scratch space of CollectVisible, one list per crowd
 };
 
 }  // namespace streaming

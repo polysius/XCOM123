@@ -862,6 +862,13 @@ vec3 ApplyFog(vec3 color, vec3 position) {
     float heightFalloff = exp(-max(position.y, 0.0) * 0.02);
     float density = frame.settings.y * mix(0.35, 1.0, heightFalloff);
     float fogAmount = 1.0 - exp(-viewDistance * density);
+#ifdef STREAM_FADE
+    // The streamed world ends at its load radius. Everything fades into the haze before that, whatever height the camera is
+    // at, so chunks that arrive at the edge arrive invisible. This is compiled only into lit_stream.frag, the variant the
+    // streamed world draws with, so the shader of the fixed city is exactly what it was.
+    float fadeRadius = frame.settings.w;
+    fogAmount = max(fogAmount, smoothstep(fadeRadius * 0.75, fadeRadius, length(toPoint.xz)));
+#endif
     return mix(color, SkyRadiance(viewDirection, false), fogAmount);
 }
 

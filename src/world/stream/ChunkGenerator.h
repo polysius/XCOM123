@@ -29,12 +29,19 @@
 #include "world/Crowd.h"
 #include "world/stream/WorldSkeleton.h"
 
+class JobSystem;
+
 namespace world {
 
 struct ChunkSettings {
     uint32_t seed = 1789;
     // People spawned in the chunk and kept in a crowd of its own. Zero builds no crowd and no walkways.
     uint32_t agentCount = 0;
+    // The job system the chunk's crowd runs its own parallel loops on. A streamed world has dozens of small crowds, and
+    // waking the shared pool for each loop of each crowd costs more than the loops do, so it gives them a pool with no
+    // workers (everything runs on the caller) and spreads the crowds themselves over the shared pool. Null means the
+    // shared pool.
+    JobSystem* crowdJobs = nullptr;
 };
 
 // The ground square a chunk nominally covers.

@@ -147,6 +147,7 @@ Options ParseCommandLine(int argc, char** argv) {
                 throw std::invalid_argument(option + " must be at most " + std::to_string(kMaxCharacters));
             }
             options.characterCount = count;
+            options.charactersGiven = true;
         } else if (option == "--river-sim") {
             options.riverSimulation = true;
         } else if (option == "--rain") {
@@ -234,7 +235,8 @@ void PrintUsage() {
         "  --satellites N           districts turned to their own angles around the city (0 to 8)\n"
         "  --no-terraces            keep the satellite districts level, with no terraces and stairs\n"
         "  --props N                drop N crates, barrels and balls into the largest square, under physics\n"
-        "  --characters N           stand N skinned, animated characters in the largest square (a few distinct bodies, reused)\n"
+        "  --characters N           stand N skinned, animated characters in the largest square (a few distinct bodies, reused);\n"
+        "                           with --stream, the N people nearest the camera are drawn as skinned characters (default 48)\n"
         "  --river-sim              simulate the water of the river near the props (or the centre of the city)\n"
         "  --rain N                 raindrops per second on the simulated river (default 40, with --river-sim)\n"
         "  --sun DEGREES            sun elevation above the horizon (default 24)\n"

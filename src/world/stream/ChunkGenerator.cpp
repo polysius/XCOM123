@@ -24,6 +24,10 @@ constexpr uint32_t kCrowdSalt = 0x43524F57u;
 // Blocks this narrow are left as plain paving, as in the fixed city.
 constexpr float kMinUsableBlock = 9.0f;
 
+// Street props: the chance that a block edge has a stack of crates, and how far from the corners it stands.
+constexpr float kPropChancePerEdge = 0.4f;
+constexpr float kPropEdgeMargin = 14.0f;
+
 constexpr float kLampSpacing = 32.0f;
 constexpr float kLampFromCorner = 10.0f;
 constexpr float kLampKerbOffset = kRoadHalfWidth + 0.32f;
@@ -221,7 +225,47 @@ private:
         case BlockUse::Buildings:
         default:
             city::BuildBlockOfBuildings(boxes, layout, land, plan.district, random);
+            AddStreetProps(land, plan.district, random);
             break;
+        }
+    }
+
+    // Crates and barrels stacked against the walls along the street, in the districts of shops and workshops. They stand
+    // in the strip of pavement next to the wall, clear of the lane people walk in. They come after the buildings in the block's
+    // random stream, so they never change how the buildings turn out.
+    void AddStreetProps(const Rect& land, District district, Random& random) {
+        if (district != District::Market && district != District::OldQuarter) {
+            return;
+        }
+        PartScope scope(boxes, CityPart::MarketStall);
+        const city::Look crate{{0.50f, 0.36f, 0.20f}, SurfaceMaterial::Wood, 0.85f, 0.0f};
+        const city::Look barrel{{0.30f, 0.22f, 0.14f}, SurfaceMaterial::Wood, 0.8f, 0.0f};
+        struct Edge {
+            glm::vec2 start;   // the end of the edge with the smaller coordinate
+            glm::vec2 along;   // unit direction of the edge
+            glm::vec2 outward; // towards the street
+            float length;
+        };
+        const Edge edges[] = {
+            {land.min, {1.0f, 0.0f}, {0.0f, -1.0f}, land.Size().x},
+            {{land.min.x, land.max.y}, {1.0f, 0.0f}, {0.0f, 1.0f}, land.Size().x},
+            {land.min, {0.0f, 1.0f}, {-1.0f, 0.0f}, land.Size().y},
+            {{land.max.x, land.min.y}, {0.0f, 1.0f}, {1.0f, 0.0f}, land.Size().y},
+        };
+        for (const Edge& edge : edges) {
+            if (!random.Chance(kPropChancePerEdge)) {
+                continue;
+            }
+            const glm::vec2 spot = edge.start + edge.along * random.Range(kPropEdgeMargin, edge.length - kPropEdgeMargin) +
+                                   edge.outward * 0.45f;
+            const float ground = city::kPavementHeight;
+            boxes.Box({spot.x - 0.4f, ground, spot.y - 0.4f}, {spot.x + 0.4f, ground + 0.8f, spot.y + 0.4f}, crate);
+            if (random.Chance(0.5f)) {
+                boxes.Box({spot.x - 0.35f, ground + 0.8f, spot.y - 0.35f}, {spot.x + 0.35f, ground + 1.5f, spot.y + 0.35f}, crate);
+            } else {
+                const glm::vec2 beside = spot + edge.along * 0.95f;
+                boxes.Box({beside.x - 0.28f, ground, beside.y - 0.28f}, {beside.x + 0.28f, ground + 0.9f, beside.y + 0.28f}, barrel);
+            }
         }
     }
 
@@ -464,7 +508,7 @@ std::shared_ptr<ChunkData> GenerateChunk(const ChunkSettings& settings, streamin
     ChunkBuilder(settings.seed, *chunk).Build();
     chunk->bounds = BoundsOfBoxes(chunk->layout.boxes, ChunkRect(coord));
     if (settings.agentCount > 0) {
-        chunk->crowd = std::make_shared<Crowd>();
+        chunk->crowd = settings.crowdJobs != nullptr ? std::make_shared<Crowd>(*settings.crowdJobs) : std::make_shared<Crowd>();
         chunk->crowd->Spawn(chunk->layout, {.agentCount = settings.agentCount,
                                             .seed = HashBits(settings.seed, kCrowdSalt, coord.x, coord.z)});
     }

@@ -301,6 +301,18 @@ void VulkanRenderer::UploadStaticScene(std::span<const BoxInstance> boxes) {
     geometry.UploadBoxes(context, boxes);
 }
 
+void VulkanRenderer::SetDistanceFade(float radius) {
+    distanceFadeRadius = radius;
+    if (radius > 0.0f && !drawsWithDistanceFade) {
+        // The fade lives in a variant of the lit shader, so the scene pipelines are made again with it. This happens once, at
+        // start-up, before any frame is in flight that matters.
+        vkDeviceWaitIdle(context.device);
+        scenePass.Destroy(context.device);
+        scenePass.Create(context, scenePipelineLayout, targets.samples, "lit_stream.frag");
+        drawsWithDistanceFade = true;
+    }
+}
+
 StreamedChunkHandle VulkanRenderer::AddStreamedChunk(std::shared_ptr<const void> owner, std::span<const BoxInstance> boxes,
                                                      const Aabb& bounds) {
     return {geometry.AddChunk(context, std::move(owner), boxes, bounds)};
@@ -527,7 +539,7 @@ void VulkanRenderer::WriteFrameUniforms(FrameResources& frame, const FrameInput&
     uniforms.cameraPosition = glm::vec4(input.cameraPosition, input.timeSeconds);
     uniforms.sunDirection = glm::vec4(sun, 0.0f);
     uniforms.sunColor = glm::vec4(SunRadiance(sun.y), 0.0f);
-    uniforms.settings = glm::vec4(1.0f / static_cast<float>(ShadowPass::kMapSize), fogDensity, scanStrength, 0.0f);
+    uniforms.settings = glm::vec4(1.0f / static_cast<float>(ShadowPass::kMapSize), fogDensity, scanStrength, distanceFadeRadius);
     std::copy(scanTiles.begin(), scanTiles.end(), uniforms.scanTiles);
     std::memcpy(frame.uniforms.mapped, &uniforms, sizeof(uniforms));
 }

@@ -21,6 +21,7 @@ struct Options {
     std::optional<int> satelliteCount;  // satellite districts around the city; unset keeps the generator's default
     bool terraces = true;               // whether satellite districts may stand on terraces
     uint32_t propCount = 0;             // crates, barrels and balls dropped into the largest square
+    bool charactersGiven = false;       // whether --characters was on the command line; the streamed world has characters of its own by default
     uint32_t characterCount = 0;        // skinned, posed characters standing in the largest square; none unless --characters is given
     bool riverSimulation = false;       // simulate the water of the river near the props, or near the centre
     uint32_t rainPerSecond = 40;        // raindrops per second on the simulated river

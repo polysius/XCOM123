@@ -81,6 +81,9 @@ public:
     // How thick the distance haze is. The streamed world sets it thicker, so that chunks fade in out of the haze at the
     // edge of the load radius instead of appearing.
     virtual void SetFogDensity(float density) = 0;
+    // Distance from the camera, along the ground, at which everything has faded into the haze completely. Zero, the default,
+    // means no fade. The streamed world sets its load radius, so that the edge of the loaded chunks is never seen.
+    virtual void SetDistanceFade(float radius) = 0;
     // Gives the renderer the generated materials to draw surfaces with. Until this is called, surfaces are drawn
     // with the city colours and procedural detail only.
     virtual void UploadMaterials(const material::MaterialLibrary& library) = 0;

@@ -26,6 +26,7 @@
 #include "core/Module_Interface.h"
 #include "core/JobSystem.h"
 #include "demo/CharacterShowcase.h"
+#include "demo/CrowdCharacters.h"
 #include "editor_ui/EditorSession.h"
 #include "engine_host/LiveEngineHost.h"
 #include "fluid/RiverWater.h"
@@ -91,6 +92,8 @@ struct Engine {
     // The endless city of --stream. When it is there, `city` and `crowd` above stay empty: the chunks hold their own streets
     // and their own people.
     std::unique_ptr<streaming::StreamedWorld> streamed;
+    demo::CrowdCharacters crowdCharacters;  // the people nearest the camera as skinned characters; only in the streamed world
+    uint32_t crowdCharacterLimit = 0;
     glm::vec3 previousCameraPosition{0.0f};  // for the camera's velocity, which tells the streaming where to look ahead
 
     size_t PeopleCount() const { return streamed ? streamed->PeopleCount() : crowd.AgentCount(); }
@@ -119,6 +122,10 @@ graph_engine::SunSettings DefaultSun(const Options& options) {
     return {options.sunElevationDegrees.value_or(kDefaultSunElevation), kSunAzimuthDegrees};
 }
 
+// In the streamed world, the people within this many metres of the camera, up to a limit, are drawn as skinned characters.
+constexpr float kCharacterReach = 70.0f;
+constexpr uint32_t kStreamDefaultCharacters = 48;
+
 // Moves the crowd forward and gathers the people the camera can see into the frame. Returns the
 // time this took in milliseconds. `host` is the engine host of a run that has one: the people that graphs spawned are drawn too.
 double UpdateCrowd(Engine& engine, float deltaSeconds, FrameInput& frame, const engine_host::LiveEngineHost* host = nullptr) {
@@ -126,6 +133,8 @@ double UpdateCrowd(Engine& engine, float deltaSeconds, FrameInput& frame, const 
     if (engine.streamed) {
         engine.streamed->UpdateCrowd(deltaSeconds, frame.cameraPosition);
         engine.streamed->CollectVisible(Frustum(frame.projection * frame.view), engine.visibleNpcs);
+        engine.crowdCharacters.TakeNearest(engine.visibleNpcs, frame.cameraPosition, engine.crowdCharacterLimit,
+                                           kCharacterReach, frame);
         frame.npcs = engine.visibleNpcs;
         return MillisecondsBetween(start, Clock::now());
     }
@@ -415,7 +424,29 @@ struct StreamRunTotals {
     size_t hitchFrames = 0;  // frames over the hitch limit
     int worstFrame = 0;
     double worstFrameMs = 0.0;
+
+    // One frame, for finding out what the slowest ones were doing.
+    struct FrameNote {
+        int frame = 0;
+        double frameMs = 0.0;
+        double streamMs = 0.0;
+        double crowdMs = 0.0;
+        size_t chunksDelivered = 0;
+        size_t chunksUnloaded = 0;
+    };
+    std::vector<FrameNote> notes;
 };
+
+// Prints the slowest frames with what streaming and the crowd cost in them and which chunks arrived or left.
+void PrintSlowestFrames(std::vector<StreamRunTotals::FrameNote> notes, size_t count) {
+    std::sort(notes.begin(), notes.end(), [](const auto& a, const auto& b) { return a.frameMs > b.frameMs; });
+    std::printf("  slowest frames   frame: total ms (streaming update ms, crowd ms, chunks in / out)\n");
+    for (size_t i = 0; i < std::min(count, notes.size()); ++i) {
+        const auto& note = notes[i];
+        std::printf("    %5d: %6.2f ms (%5.2f, %5.2f, +%zu / -%zu)\n", note.frame, note.frameMs, note.streamMs, note.crowdMs,
+                    note.chunksDelivered, note.chunksUnloaded);
+    }
+}
 
 // The samples of `all` from index `from` on, in milliseconds.
 std::vector<double> SecondsToMillisecondsFrom(const std::vector<double>& all, size_t from) {
@@ -455,6 +486,7 @@ void PrintStreamReport(const Engine& engine, const Options& options, const strea
                 streamCost.averageMs, streamCost.p99Ms, streamCost.worstMs);
     std::printf("  hitches          %zu frames over %.0f ms (worst %.2f ms, frame %d)\n", totals.hitchFrames, options.hitchLimitMs,
                 totals.worstFrameMs, totals.worstFrame);
+    PrintSlowestFrames(totals.notes, 6);
 }
 
 // Flies the streaming flight path and reports. Fails (exit code 2) when p99 misses the target frame rate, when a frame takes
@@ -513,6 +545,8 @@ int RunStreamBenchmark(Engine& engine, const Options& options) {
             totals.worstFrameMs = frameMs;
             totals.worstFrame = measuredIndex;
         }
+        totals.notes.push_back({measuredIndex, frameMs, streamMs, crowdMs, engine.streamed->DeliveredByLastUpdate(),
+                                engine.streamed->UnloadedByLastUpdate()});
     }
 
     const bool passedTarget = recorder.PrintReport(engine.PeopleCount(), options.targetFps);
@@ -674,16 +708,21 @@ constexpr float kStreamFogDensity = 0.0022f;
 // Sets up the endless city instead of the fixed one. Props, the simulated river and the skinned characters of the showcase
 // belong to the fixed city and are not made here.
 void StartStreamedWorld(Engine& engine, const Options& options) {
-    if (options.propCount > 0 || options.riverSimulation || options.characterCount > 0) {
-        std::cerr << "--props, --river-sim and --characters are not streamed yet and are ignored with --stream\n";
+    if (options.propCount > 0 || options.riverSimulation) {
+        std::cerr << "--props and --river-sim are not streamed yet and are ignored with --stream\n";
     }
     if (options.scanMaterials) {
         UploadScanMaterials(*engine.renderer, options);
     }
     engine.renderer->SetFogDensity(kStreamFogDensity);
+    engine.renderer->SetDistanceFade(options.streamLoadRadius);
     // Room for everyone up front, so the renderer never grows buffers mid-flight.
     engine.renderer->ReserveNpcCapacity(options.npcCount);
     engine.visibleNpcs.reserve(options.npcCount);
+    engine.crowdCharacterLimit = options.charactersGiven ? options.characterCount : kStreamDefaultCharacters;
+    if (engine.crowdCharacterLimit > 0) {
+        engine.crowdCharacters.MakeBodies(*engine.renderer, options.seed);
+    }
     streaming::StreamedWorldSettings settings;
     settings.seed = options.seed;
     settings.peopleTotal = options.npcCount;
