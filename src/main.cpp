@@ -558,7 +558,7 @@ int RunStreamBenchmark(Engine& engine, const Options& options) {
         const double streamMs = UpdateStreaming(engine, camera, kFixedTimeStep);
         const float aspect = std::max(WindowAspectRatio(engine.window), 0.01f);
         const float worldSeconds = static_cast<float>(frameIndex) * kFixedTimeStep;
-        FrameInput frame = MakeFrameInput(camera, aspect, options.sunElevationDegrees.value_or(kDefaultSunElevation), worldSeconds);
+        FrameInput frame = MakeFrameInput(camera, aspect, DefaultSun(options), worldSeconds);
         const double crowdMs = UpdateCrowd(engine, kFixedTimeStep, frame);
         engine.renderer->Render(frame);
         title.AddFrame(crowdMs, engine);
