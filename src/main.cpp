@@ -21,6 +21,7 @@
 #include "core/FlyCamera.h"
 #include "core/Module_Interface.h"
 #include "core/JobSystem.h"
+#include "demo/CharacterShowcase.h"
 #include "editor_ui/EditorSession.h"
 #include "fluid/RiverWater.h"
 #include "material/MaterialLibrary.h"
@@ -78,6 +79,7 @@ struct Engine {
     std::vector<NpcInstance> visibleNpcs;
     physics::PropField props;  // crates, barrels and balls under the physics engine; none unless --props is given
     fluid::RiverWater river;   // the water of the river near the props, simulated; unbuilt unless --river-sim is given
+    demo::CharacterShowcase characters;  // skinned, posed characters in the largest square; none unless --characters is given
     std::vector<PersonBody> peopleNearProps;  // who may push props this frame
 };
 
@@ -129,6 +131,11 @@ void UpdateProps(Engine& engine, float deltaSeconds, FrameInput& frame) {
     engine.props.Update(deltaSeconds);
     frame.bodyBoxes = engine.props.Boxes();
     frame.bodySpheres = engine.props.Spheres();
+}
+
+// Poses the characters for this moment and puts them into the frame.
+void UpdateCharacters(Engine& engine, float worldSeconds, FrameInput& frame) {
+    engine.characters.Update(worldSeconds, frame);
 }
 
 // Moves the simulated river forward and puts its surface into the frame.
@@ -206,18 +213,20 @@ private:
     double crowdMsTotal = 0.0;
 };
 
-FlyCamera MakeStartCamera(const Options& options, const CityLayout& city) {
-    if (options.camera) {
-        return FlyCamera(options.camera->position, glm::radians(options.camera->yawDegrees),
-                         glm::radians(options.camera->pitchDegrees));
+FlyCamera MakeStartCamera(const Options& options, const Engine& engine) {
+    // Without a camera of its own, a run with characters starts in front of them, because from far above they are a few pixels.
+    const std::optional<CameraPlacement>& placement = options.camera ? options.camera : engine.characters.ViewPoint();
+    if (placement) {
+        return FlyCamera(placement->position, glm::radians(placement->yawDegrees), glm::radians(placement->pitchDegrees));
     }
+    const CityLayout& city = engine.city;
     // Above the south-west of the city, looking towards its centre.
     const glm::vec3 start(city.coreBounds.min.x * 0.55f, 70.0f, city.coreBounds.min.y * 0.55f);
     return FlyCamera(start, std::atan2(-start.x, -start.z), -0.32f);
 }
 
 int RunInteractive(Engine& engine, const Options& options) {
-    FlyCamera camera = MakeStartCamera(options, engine.city);
+    FlyCamera camera = MakeStartCamera(options, engine);
     float sunElevation = options.sunElevationDegrees.value_or(kDefaultSunElevation);
     TitleBar title(engine.window, engine.renderer->GetDeviceName());
     editor_ui::EditorSession editor(*engine.renderer, engine.window, options);
@@ -254,6 +263,7 @@ int RunInteractive(Engine& engine, const Options& options) {
         FrameInput frame = MakeFrameInput(camera, aspect, sunElevation, worldSeconds);
         const double crowdMs = UpdateCrowd(engine, deltaSeconds, frame);
         UpdateProps(engine, deltaSeconds, frame);
+        UpdateCharacters(engine, worldSeconds, frame);
         UpdateRiver(engine, deltaSeconds, frame);
         engine.renderer->Render(frame);
         title.AddFrame(crowdMs, engine);
@@ -286,7 +296,7 @@ int RunBenchmark(Engine& engine, const Options& options) {
         shotNames.push_back(shot.name);
     }
     BenchmarkRecorder recorder(shotNames);
-    FlyCamera camera = MakeStartCamera(options, engine.city);
+    FlyCamera camera = MakeStartCamera(options, engine);
     const float sunElevation = options.sunElevationDegrees.value_or(kDefaultSunElevation);
     const float startSeconds = options.worldTimeSeconds.value_or(0.0f);
     TitleBar title(engine.window, engine.renderer->GetDeviceName());
@@ -308,6 +318,7 @@ int RunBenchmark(Engine& engine, const Options& options) {
         FrameInput frame = MakeFrameInput(camera, aspect, sunElevation, worldSeconds);
         const double crowdMs = UpdateCrowd(engine, kFixedTimeStep, frame);
         UpdateProps(engine, kFixedTimeStep, frame);
+        UpdateCharacters(engine, worldSeconds, frame);
         UpdateRiver(engine, kFixedTimeStep, frame);
         engine.renderer->Render(frame);
         title.AddFrame(crowdMs, engine);
@@ -370,7 +381,7 @@ void PreRollWorld(Engine& engine, float seconds) {
 
 // Renders a few frames from a fixed camera at a fixed world time and saves the last one.
 int RunScreenshot(Engine& engine, const Options& options) {
-    const FlyCamera camera = MakeStartCamera(options, engine.city);
+    const FlyCamera camera = MakeStartCamera(options, engine);
     const float sunElevation = options.sunElevationDegrees.value_or(kDefaultSunElevation);
     const int frames = options.screenshotFrames;
     // The last frame shows the world at `--time`; the frames before it lead up to it.
@@ -399,6 +410,7 @@ int RunScreenshot(Engine& engine, const Options& options) {
         FrameInput frame = MakeFrameInput(camera, aspect, sunElevation, worldSeconds);
         UpdateCrowd(engine, kFixedTimeStep, frame);
         UpdateProps(engine, kFixedTimeStep, frame);
+        UpdateCharacters(engine, worldSeconds, frame);
         UpdateRiver(engine, kFixedTimeStep, frame);
         if (editor) {
             editor->BeginFrame(kFixedTimeStep);
@@ -513,6 +525,7 @@ int RunEngine(const Options& options, GLFWwindow* window) {
             engine.props.SetWater(&engine.river);
         }
     }
+    engine.characters.Spawn(*engine.renderer, engine.city, options.characterCount, options.seed);
     PrintWorldSummary(options, engine);
 
     if (options.IsBenchmark()) {

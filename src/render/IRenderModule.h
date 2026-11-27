@@ -9,6 +9,7 @@
 #include "core/Module_Interface.h"
 #include "material/MaterialLibrary.h"
 #include "render/IFrameOverlay.h"
+#include "render/SkinningMath.h"
 #include "scene/SceneTypes.h"
 
 // GPU time spent in one render pass.
@@ -52,6 +53,14 @@ public:
     // Makes room for this many visible people up front, so the first crowded frames do not
     // have to grow GPU buffers.
     virtual void ReserveNpcCapacity(size_t npcCount) = 0;
+    // Uploads the triangles of a skinned character once and returns a handle to draw it with. Each frame, the characters to draw
+    // are given as FrameInput::characters, each with its own palette of skinning matrices. Returns an invalid handle when the mesh
+    // is empty or has more joints than a palette can name.
+    virtual CharacterHandle UploadCharacterMesh(const skinning::MeshData& mesh) = 0;
+    // Says which mesh to draw a body with when it is far from the camera, and (one level coarser again) in shadows. Both come from
+    // UploadCharacterMesh and must have palettes of the same size. Chain them for more levels: full, coarser, coarsest.
+    // Returns false when the two cannot be linked.
+    virtual bool SetCharacterLowerDetail(CharacterHandle body, CharacterHandle lowerDetail) = 0;
     // Draws one frame. The data in `frame` only has to stay valid during the call.
     virtual void Render(const FrameInput& frame) = 0;
     // Draws one frame, waits for it to finish and saves what it shows as a PNG file.

@@ -9,6 +9,7 @@ enum class MeshInput {
     None,    // full-screen passes: no vertex buffers at all
     Boxes,   // the unit cube, drawn once per BoxInstance
     People,  // a person's body parts, drawn once per NpcInstance
+    Skinned, // a character's skinned vertices, drawn once per skinning::GpuInstance
 };
 
 // Everything that differs between the engine's graphics pipelines. The rest (triangle lists,

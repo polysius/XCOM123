@@ -65,6 +65,7 @@ bool VulkanRenderer::Initialize(EngineContext& engine) {
         materials.Create(context, material::MakeNeutralLibrary());
         targets.Create(context, context.swapchainExtent, ChooseMsaaSamples(context.deviceProperties));
         geometry.Create(context, kFramesInFlight);
+        skinned.Create(context, kFramesInFlight);
         shadowPass.Create(context, scenePipelineLayout);
         scenePass.Create(context, scenePipelineLayout, targets.samples);
         tonemapPass.Create(context, targets);
@@ -93,6 +94,7 @@ void VulkanRenderer::Shutdown() {
     tonemapPass.Destroy(device);
     scenePass.Destroy(device);
     shadowPass.Destroy(device);
+    skinned.Destroy(device);
     geometry.Destroy(device);
     materials.Destroy(device);
     targets.Destroy(device);
@@ -149,7 +151,7 @@ void VulkanRenderer::CreateFrameResources() {
 void VulkanRenderer::CreateSceneLayouts() {
     // Scene and shadow shaders read the per-frame uniforms and the shadow map, and the scene shader the water field
     // and the two arrays of scanned material textures.
-    VkDescriptorSetLayoutBinding bindings[5]{};
+    VkDescriptorSetLayoutBinding bindings[6]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
@@ -169,8 +171,14 @@ void VulkanRenderer::CreateSceneLayouts() {
         bindings[binding].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     }
 
+    // The skinned vertex shader reads the joint matrices of every character of the frame.
+    bindings[SkinnedGeometry::kPaletteBinding].binding = SkinnedGeometry::kPaletteBinding;
+    bindings[SkinnedGeometry::kPaletteBinding].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[SkinnedGeometry::kPaletteBinding].descriptorCount = 1;
+    bindings[SkinnedGeometry::kPaletteBinding].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+
     VkDescriptorSetLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    layoutInfo.bindingCount = 5;
+    layoutInfo.bindingCount = 6;
     layoutInfo.pBindings = bindings;
     VkCheck(vkCreateDescriptorSetLayout(context.device, &layoutInfo, nullptr, &sceneSetLayout),
             "vkCreateDescriptorSetLayout");
@@ -185,7 +193,7 @@ void VulkanRenderer::CreateSceneDescriptors() {
     const VkDescriptorPoolSize poolSizes[] = {
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kFramesInFlight},
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3 * kFramesInFlight},
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kFramesInFlight},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2 * kFramesInFlight},  // the water field and the skinning palettes
     };
     VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     poolInfo.maxSets = kFramesInFlight;
@@ -225,7 +233,21 @@ void VulkanRenderer::CreateSceneDescriptors() {
         writes[2].pBufferInfo = &waterInfo;
         vkUpdateDescriptorSets(context.device, 3, writes, 0, nullptr);
     }
+    for (uint32_t slot = 0; slot < kFramesInFlight; ++slot) {
+        WritePaletteDescriptor(frames[slot], slot);
+    }
     WriteMaterialDescriptors();
+}
+
+void VulkanRenderer::WritePaletteDescriptor(const FrameResources& frame, uint32_t frameSlot) {
+    const VkDescriptorBufferInfo paletteInfo{skinned.PaletteBuffer(frameSlot), 0, VK_WHOLE_SIZE};
+    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    write.dstSet = frame.sceneDescriptors;
+    write.dstBinding = SkinnedGeometry::kPaletteBinding;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    write.pBufferInfo = &paletteInfo;
+    vkUpdateDescriptorSets(context.device, 1, &write, 0, nullptr);
 }
 
 void VulkanRenderer::WriteMaterialDescriptors() {
@@ -291,6 +313,14 @@ void VulkanRenderer::UploadMaterials(const material::MaterialLibrary& library) {
 void VulkanRenderer::ReserveNpcCapacity(size_t npcCount) {
     vkDeviceWaitIdle(context.device);
     geometry.ReserveNpcs(context, npcCount);
+}
+
+CharacterHandle VulkanRenderer::UploadCharacterMesh(const skinning::MeshData& mesh) {
+    return skinned.UploadMesh(context, mesh);
+}
+
+bool VulkanRenderer::SetCharacterLowerDetail(CharacterHandle body, CharacterHandle lowerDetail) {
+    return skinned.SetLowerDetail(body, lowerDetail);
 }
 
 void VulkanRenderer::SetResolutionSettings(const ResolutionSettings& settings) {
@@ -438,6 +468,13 @@ bool VulkanRenderer::DrawFrame(const FrameInput& input, bool captureScreenshot) 
     const glm::mat4 cameraViewProjection = input.projection * input.view;
     const glm::mat4 lightViewProjection = ShadowPass::ComputeLightViewProjection(input);
     WriteFrameUniforms(frame, input, cameraViewProjection, lightViewProjection);
+    // The characters are chosen against the camera's view and the sun's, as the crowd is, and the slot's previous frame is finished.
+    const Frustum cameraFrustum(cameraViewProjection);
+    const Frustum sunFrustum(lightViewProjection);
+    const skinning::FrameView characterView{cameraFrustum, sunFrustum, input.cameraPosition, glm::normalize(input.sunDirection), {}};
+    if (skinned.WriteFrame(context, frameSlot, input.characters, characterView)) {
+        WritePaletteDescriptor(frame, frameSlot);
+    }
     RecordCommands(frameSlot, imageIndex, cameraViewProjection, lightViewProjection, captureScreenshot);
     Submit(frame, imageIndex);
     Present(imageIndex);
@@ -486,11 +523,11 @@ void VulkanRenderer::RecordCommands(uint32_t frameSlot, uint32_t imageIndex, con
                             0, nullptr);
 
     profiler.BeginPass(cmd, frameSlot, kShadowPassIndex);
-    shadowPass.Record(cmd, geometry, frameSlot, lightViewProjection);
+    shadowPass.Record(cmd, geometry, skinned, frameSlot, lightViewProjection);
     profiler.EndPass(cmd, frameSlot, kShadowPassIndex);
 
     profiler.BeginPass(cmd, frameSlot, kScenePassIndex);
-    scenePass.Record(cmd, targets, currentRenderExtent, geometry, frameSlot, cameraViewProjection);
+    scenePass.Record(cmd, targets, currentRenderExtent, geometry, skinned, frameSlot, cameraViewProjection);
     profiler.EndPass(cmd, frameSlot, kScenePassIndex);
 
     const VkImage swapchainImage = context.swapchainImages[imageIndex];

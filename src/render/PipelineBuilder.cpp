@@ -1,9 +1,11 @@
 #include "render/PipelineBuilder.h"
 
 #include <cstddef>
+#include <iterator>
 #include <string>
 
 #include "render/Meshes.h"
+#include "render/SkinningMath.h"
 #include "render/VulkanUtils.h"
 #include "scene/SceneTypes.h"
 
@@ -44,8 +46,34 @@ VkPipeline CreateGraphicsPipeline(VkDevice device, const PipelineDesc& desc) {
         {5, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 32},
         {6, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(BoxInstance, yaw)},  // boxes only
     };
+    // Skinned characters have their own vertex format (with joints and weights) and instance format (a world matrix, the
+    // colour and where the palette starts); the attributes are those of shaders/skinned.vert.
+    const VkVertexInputBindingDescription skinnedBindings[] = {
+        {0, sizeof(skinning::Vertex), VK_VERTEX_INPUT_RATE_VERTEX},
+        {1, sizeof(skinning::GpuInstance), VK_VERTEX_INPUT_RATE_INSTANCE},
+    };
+    const VkVertexInputAttributeDescription skinnedAttributes[] = {
+        {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(skinning::Vertex, position)},
+        {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(skinning::Vertex, normal)},
+        {2, 0, VK_FORMAT_R8G8B8A8_UINT, offsetof(skinning::Vertex, joints)},
+        {3, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(skinning::Vertex, weights)},
+        // A mat4 input takes four consecutive locations, one for each column.
+        {4, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(skinning::GpuInstance, world) + 0},
+        {5, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(skinning::GpuInstance, world) + 16},
+        {6, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(skinning::GpuInstance, world) + 32},
+        {7, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(skinning::GpuInstance, world) + 48},
+        {8, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(skinning::GpuInstance, color)},  // colour, then roughness
+        {9, 1, VK_FORMAT_R32_UINT, offsetof(skinning::GpuInstance, paletteOffset)},
+        {10, 1, VK_FORMAT_R32G32_SFLOAT, offsetof(skinning::GpuInstance, material)},  // material, then seed
+    };
+
     VkPipelineVertexInputStateCreateInfo vertexInput{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
-    if (desc.meshInput != MeshInput::None) {
+    if (desc.meshInput == MeshInput::Skinned) {
+        vertexInput.vertexBindingDescriptionCount = 2;
+        vertexInput.pVertexBindingDescriptions = skinnedBindings;
+        vertexInput.vertexAttributeDescriptionCount = static_cast<uint32_t>(std::size(skinnedAttributes));
+        vertexInput.pVertexAttributeDescriptions = skinnedAttributes;
+    } else if (desc.meshInput != MeshInput::None) {
         vertexInput.vertexBindingDescriptionCount = 2;
         vertexInput.pVertexBindingDescriptions = bindings;
         vertexInput.vertexAttributeDescriptionCount = drawsBoxes ? 7 : 6;

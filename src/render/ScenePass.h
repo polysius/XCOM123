@@ -6,6 +6,7 @@
 #include <volk.h>
 
 class SceneGeometry;
+class SkinnedGeometry;
 class VulkanContext;
 struct RenderTargets;
 
@@ -20,7 +21,8 @@ public:
     void Destroy(VkDevice device);
 
     void Record(VkCommandBuffer cmd, const RenderTargets& targets, VkExtent2D renderExtent,
-                const SceneGeometry& geometry, uint32_t frameSlot, const glm::mat4& cameraViewProjection) const;
+                const SceneGeometry& geometry, const SkinnedGeometry& skinned, uint32_t frameSlot,
+                const glm::mat4& cameraViewProjection) const;
 
 private:
     void TransitionTargetsForDrawing(VkCommandBuffer cmd, const RenderTargets& targets) const;
@@ -29,5 +31,6 @@ private:
     VkPipeline boxPipeline = VK_NULL_HANDLE;
     VkPipeline npcPipeline = VK_NULL_HANDLE;
     VkPipeline bodyPipeline = VK_NULL_HANDLE;
+    VkPipeline skinnedPipeline = VK_NULL_HANDLE;
     VkPipeline skyPipeline = VK_NULL_HANDLE;
 };

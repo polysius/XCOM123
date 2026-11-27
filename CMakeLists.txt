@@ -301,3 +301,14 @@ foreach(animation_target anim_gen animation_tests)
     endif()
 endforeach()
 add_test(NAME animation_tests COMMAND animation_tests)
+
+# skinning_tests checks the CPU side of skinned characters: the blend the vertex shader does, palette layout and offsets, weight
+# normalisation, bounds and culling. It builds the skinning math and the character sources, so it needs no GPU or window.
+add_executable(skinning_tests tests/SkinningTests.cpp src/render/SkinningMath.cpp src/core/JobSystem.cpp ${CHARACTER_SOURCES})
+target_include_directories(skinning_tests PRIVATE src)
+target_link_libraries(skinning_tests PRIVATE glm::glm)
+target_compile_definitions(skinning_tests PRIVATE GLM_FORCE_RADIANS GLM_FORCE_DEPTH_ZERO_TO_ONE)
+if(MSVC)
+    target_compile_options(skinning_tests PRIVATE /W4 /permissive- /MP)
+endif()
+add_test(NAME skinning_tests COMMAND skinning_tests)

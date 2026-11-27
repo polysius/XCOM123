@@ -3,6 +3,7 @@
 #include "render/PipelineBuilder.h"
 #include "render/RenderTargets.h"
 #include "render/SceneGeometry.h"
+#include "render/SkinnedGeometry.h"
 #include "render/VulkanContext.h"
 
 void ScenePass::Create(const VulkanContext& context, VkPipelineLayout sceneLayout, VkSampleCountFlagBits samples) {
@@ -27,6 +28,9 @@ void ScenePass::Create(const VulkanContext& context, VkPipelineLayout sceneLayou
     lit.vertexShader = "npc.vert";
     lit.meshInput = MeshInput::People;
     npcPipeline = CreateGraphicsPipeline(context.device, lit);
+    lit.vertexShader = "skinned.vert";
+    lit.meshInput = MeshInput::Skinned;
+    skinnedPipeline = CreateGraphicsPipeline(context.device, lit);
 
     // The sky is a full-screen triangle at the far plane, drawn only where nothing else was.
     PipelineDesc sky;
@@ -46,7 +50,9 @@ void ScenePass::Destroy(VkDevice device) {
     vkDestroyPipeline(device, boxPipeline, nullptr);
     vkDestroyPipeline(device, npcPipeline, nullptr);
     vkDestroyPipeline(device, bodyPipeline, nullptr);
+    vkDestroyPipeline(device, skinnedPipeline, nullptr);
     vkDestroyPipeline(device, skyPipeline, nullptr);
+    skinnedPipeline = VK_NULL_HANDLE;
     bodyPipeline = VK_NULL_HANDLE;
     boxPipeline = VK_NULL_HANDLE;
     npcPipeline = VK_NULL_HANDLE;
@@ -54,7 +60,8 @@ void ScenePass::Destroy(VkDevice device) {
 }
 
 void ScenePass::Record(VkCommandBuffer cmd, const RenderTargets& targets, VkExtent2D renderExtent,
-                       const SceneGeometry& geometry, uint32_t frameSlot, const glm::mat4& cameraViewProjection) const {
+                       const SceneGeometry& geometry, const SkinnedGeometry& skinned, uint32_t frameSlot,
+                       const glm::mat4& cameraViewProjection) const {
     TransitionTargetsForDrawing(cmd, targets);
 
     const bool useMsaa = targets.UsesMsaa();
@@ -85,6 +92,7 @@ void ScenePass::Record(VkCommandBuffer cmd, const RenderTargets& targets, VkExte
     geometry.DrawBoxes(cmd, boxPipeline);
     geometry.DrawBodies(cmd, bodyPipeline, frameSlot);
     geometry.DrawNpcs(cmd, npcPipeline, frameSlot);
+    skinned.DrawForCamera(cmd, skinnedPipeline, frameSlot);
     // The sky goes last and only fills the pixels no geometry covered.
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, skyPipeline);
     vkCmdDraw(cmd, 3, 1, 0, 0);

@@ -9,6 +9,7 @@
 #include "scene/SceneTypes.h"
 
 class SceneGeometry;
+class SkinnedGeometry;
 class VulkanContext;
 
 // Draws the city and the crowd from the sun into a depth map, which the scene pass samples to
@@ -25,7 +26,7 @@ public:
     // The sun's view-projection for this frame: a square around where the camera is looking.
     static glm::mat4 ComputeLightViewProjection(const FrameInput& input);
 
-    void Record(VkCommandBuffer cmd, const SceneGeometry& geometry, uint32_t frameSlot,
+    void Record(VkCommandBuffer cmd, const SceneGeometry& geometry, const SkinnedGeometry& skinned, uint32_t frameSlot,
                 const glm::mat4& lightViewProjection) const;
 
     VkImageView MapView() const { return shadowMap.view; }
@@ -38,4 +39,5 @@ private:
     VkPipeline boxPipeline = VK_NULL_HANDLE;
     VkPipeline npcPipeline = VK_NULL_HANDLE;
     VkPipeline bodyPipeline = VK_NULL_HANDLE;
+    VkPipeline skinnedPipeline = VK_NULL_HANDLE;
 };
