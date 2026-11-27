@@ -1,0 +1,343 @@
+{
+  "version": 1,
+  "nextId": 20,
+  "variables": [],
+  "nodes": [
+    {
+      "id": 1,
+      "type": "event.key_pressed",
+      "x": 40,
+      "y": 40,
+      "properties": {
+        "Key": {
+          "t": "string",
+          "v": "N"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "characters.set_crowd_size",
+      "x": 320,
+      "y": 40,
+      "inputs": {
+        "1": {
+          "t": "int",
+          "v": 15000
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "debug.print_on_screen",
+      "x": 620,
+      "y": 40,
+      "inputs": {
+        "1": {
+          "t": "string",
+          "v": "A big crowd"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "event.key_pressed",
+      "x": 40,
+      "y": 200,
+      "properties": {
+        "Key": {
+          "t": "string",
+          "v": "M"
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "characters.set_crowd_size",
+      "x": 320,
+      "y": 200,
+      "inputs": {
+        "1": {
+          "t": "int",
+          "v": 2000
+        }
+      }
+    },
+    {
+      "id": 6,
+      "type": "debug.print_on_screen",
+      "x": 620,
+      "y": 200,
+      "inputs": {
+        "1": {
+          "t": "string",
+          "v": "A small crowd"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "type": "event.key_pressed",
+      "x": 40,
+      "y": 360,
+      "properties": {
+        "Key": {
+          "t": "string",
+          "v": "C"
+        }
+      }
+    },
+    {
+      "id": 8,
+      "type": "physics.spawn_crate",
+      "x": 960,
+      "y": 360
+    },
+    {
+      "id": 9,
+      "type": "camera.get_position",
+      "x": 300,
+      "y": 360
+    },
+    {
+      "id": 10,
+      "type": "camera.get_direction",
+      "x": 300,
+      "y": 480
+    },
+    {
+      "id": 11,
+      "type": "vec3.scale",
+      "x": 560,
+      "y": 480,
+      "inputs": {
+        "1": {
+          "t": "float",
+          "v": 6
+        }
+      }
+    },
+    {
+      "id": 12,
+      "type": "vec3.add",
+      "x": 800,
+      "y": 420
+    },
+    {
+      "id": 13,
+      "type": "event.key_pressed",
+      "x": 40,
+      "y": 680,
+      "properties": {
+        "Key": {
+          "t": "string",
+          "v": "B"
+        }
+      }
+    },
+    {
+      "id": 14,
+      "type": "debug.random_seed",
+      "x": 300,
+      "y": 680
+    },
+    {
+      "id": 15,
+      "type": "characters.spawn",
+      "x": 960,
+      "y": 680
+    },
+    {
+      "id": 16,
+      "type": "camera.get_position",
+      "x": 300,
+      "y": 780
+    },
+    {
+      "id": 17,
+      "type": "camera.get_direction",
+      "x": 300,
+      "y": 900
+    },
+    {
+      "id": 18,
+      "type": "vec3.scale",
+      "x": 560,
+      "y": 900,
+      "inputs": {
+        "1": {
+          "t": "float",
+          "v": 6
+        }
+      }
+    },
+    {
+      "id": 19,
+      "type": "vec3.add",
+      "x": 800,
+      "y": 840
+    }
+  ],
+  "connections": [
+    {
+      "from": [
+        1,
+        0
+      ],
+      "to": [
+        2,
+        0
+      ]
+    },
+    {
+      "from": [
+        2,
+        0
+      ],
+      "to": [
+        3,
+        0
+      ]
+    },
+    {
+      "from": [
+        4,
+        0
+      ],
+      "to": [
+        5,
+        0
+      ]
+    },
+    {
+      "from": [
+        5,
+        0
+      ],
+      "to": [
+        6,
+        0
+      ]
+    },
+    {
+      "from": [
+        7,
+        0
+      ],
+      "to": [
+        8,
+        0
+      ]
+    },
+    {
+      "from": [
+        12,
+        0
+      ],
+      "to": [
+        8,
+        1
+      ]
+    },
+    {
+      "from": [
+        10,
+        0
+      ],
+      "to": [
+        11,
+        0
+      ]
+    },
+    {
+      "from": [
+        9,
+        0
+      ],
+      "to": [
+        12,
+        0
+      ]
+    },
+    {
+      "from": [
+        11,
+        0
+      ],
+      "to": [
+        12,
+        1
+      ]
+    },
+    {
+      "from": [
+        13,
+        0
+      ],
+      "to": [
+        14,
+        0
+      ]
+    },
+    {
+      "from": [
+        14,
+        0
+      ],
+      "to": [
+        15,
+        0
+      ]
+    },
+    {
+      "from": [
+        19,
+        0
+      ],
+      "to": [
+        15,
+        1
+      ]
+    },
+    {
+      "from": [
+        14,
+        1
+      ],
+      "to": [
+        15,
+        7
+      ]
+    },
+    {
+      "from": [
+        17,
+        0
+      ],
+      "to": [
+        18,
+        0
+      ]
+    },
+    {
+      "from": [
+        16,
+        0
+      ],
+      "to": [
+        19,
+        0
+      ]
+    },
+    {
+      "from": [
+        18,
+        0
+      ],
+      "to": [
+        19,
+        1
+      ]
+    }
+  ]
+}

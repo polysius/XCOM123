@@ -1,7 +1,9 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <map>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -72,8 +74,10 @@ public:
     // The program around the graph, for nodes that act on it. It is what was given to Interpreter::SetHost.
     void* Host() const;
 
-    // A setting of the node that is not a pin.
+    // A setting of the node that is not a pin, as the node holds it (null when it holds none).
     const Value* Property(const std::string& name) const;
+    // The same setting with the default of the node's kind when the node holds none, see PropertyValue.
+    Value PropertyOrDefault(const std::string& name) const;
 
 private:
     friend class Interpreter;
@@ -104,8 +108,15 @@ public:
     // Sets every variable to its starting value, clears the log and runs every "start" event. Does nothing when the graph
     // has errors.
     void Start();
-    // Runs every "every frame" event.
+    // Runs every "every frame" event, then the timer events whose time has come. A timer runs at most once in a Tick, however
+    // long the frame was: the time it missed is dropped, so that a stall does not set off a burst of runs.
     void Tick(float deltaSeconds);
+
+    // Decides which event nodes of a kind run, for an event that comes from outside the graph, such as a key.
+    using EventFilter = std::function<bool(const Node&)>;
+    // Runs the event nodes of a kind that the filter accepts (all of them when it is empty). Does nothing when the graph has
+    // errors.
+    void FireEvent(const std::string& eventType, const EventFilter& accepts = {});
 
     const std::vector<std::string>& Log() const { return log; }
     // What stopped a run early, such as a loop that does not end; empty while all is well.
@@ -119,7 +130,10 @@ public:
 private:
     friend class NodeContext;
 
-    void RunEvents(const std::string& eventType, float deltaSeconds);
+    void RunEvents(const std::string& eventType, float deltaSeconds, const EventFilter& accepts = {});
+    // Runs one event node with a fresh budget of steps, and the nodes that follow it.
+    void RunEventNode(const Node& node, float deltaSeconds);
+    void RunTimers(float deltaSeconds);
     // Runs the nodes along the wire that leaves an Exec output, one after another, until a node does not go on.
     void Follow(PinRef execOutput);
     // Runs one action or event node. Returns the Exec output to go on from, or -1 if the node does not go on.
@@ -147,6 +161,10 @@ private:
     };
     std::map<uint32_t, PureResult> pureResults;
     uint64_t epoch = 0;
+
+    // For the timer events: the seconds since each one last ran (or since the start), and the one-shot ones that have run.
+    std::map<uint32_t, float> timerElapsed;
+    std::set<uint32_t> timersDone;
 
     std::vector<std::string> log;
     std::vector<uint32_t> executed;

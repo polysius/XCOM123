@@ -312,3 +312,19 @@ if(MSVC)
     target_compile_options(skinning_tests PRIVATE /W4 /permissive- /MP)
 endif()
 add_test(NAME skinning_tests COMMAND skinning_tests)
+
+# ---------------------------------------------------------------------------
+# Engine nodes: what a graph can do to the engine
+# ---------------------------------------------------------------------------
+# graph_engine_tests runs the engine nodes and the example graphs of assets/graphs against a host that records its calls. It
+# builds the graph, and src/graph_engine, and nothing of the engine itself.
+file(GLOB GRAPH_ENGINE_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/graph_engine/*.cpp)
+add_executable(graph_engine_tests tests/GraphEngineTests.cpp ${GRAPH_ENGINE_SOURCES} ${GRAPH_SOURCES})
+target_include_directories(graph_engine_tests PRIVATE src)
+target_link_libraries(graph_engine_tests PRIVATE glm::glm)
+target_compile_definitions(graph_engine_tests PRIVATE GLM_FORCE_RADIANS GLM_FORCE_DEPTH_ZERO_TO_ONE
+    XCOM_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets")
+if(MSVC)
+    target_compile_options(graph_engine_tests PRIVATE /W4 /permissive- /MP)
+endif()
+add_test(NAME graph_engine_tests COMMAND graph_engine_tests)
