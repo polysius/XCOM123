@@ -262,12 +262,22 @@ SkinnedInstance InstanceOf(uint32_t mesh, glm::vec3 position, const std::vector<
     return instance;
 }
 
-// A camera that looks along -Z from the origin, and a sun that sees everything within 100 m of the origin.
-Frustum CameraLookingDownMinusZ() {
-    return Frustum(glm::perspective(glm::radians(60.0f), 1.0f, 0.1f, 100.0f));
-}
-Frustum SeesEverythingNearby() {
-    return Frustum(glm::ortho(-100.0f, 100.0f, -100.0f, 100.0f, -100.0f, 100.0f));
+// A camera that looks along -Z from the origin, and a sun that sees everything within 200 m of the origin and stands over the
+// +X side, so that shadows fall towards -X. The frustums live in the struct, because a FrameView only refers to them.
+struct TestView {
+    Frustum camera{glm::perspective(glm::radians(60.0f), 1.0f, 0.1f, 200.0f)};
+    Frustum sun{glm::ortho(-200.0f, 200.0f, -200.0f, 200.0f, -200.0f, 200.0f)};
+    glm::vec3 towardsSun = glm::normalize(glm::vec3(1.0f, 0.5f, 0.0f));
+    skinning::LodSettings lod;
+
+    skinning::FrameView View() const { return {camera, sun, glm::vec3(0.0f), towardsSun, lod}; }
+};
+
+// Three meshes of one body, chained from full to coarsest, each with 3 joints.
+std::vector<skinning::MeshInfo> ChainOfThree() {
+    std::vector<skinning::MeshInfo> meshes(3, TwoMeshes()[0]);
+    Check(skinning::LinkLowerDetail(meshes, 0, 1) && skinning::LinkLowerDetail(meshes, 1, 2), "the chain links up");
+    return meshes;
 }
 
 void EveryInstanceFindsItsOwnPalette() {
@@ -276,36 +286,46 @@ void EveryInstanceFindsItsOwnPalette() {
     const std::vector<glm::mat4> paletteB = TaggedPalette(5, 2.0f);  // mesh 1 has 5
     const std::vector<glm::mat4> paletteC = TaggedPalette(5, 3.0f);
     // Submitted out of mesh order on purpose: the plan groups them by mesh, and each palette must follow its own instance.
-    // The order drawn is A (mesh 0), then B and C (mesh 1), so the palettes start at matrix 0, 3 and 8: offsets that no
-    // fixed stride between characters would give.
+    // Palettes are packed in the order the characters were submitted, B, A, C, so they start at matrix 0, 5 and 8: offsets that
+    // no fixed stride between characters would give.
     const std::vector<SkinnedInstance> submitted = {InstanceOf(1, {0, 0, -5}, paletteB), InstanceOf(0, {1, 0, -5}, paletteA),
                                                     InstanceOf(1, {2, 0, -5}, paletteC)};
     skinning::FramePlan plan;
-    skinning::PlanFrame(submitted, meshes, CameraLookingDownMinusZ(), SeesEverythingNearby(), plan);
+    const TestView view;
+    skinning::PlanFrame(submitted, meshes, view.View(), plan);
 
-    Check(plan.instances.size() == 3, "three characters are drawn");
-    Check(plan.palettes.size() == 3 + 5 + 5, "the palettes hold 13 matrices in all");
-    Check(plan.ranges.size() == 2, "one range for each mesh");
-    if (plan.instances.size() != 3 || plan.ranges.size() != 2) {
+    Check(plan.palettes.size() == 5 + 3 + 5, "the palettes hold 13 matrices in all, each character's once");
+    Check(plan.cameraRanges.size() == 2, "the scene pass has one range for each mesh");
+    if (plan.cameraRanges.size() != 2 || plan.instances.size() < 3) {
+        Check(false, "the plan has the instances of the scene pass");
         return;
     }
-    Check(plan.ranges[0].mesh == 0 && plan.ranges[0].firstInstance == 0 && plan.ranges[0].totalCount == 1, "mesh 0 has one instance first");
-    Check(plan.ranges[1].mesh == 1 && plan.ranges[1].firstInstance == 1 && plan.ranges[1].totalCount == 2, "mesh 1 has two instances after it");
+    Check(plan.cameraRanges[0].mesh == 0 && plan.cameraRanges[0].firstInstance == 0 && plan.cameraRanges[0].count == 1,
+          "mesh 0 has one instance first");
+    Check(plan.cameraRanges[1].mesh == 1 && plan.cameraRanges[1].firstInstance == 1 && plan.cameraRanges[1].count == 2,
+          "mesh 1 has two instances after it");
 
-    Check(plan.instances[0].paletteOffset == 0 && plan.instances[1].paletteOffset == 3 && plan.instances[2].paletteOffset == 8,
-          "palette offsets count matrices: 0, 3, 8");
+    // The scene pass draws A (mesh 0), then B and C (mesh 1).
+    const std::vector<uint32_t> expectedOffsets = {5, 0, 8};
     const std::vector<float> expectedTags = {1.0f, 2.0f, 3.0f};
+    const std::vector<float> expectedX = {1.0f, 0.0f, 2.0f};
     const std::vector<size_t> jointCounts = {3, 5, 5};
     for (size_t i = 0; i < 3; ++i) {
-        const uint32_t offset = plan.instances[i].paletteOffset;
+        const skinning::GpuInstance& instance = plan.instances[i];
+        Check(instance.paletteOffset == expectedOffsets[i], "palette offset of instance " + std::to_string(i) + " counts matrices");
+        Check(instance.world[3][0] == expectedX[i], "instance " + std::to_string(i) + " keeps its own world matrix");
         for (size_t joint = 0; joint < jointCounts[i]; ++joint) {
-            const glm::mat4& matrix = plan.palettes[offset + joint];
+            const glm::mat4& matrix = plan.palettes[instance.paletteOffset + joint];
             Check(matrix[3][0] == expectedTags[i] && matrix[3][1] == static_cast<float>(joint),
                   "instance " + std::to_string(i) + " joint " + std::to_string(joint) + " reads its own matrix");
         }
     }
-    Check(plan.instances[0].world[3][0] == 1.0f && plan.instances[1].world[3][0] == 0.0f && plan.instances[2].world[3][0] == 2.0f,
-          "each instance keeps its own world matrix");
+    // The shadow pass draws the same characters, and finds the same palettes.
+    Check(plan.sunRanges.size() == 2 && plan.instances.size() == 6, "the shadow pass draws all three as well");
+    if (plan.instances.size() == 6) {
+        Check(plan.instances[3].paletteOffset == 5 && plan.instances[4].paletteOffset == 0 && plan.instances[5].paletteOffset == 8,
+              "the shadow instances share the palettes");
+    }
 }
 
 void InstancesAreDroppedForTheRightReasons() {
@@ -317,34 +337,205 @@ void InstancesAreDroppedForTheRightReasons() {
                                                     InstanceOf(0, {0, 0, -5}, longPalette)};
     skinning::FramePlan plan;
     uint32_t dropped = 0;
-    skinning::PlanFrame(submitted, meshes, CameraLookingDownMinusZ(), SeesEverythingNearby(), plan, &dropped);
-    Check(plan.instances.size() == 1, "only the character with enough matrices is drawn");
+    const TestView view;
+    skinning::PlanFrame(submitted, meshes, view.View(), plan, &dropped);
+    Check(plan.cameraRanges.size() == 1 && plan.cameraRanges[0].count == 1, "only the character with enough matrices is drawn");
     Check(dropped == 1, "the short palette is counted; the unknown handle is not a palette problem");
     Check(plan.palettes.size() == 3, "only as many matrices as the mesh has joints are copied");
 }
 
-void CharactersOutOfViewAreCulledAndOnesSeenOnlyByTheSunStillCastShadows() {
+void CharactersOutOfViewAreOnlyKeptForShadowsThatReachTheView() {
     const std::vector<skinning::MeshInfo> meshes = TwoMeshes();
     const std::vector<glm::mat4> palette = TaggedPalette(3, 0.0f);
-    // The sun here sees only a thin slab around x = 50; the camera looks down -Z from the origin.
-    const Frustum sunSeesOnlyFarRight(glm::ortho(40.0f, 60.0f, -100.0f, 100.0f, -100.0f, 100.0f));
     const std::vector<SkinnedInstance> submitted = {
-        InstanceOf(0, {50, 0, 50}, palette),   // behind the camera, in the sun's view: a shadow caster only
-        InstanceOf(0, {0, 1, -10}, palette),   // in front of the camera: seen by the camera (and not by this sun)
-        InstanceOf(0, {-80, 0, 50}, palette),  // seen by neither
-        InstanceOf(0, {0, 1, -20}, palette),   // in front of the camera
+        InstanceOf(0, {0, 0, -10}, palette),   // in view
+        InstanceOf(0, {9, 0, -10}, palette),   // just out of view to the right, with its shadow falling into view
+        InstanceOf(0, {40, 0, -10}, palette),  // far to the right: its shadow falls short of the view
+        InstanceOf(0, {-80, 0, 50}, palette),  // behind the camera
     };
     skinning::FramePlan plan;
-    skinning::PlanFrame(submitted, meshes, CameraLookingDownMinusZ(), sunSeesOnlyFarRight, plan);
-    Check(plan.instances.size() == 3, "the character seen by nothing is dropped");
-    Check(plan.ranges.size() == 1, "one mesh");
-    if (plan.ranges.size() != 1 || plan.instances.size() != 3) {
-        return;
+    const TestView view;
+    skinning::PlanFrame(submitted, meshes, view.View(), plan);
+    Check(plan.cameraRanges.size() == 1 && plan.cameraRanges[0].count == 1, "one character is seen");
+    Check(plan.sunRanges.size() == 1 && plan.sunRanges[0].count == 2, "two cast shadows into the view");
+    Check(plan.instances.size() == 3, "the character that is seen and casts a shadow is in both lists, the other only in the shadow list");
+    Check(plan.palettes.size() == 6, "two characters have palettes");
+}
+
+void FarCharactersCastNoShadow() {
+    const std::vector<skinning::MeshInfo> meshes = TwoMeshes();
+    const std::vector<glm::mat4> palette = TaggedPalette(3, 0.0f);
+    const std::vector<SkinnedInstance> submitted = {InstanceOf(0, {0, 0, -10}, palette), InstanceOf(0, {0, 0, -30}, palette)};
+    TestView view;
+    view.lod.shadowDistance = 15.0f;
+    skinning::FramePlan plan;
+    skinning::PlanFrame(submitted, meshes, view.View(), plan);
+    Check(plan.cameraRanges.size() == 1 && plan.cameraRanges[0].count == 2, "both are seen");
+    Check(plan.sunRanges.size() == 1 && plan.sunRanges[0].count == 1, "only the near one casts a shadow");
+}
+
+// ---------------------------------------------------------------------------
+// Level of detail
+// ---------------------------------------------------------------------------
+
+void TheLevelFollowsTheDistanceWithHysteresis() {
+    const skinning::LodSettings settings;  // switches at 25 m and 70 m, 10 percent of hysteresis
+    Check(skinning::ChooseLevel(0, 10.0f, settings) == 0, "near: full detail");
+    Check(skinning::ChooseLevel(0, 26.0f, settings) == 0, "just past the switch distance, a full detail mesh stays");
+    Check(skinning::ChooseLevel(0, 28.0f, settings) == 1, "clearly past it, the coarser mesh takes over");
+    Check(skinning::ChooseLevel(1, 24.0f, settings) == 1, "just inside it, a coarser mesh stays");
+    Check(skinning::ChooseLevel(1, 22.0f, settings) == 0, "clearly inside it, the full mesh returns");
+    Check(skinning::ChooseLevel(0, 200.0f, settings) == 2, "far away it jumps straight to the coarsest");
+    Check(skinning::ChooseLevel(2, 30.0f, settings) == 1, "and comes back through the middle level");
+    Check(skinning::ChooseLevel(2, 5.0f, settings) == 0, "or all the way back");
+    Check(skinning::ChooseLevel(9, 5.0f, settings) == 0, "a level that does not exist is brought back in range");
+
+    // Walking back and forth across a switch distance changes the level once each way, not at every step.
+    uint32_t level = 0;
+    int changes = 0;
+    for (const float distance : {24.0f, 26.0f, 24.0f, 27.0f, 25.5f, 28.0f, 26.0f, 24.0f, 23.0f, 22.0f, 24.0f}) {
+        const uint32_t next = skinning::ChooseLevel(level, distance, settings);
+        changes += next != level ? 1 : 0;
+        level = next;
     }
-    Check(plan.ranges[0].cameraCount == 2 && plan.ranges[0].totalCount == 3, "two for the camera, three for the sun");
-    // The camera's instances come first, in the order they were submitted; the shadow caster last.
-    Check(plan.instances[0].world[3][2] == -10.0f && plan.instances[1].world[3][2] == -20.0f && plan.instances[2].world[3][2] == 50.0f,
-          "the instances the camera sees come first");
+    Check(changes == 2, "a wobble around the switch distance changes the level twice, not every time: " + std::to_string(changes));
+}
+
+void MeshesAreChosenByLevelAndShadowsUseACoarserOne() {
+    const std::vector<skinning::MeshInfo> meshes = ChainOfThree();
+    const std::vector<glm::mat4> palette = TaggedPalette(3, 0.0f);
+    const std::vector<SkinnedInstance> submitted = {InstanceOf(0, {0, 0, -10}, palette), InstanceOf(0, {0, 0, -40}, palette),
+                                                    InstanceOf(0, {0, 0, -95}, palette)};
+    skinning::FramePlan plan;
+    const TestView view;
+    skinning::PlanFrame(submitted, meshes, view.View(), plan);
+
+    Check(plan.cameraRanges.size() == 3, "the scene pass draws three different meshes");
+    if (plan.cameraRanges.size() == 3) {
+        Check(plan.cameraRanges[0].mesh == 0 && plan.cameraRanges[1].mesh == 1 && plan.cameraRanges[2].mesh == 2,
+              "near, middle and far characters use the full, the coarser and the coarsest mesh");
+    }
+    // Shadows use one level coarser, and the far one (95 m, past the shadow distance of 90 m) casts none.
+    Check(plan.sunRanges.size() == 2, "the shadow pass draws two meshes");
+    if (plan.sunRanges.size() == 2) {
+        Check(plan.sunRanges[0].mesh == 1 && plan.sunRanges[1].mesh == 2, "shadows come from the coarser and the coarsest mesh");
+    }
+    Check(plan.lodLevels.size() == 3 && plan.lodLevels[0] == 0 && plan.lodLevels[1] == 1 && plan.lodLevels[2] == 2, "levels are remembered");
+
+    // A body with no coarser mesh is drawn with what it has.
+    const std::vector<skinning::MeshInfo> alone = TwoMeshes();
+    skinning::FramePlan alonePlan;
+    skinning::PlanFrame({submitted.data() + 2, 1}, alone, view.View(), alonePlan);
+    Check(alonePlan.cameraRanges.size() == 1 && alonePlan.cameraRanges[0].mesh == 0, "without a coarser mesh the far character keeps its own");
+}
+
+void TheLevelIsRememberedFromFrameToFrame() {
+    const std::vector<skinning::MeshInfo> meshes = ChainOfThree();
+    const std::vector<glm::mat4> palette = TaggedPalette(3, 0.0f);
+    const TestView view;
+    skinning::FramePlan plan;
+    std::vector<uint32_t> usedMesh;
+    for (const float distance : {20.0f, 28.0f, 26.0f, 24.0f, 22.0f}) {
+        const std::vector<SkinnedInstance> submitted = {InstanceOf(0, {0, 0, -distance}, palette)};
+        skinning::PlanFrame(submitted, meshes, view.View(), plan);
+        usedMesh.push_back(plan.cameraRanges.at(0).mesh);
+    }
+    // Out to 28 m the character goes coarse; at 26 and 24 m it stays coarse; only at 22 m does it come back.
+    Check((usedMesh == std::vector<uint32_t>{0, 1, 1, 1, 0}), "the mesh changes at 28 m going out and 22 m coming back");
+}
+
+void LowerDetailLinksFollowTheRules() {
+    std::vector<skinning::MeshInfo> meshes = TwoMeshes();  // 3 and 5 joints
+    meshes.push_back(meshes[0]);                           // mesh 2 has 3 joints like mesh 0
+    Check(!skinning::LinkLowerDetail(meshes, 0, 1), "meshes with palettes of different sizes do not share a skeleton");
+    Check(!skinning::LinkLowerDetail(meshes, 0, 0), "a mesh is not its own coarser version");
+    Check(!skinning::LinkLowerDetail(meshes, 0, 9) && !skinning::LinkLowerDetail(meshes, 9, 0), "unknown meshes are refused");
+    Check(skinning::LinkLowerDetail(meshes, 0, 2), "a mesh of the same skeleton links");
+    Check(!skinning::LinkLowerDetail(meshes, 2, 0), "a link that would close a loop is refused");
+    Check(skinning::MeshAtLevel(meshes, 0, 1) == 2 && skinning::MeshAtLevel(meshes, 0, 5) == 2, "the chain ends at its last mesh");
+    Check(skinning::MeshAtLevel(meshes, 1, 3) == 1, "a mesh with nothing below it is its own last level");
+}
+
+// ---------------------------------------------------------------------------
+// Meshes the shader can read safely
+// ---------------------------------------------------------------------------
+
+skinning::MeshData OneTriangle() {
+    skinning::MeshData mesh;
+    mesh.vertices = {VertexOn({0, 0, 0}, {0, 1, 2, 2}, {0.5f, 0.5f, 0.0f, 0.0f}), VertexOn({1, 0, 0}, {0, 1, 2, 2}, {1.0f, 0.0f, 0.0f, 0.0f}),
+                     VertexOn({0, 1, 0}, {2, 2, 2, 2}, {1.0f, 0.0f, 0.0f, 0.0f})};
+    mesh.indices = {0, 1, 2};
+    mesh.info.jointCount = 3;
+    return mesh;
+}
+
+void OnlyMeshesWhoseEveryJointSlotExistsAreDrawable() {
+    Check(skinning::IsDrawable(OneTriangle()), "a well formed mesh is drawable");
+
+    skinning::MeshData zeroWeightSlotOutOfRange = OneTriangle();
+    zeroWeightSlotOutOfRange.vertices[1].joints[3] = 3;  // the shader reads this slot even though its weight is 0
+    Check(!skinning::IsDrawable(zeroWeightSlotOutOfRange), "a slot with no weight must still name a joint of the palette");
+
+    skinning::MeshData weightedSlotOutOfRange = OneTriangle();
+    weightedSlotOutOfRange.vertices[0].joints[0] = 200;
+    Check(!skinning::IsDrawable(weightedSlotOutOfRange), "a joint beyond the palette is refused");
+
+    skinning::MeshData badIndex = OneTriangle();
+    badIndex.indices[2] = 3;
+    Check(!skinning::IsDrawable(badIndex), "a triangle that names a vertex that does not exist is refused");
+
+    skinning::MeshData partialTriangle = OneTriangle();
+    partialTriangle.indices.push_back(0);
+    Check(!skinning::IsDrawable(partialTriangle), "indices that are not whole triangles are refused");
+
+    skinning::MeshData tooManyJoints = OneTriangle();
+    tooManyJoints.info.jointCount = 257;
+    Check(!skinning::IsDrawable(tooManyJoints), "a palette that a joint byte cannot address is refused");
+
+    skinning::MeshData noJoints = OneTriangle();
+    noJoints.info.jointCount = 0;
+    Check(!skinning::IsDrawable(noJoints) && !skinning::IsDrawable(skinning::MeshData{}), "a mesh with no joints or no triangles is refused");
+}
+
+CharacterMesh TriangleOfCharacter() {
+    CharacterMesh body;
+    body.skeleton = BuildSkeleton(CharacterParameters{});
+    body.positions = {{0, 0, 0}, {1, 0, 0}, {0, 5, 0}};  // the last is far from every joint
+    body.normals.assign(3, glm::vec3(0, 0, 1));
+    body.indices = {0, 1, 2};
+    return body;
+}
+
+void SlotsWithNoWeightAreMadeToNameARealJoint() {
+    CharacterMesh body = TriangleOfCharacter();
+    body.boneIndices = {{2, 250, 250, 250}, {3, 250, 7, 250}, {4, 0, 0, 0}};
+    body.boneWeights = {std::array<float, 4>{1.0f, 0.0f, 0.0f, 0.0f}, std::array<float, 4>{0.5f, 0.0f, 0.5f, 0.0f},
+                        std::array<float, 4>{1.0f, 0.0f, 0.0f, 0.0f}};
+    const skinning::MeshData data = skinning::BuildMeshData(body);
+    Check(skinning::IsDrawable(data), "unused slots that named a joint that does not exist are pointed at joint 0");
+    Check(data.vertices[0].joints[1] == 0 && data.vertices[1].joints[1] == 0 && data.vertices[1].joints[3] == 0, "they name joint 0");
+    Check(data.vertices[0].joints[0] == 2 && data.vertices[1].joints[0] == 3 && data.vertices[1].joints[2] == 7, "weighted slots keep their joints");
+
+    body.boneIndices[2] = {250, 0, 0, 0};  // a weighted slot cannot be repaired
+    Check(!skinning::IsDrawable(skinning::BuildMeshData(body)), "a weighted joint that does not exist makes the mesh undrawable");
+}
+
+void AVertexWithNoWeightAtAllIsInsideTheBounds() {
+    CharacterMesh body = TriangleOfCharacter();
+    body.boneIndices = {{1, 0, 0, 0}, {1, 0, 0, 0}, {3, 0, 0, 0}};
+    body.boneWeights = {std::array<float, 4>{1.0f, 0.0f, 0.0f, 0.0f}, std::array<float, 4>{1.0f, 0.0f, 0.0f, 0.0f},
+                        std::array<float, 4>{0.0f, 0.0f, 0.0f, 0.0f}};  // no weight: the vertex follows joint 3, its first
+    const skinning::MeshData data = skinning::BuildMeshData(body);
+    Check(data.vertices[2].weights[0] == 1.0f && data.vertices[2].joints[0] == 3, "the vertex follows its first joint");
+    const float distance = glm::length(body.positions[2] - body.skeleton.joints[3].restPosition);
+    Check(data.info.bounds.radii[3] >= distance, "the sphere of that joint reaches the vertex");
+    for (uint32_t seed = 0; seed <= 4; ++seed) {
+        const std::vector<glm::mat4> palette = PaletteOf(body.skeleton, seed == 0 ? Pose{} : RandomPose(seed));
+        const skinning::Box box = skinning::AnimatedBounds(data.info.bounds, palette);
+        const glm::vec3 posed = skinning::SkinPosition(data.vertices[2], palette);
+        Check(glm::all(glm::greaterThanEqual(posed, box.min - 1e-4f)) && glm::all(glm::lessThanEqual(posed, box.max + 1e-4f)),
+              "pose " + std::to_string(seed) + ": the vertex with no weight is inside the bounds");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -414,6 +605,26 @@ void TheWorldSphereFollowsTheWorldMatrix() {
     Check(std::abs(placed.radius - 2.0f * std::sqrt(3.0f)) < 1e-4f, "the radius follows the scale of the world matrix");
 }
 
+void TheWorldSphereHoldsACharacterStretchedAlongOneAxis() {
+    const skinning::Box box{{-1.0f, 0.0f, -1.0f}, {1.0f, 2.0f, 1.0f}};
+    // Stretched along Y only, whichever way it is then turned: the first column of the matrix has length 1, but the box is 3 times taller.
+    for (const float turnDegrees : {0.0f, 90.0f, 37.0f}) {
+        glm::mat4 world = Translation({3.0f, 1.0f, -2.0f});
+        world = glm::rotate(world, glm::radians(turnDegrees), glm::vec3(0.0f, 0.0f, 1.0f));
+        world = glm::scale(world, glm::vec3(1.0f, 3.0f, 1.0f));
+        const skinning::Sphere sphere = skinning::WorldSphere(box, world);
+        float worstOutside = 0.0f;
+        for (int corner = 0; corner < 8; ++corner) {
+            const glm::vec3 local((corner & 1) ? box.max.x : box.min.x, (corner & 2) ? box.max.y : box.min.y,
+                                  (corner & 4) ? box.max.z : box.min.z);
+            const glm::vec3 inWorld = glm::vec3(world * glm::vec4(local, 1.0f));
+            worstOutside = std::max(worstOutside, glm::length(inWorld - sphere.center) - sphere.radius);
+        }
+        Check(worstOutside <= 1e-4f, "turned " + std::to_string(turnDegrees) + " degrees, a corner lies " + std::to_string(worstOutside) +
+                                         " m outside the sphere");
+    }
+}
+
 }  // namespace
 
 // With a word on the command line, only the tests whose names contain it run, which is quick when one test is being worked on.
@@ -433,12 +644,20 @@ int main(int argc, char** argv) {
         {"TheLayoutsMatchTheShader", TheLayoutsMatchTheShader},
         {"EveryInstanceFindsItsOwnPalette", EveryInstanceFindsItsOwnPalette},
         {"InstancesAreDroppedForTheRightReasons", InstancesAreDroppedForTheRightReasons},
-        {"CharactersOutOfViewAreCulledAndOnesSeenOnlyByTheSunStillCastShadows",
-         CharactersOutOfViewAreCulledAndOnesSeenOnlyByTheSunStillCastShadows},
+        {"CharactersOutOfViewAreOnlyKeptForShadowsThatReachTheView", CharactersOutOfViewAreOnlyKeptForShadowsThatReachTheView},
+        {"FarCharactersCastNoShadow", FarCharactersCastNoShadow},
+        {"TheLevelFollowsTheDistanceWithHysteresis", TheLevelFollowsTheDistanceWithHysteresis},
+        {"MeshesAreChosenByLevelAndShadowsUseACoarserOne", MeshesAreChosenByLevelAndShadowsUseACoarserOne},
+        {"TheLevelIsRememberedFromFrameToFrame", TheLevelIsRememberedFromFrameToFrame},
+        {"LowerDetailLinksFollowTheRules", LowerDetailLinksFollowTheRules},
+        {"OnlyMeshesWhoseEveryJointSlotExistsAreDrawable", OnlyMeshesWhoseEveryJointSlotExistsAreDrawable},
+        {"SlotsWithNoWeightAreMadeToNameARealJoint", SlotsWithNoWeightAreMadeToNameARealJoint},
+        {"AVertexWithNoWeightAtAllIsInsideTheBounds", AVertexWithNoWeightAtAllIsInsideTheBounds},
         {"TheAnimatedBoundsHoldTheWholeSkinnedBody", TheAnimatedBoundsHoldTheWholeSkinnedBody},
         {"EveryJointSphereReachesAllTheVerticesItPullsOn", EveryJointSphereReachesAllTheVerticesItPullsOn},
         {"TheBoundsAreTightEnoughToCullWith", TheBoundsAreTightEnoughToCullWith},
         {"TheWorldSphereFollowsTheWorldMatrix", TheWorldSphereFollowsTheWorldMatrix},
+        {"TheWorldSphereHoldsACharacterStretchedAlongOneAxis", TheWorldSphereHoldsACharacterStretchedAlongOneAxis},
     };
     for (const Test& test : tests) {
         if (!filter.empty() && std::string(test.name).find(filter) == std::string::npos) {

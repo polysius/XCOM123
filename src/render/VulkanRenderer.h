@@ -46,6 +46,7 @@ public:
     void UploadMaterials(const material::MaterialLibrary& library) override;
     void ReserveNpcCapacity(size_t npcCount) override;
     CharacterHandle UploadCharacterMesh(const skinning::MeshData& mesh) override;
+    bool SetCharacterLowerDetail(CharacterHandle body, CharacterHandle lowerDetail) override;
     void Render(const FrameInput& frame) override;
     bool RenderAndCapture(const FrameInput& frame, const std::string& pngPath) override;
     RenderStats GetStats() const override;

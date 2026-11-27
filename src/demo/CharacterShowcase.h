@@ -58,6 +58,7 @@ private:
     std::vector<Placement> placements;
     PoseProvider poseProvider = IdleSwayPose;
     std::vector<glm::mat4> palettes;      // joint matrices of every character, one palette after the other
+    std::vector<size_t> paletteStart;     // where each character's palette begins in `palettes`
     std::vector<SkinnedInstance> instances;
     std::optional<CameraPlacement> viewPoint;
 };

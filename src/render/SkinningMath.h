@@ -24,6 +24,10 @@ struct CharacterMesh;
 // rest pose to its place in the pose, in the character's own space (feet on y = 0, facing +Z). The instance's world matrix
 // then places that space in the world. All the palettes of a frame are packed one after the other into one buffer, and an
 // instance finds its own by an offset counted in matrices.
+//
+// Level of detail. A body may have lower-detail meshes of the same skeleton, linked as a chain (full, coarser, coarsest). Which
+// level a character is drawn at follows its distance to the camera, and the shadow pass draws one level coarser than the camera
+// does, and nothing at all for characters whose shadow cannot reach the view.
 namespace skinning {
 
 // One vertex as the GPU reads it: where it is in the rest pose, which way it faces, and up to four joints that pull on it.
@@ -47,6 +51,7 @@ struct JointBounds {
 struct MeshInfo {
     JointBounds bounds;
     uint32_t jointCount = 0;  // the number of matrices in a palette of this mesh
+    uint32_t lowerDetail = CharacterHandle::kInvalid;  // index of the next coarser mesh of the same body, if there is one
 };
 
 // A character mesh as it is handed to the renderer.
@@ -57,8 +62,17 @@ struct MeshData {
 };
 
 // Turns a generated character into renderer data. The weights of each vertex are made to add up to 1 here, so that a
-// vertex never ends up scaled by the shader.
+// vertex never ends up scaled by the shader, and a slot with no weight is pointed at joint 0 so that it names a joint that exists.
 MeshData BuildMeshData(const character::CharacterMesh& character);
+
+// Whether a mesh can be drawn safely: it has triangles, every index names a vertex, the palette is not larger than a joint
+// byte can name, and every joint slot of every vertex, including the ones with no weight (the shader reads all four), names a
+// joint of the palette.
+bool IsDrawable(const MeshData& mesh);
+
+// Makes `lower` the next coarser mesh of `body`. Refused (false) when either is not a mesh, when they are the same mesh, when
+// their palettes differ in size (they would not share a skeleton), or when it would close a loop in the chain.
+bool LinkLowerDetail(std::span<MeshInfo> meshes, uint32_t body, uint32_t lower);
 
 // The vertex shader's blend, on the CPU: the weighted sum of the joint matrices, applied to the position.
 glm::vec3 SkinPosition(const Vertex& vertex, std::span<const glm::mat4> palette);
@@ -74,13 +88,35 @@ struct Box {
 // A box around the posed character, in the character's own space.
 Box AnimatedBounds(const JointBounds& bounds, std::span<const glm::mat4> palette);
 
-// A sphere in the world around the posed character: the box above, moved by the world matrix. The world matrix may scale
-// but not shear, which is all a character is placed with.
+// A sphere in the world around the posed character: the box above, moved by the world matrix. The radius follows the largest
+// scale of the matrix, so a character stretched along one axis is still held. The world matrix may not shear.
 struct Sphere {
     glm::vec3 center{0.0f};
     float radius = 0.0f;
 };
 Sphere WorldSphere(const Box& box, const glm::mat4& world);
+
+// How level of detail is chosen.
+struct LodSettings {
+    // Distances in metres from the camera at which a character goes to the next coarser level.
+    std::array<float, 2> switchDistances{25.0f, 70.0f};
+    // A character goes back to a finer level only once it is this fraction closer than the distance it went coarse at, so that
+    // one standing on the edge does not flicker between two meshes.
+    float hysteresis = 0.1f;
+    // Characters farther than this from the camera cast no shadow at all.
+    float shadowDistance = 90.0f;
+};
+
+// The level for a character at `distance` that was drawn at level `previous` the frame before.
+uint32_t ChooseLevel(uint32_t previous, float distance, const LodSettings& settings);
+
+// The mesh `level` steps down the chain from `mesh`, or the end of the chain if it is shorter than that.
+uint32_t MeshAtLevel(std::span<const MeshInfo> meshes, uint32_t mesh, uint32_t level);
+
+// Whether the shadow of a character could fall within the camera's view. The shadow runs from the character along the direction
+// away from the sun until it reaches the height of the character's feet; everything it can touch lies within a sphere around
+// the middle of that run, and the shadow of a very low sun is cut off at 60 m.
+bool ShadowCanTouchView(const Sphere& body, float feetHeight, const glm::vec3& towardsSun, const Frustum& camera);
 
 // What the shaders read for each instance. Matches the instance inputs of shaders/skinned.vert.
 struct GpuInstance {
@@ -94,33 +130,56 @@ struct GpuInstance {
 };
 static_assert(sizeof(GpuInstance) == 96, "skinning::GpuInstance must match the instance layout of the skinned pipelines");
 
-// The instances of one mesh in a frame. They are stored in one list for all meshes: first the ones the camera can see, then the
-// ones only the sun can see, so the scene pass draws the first `cameraCount` and the shadow pass all `totalCount`.
+// A run of instances in the plan that are drawn with one mesh.
 struct MeshRange {
     uint32_t mesh = 0;
     uint32_t firstInstance = 0;
-    uint32_t cameraCount = 0;
-    uint32_t totalCount = 0;
+    uint32_t count = 0;
 };
+
+// Where a drawn character stands in the lists, before they are laid out. Kept in the plan so that it allocates only once.
+struct Pick {
+    uint32_t submittedIndex = 0;
+    uint32_t paletteOffset = 0;
+    uint32_t cameraMesh = 0;  // the mesh the scene pass draws, or kNoMesh
+    uint32_t sunMesh = 0;     // the mesh the shadow pass draws, or kNoMesh
+};
+constexpr uint32_t kNoMesh = 0xFFFFFFFFu;
 
 // Everything the GPU needs for the characters of one frame.
 struct FramePlan {
-    std::vector<GpuInstance> instances;
-    std::vector<glm::mat4> palettes;  // every drawn instance's palette, one after the other
-    std::vector<MeshRange> ranges;    // in the order of the meshes; only meshes with something to draw
+    std::vector<GpuInstance> instances;  // the instances of the scene pass, then those of the shadow pass
+    std::vector<glm::mat4> palettes;     // every drawn character's palette once, whichever passes draw it
+    std::vector<MeshRange> cameraRanges; // what the scene pass draws, one range for each mesh
+    std::vector<MeshRange> sunRanges;    // what the shadow pass draws
+    std::vector<Pick> picks;
+    // The level each submitted character was drawn at last frame, by position in the submitted list. It is what makes the
+    // choice of level steady, so callers should submit characters in the same order from one frame to the next.
+    std::vector<uint8_t> lodLevels;
 
     void Clear() {
         instances.clear();
         palettes.clear();
-        ranges.clear();
+        cameraRanges.clear();
+        sunRanges.clear();
+        picks.clear();
     }
 };
 
-// Decides which of the submitted characters to draw, and lays out their instances and palettes. A character is dropped when
-// neither the camera nor the sun can see it, or when it is not something that can be drawn: a handle that names no mesh, or a
-// palette that does not have a matrix for every joint of its mesh (reading past the palette would pull on other characters'
-// joints). `dropped`, when given, counts the ones dropped for that second reason.
-void PlanFrame(std::span<const SkinnedInstance> submitted, std::span<const MeshInfo> meshes, const Frustum& camera,
-               const Frustum& sun, FramePlan& plan, uint32_t* dropped = nullptr);
+// What PlanFrame needs to know about the view.
+struct FrameView {
+    const Frustum& camera;
+    const Frustum& sun;
+    glm::vec3 cameraPosition{0.0f};
+    glm::vec3 towardsSun{0.0f, 1.0f, 0.0f};  // unit vector
+    LodSettings lod;
+};
+
+// Decides which of the submitted characters to draw, with which mesh in which pass, and lays out their instances and palettes.
+// A character is dropped when neither the camera nor its shadow can be seen, or when it is not something that can be drawn: a
+// handle that names no mesh, or a palette that does not have a matrix for every joint of its mesh (reading past the palette
+// would pull on other characters' joints). `dropped`, when given, counts the ones dropped for that second reason.
+void PlanFrame(std::span<const SkinnedInstance> submitted, std::span<const MeshInfo> meshes, const FrameView& view, FramePlan& plan,
+               uint32_t* dropped = nullptr);
 
 }  // namespace skinning

@@ -20,6 +20,8 @@ namespace {
 constexpr uint32_t kDistinctBodies = 4;
 constexpr float kSpacingMeters = 1.7f;
 constexpr float kEyeHeightMeters = 1.6f;
+// Grid sizes of the coarser meshes of each body, for the middle and the far distance (the full mesh uses 0.024).
+constexpr float kCoarserVoxelMeters[] = {0.05f, 0.10f};
 
 // Skin tones from light to dark. The character shader takes one colour for the whole body, so this is the colour of everything.
 const glm::vec3 kTints[] = {{0.80f, 0.60f, 0.46f}, {0.62f, 0.44f, 0.33f}, {0.45f, 0.30f, 0.22f}, {0.72f, 0.52f, 0.40f}};
@@ -89,6 +91,24 @@ CameraPlacement ViewOfGrid(glm::vec3 gridCentre, float gridWidth, float gridDept
     return view;
 }
 
+// Makes the same person twice more from coarser grids, without the fine head and hands (which hold most of the triangles), and
+// chains them below the full mesh. The skeleton depends on the parameters alone, so all three share it.
+void UploadCoarserVersions(IRenderModule& renderer, const character::CharacterParameters& parameters, CharacterHandle full) {
+    CharacterHandle finer = full;
+    for (const float voxelMeters : kCoarserVoxelMeters) {
+        character::MeshSettings settings;
+        settings.voxelMeters = voxelMeters;
+        settings.faceAndHands = false;
+        const character::CharacterMesh mesh = character::GenerateCharacter(parameters, settings, &JobSystem::Shared());
+        const CharacterHandle coarser = renderer.UploadCharacterMesh(skinning::BuildMeshData(mesh));
+        if (!coarser.IsValid() || !renderer.SetCharacterLowerDetail(finer, coarser)) {
+            std::cerr << "A coarser version of a character was not accepted; it is drawn at full detail from afar\n";
+            return;
+        }
+        finer = coarser;
+    }
+}
+
 }  // namespace
 
 character::Pose IdleSwayPose(const character::Skeleton& skeleton, float seconds, uint32_t characterIndex) {
@@ -127,8 +147,8 @@ void CharacterShowcase::Spawn(IRenderModule& renderer, const CityLayout& city, u
 
     const uint32_t distinct = std::min(count, kDistinctBodies);
     for (uint32_t i = 0; i < distinct; ++i) {
-        const character::CharacterMesh mesh =
-            character::GenerateCharacter(character::RandomParameters(seed * 131u + i), {}, &JobSystem::Shared());
+        const character::CharacterParameters parameters = character::RandomParameters(seed * 131u + i);
+        const character::CharacterMesh mesh = character::GenerateCharacter(parameters, {}, &JobSystem::Shared());
         Body body;
         body.skeleton = mesh.skeleton;
         const skinning::MeshData data = skinning::BuildMeshData(mesh);
@@ -138,6 +158,7 @@ void CharacterShowcase::Spawn(IRenderModule& renderer, const CityLayout& city, u
             std::cerr << "The renderer did not accept character body " << i << "\n";
             continue;
         }
+        UploadCoarserVersions(renderer, parameters, body.handle);
         bodies.push_back(body);
     }
     if (bodies.empty()) {
@@ -175,8 +196,7 @@ void CharacterShowcase::Update(float worldSeconds, FrameInput& frame) {
     }
     // The palettes are written first, all of them, because the instances point into the list and it must not move afterwards.
     palettes.clear();
-    std::vector<size_t> paletteStart;
-    paletteStart.reserve(placements.size());
+    paletteStart.clear();
     for (uint32_t i = 0; i < placements.size(); ++i) {
         const Body& body = bodies[placements[i].body];
         const character::Pose pose = poseProvider(body.skeleton, worldSeconds, i);

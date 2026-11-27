@@ -319,6 +319,10 @@ CharacterHandle VulkanRenderer::UploadCharacterMesh(const skinning::MeshData& me
     return skinned.UploadMesh(context, mesh);
 }
 
+bool VulkanRenderer::SetCharacterLowerDetail(CharacterHandle body, CharacterHandle lowerDetail) {
+    return skinned.SetLowerDetail(body, lowerDetail);
+}
+
 void VulkanRenderer::SetResolutionSettings(const ResolutionSettings& settings) {
     dynamicResolution.Configure(settings);
 }
@@ -465,7 +469,10 @@ bool VulkanRenderer::DrawFrame(const FrameInput& input, bool captureScreenshot) 
     const glm::mat4 lightViewProjection = ShadowPass::ComputeLightViewProjection(input);
     WriteFrameUniforms(frame, input, cameraViewProjection, lightViewProjection);
     // The characters are chosen against the camera's view and the sun's, as the crowd is, and the slot's previous frame is finished.
-    if (skinned.WriteFrame(context, frameSlot, input.characters, Frustum(cameraViewProjection), Frustum(lightViewProjection))) {
+    const Frustum cameraFrustum(cameraViewProjection);
+    const Frustum sunFrustum(lightViewProjection);
+    const skinning::FrameView characterView{cameraFrustum, sunFrustum, input.cameraPosition, glm::normalize(input.sunDirection), {}};
+    if (skinned.WriteFrame(context, frameSlot, input.characters, characterView)) {
         WritePaletteDescriptor(frame, frameSlot);
     }
     RecordCommands(frameSlot, imageIndex, cameraViewProjection, lightViewProjection, captureScreenshot);

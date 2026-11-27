@@ -34,7 +34,11 @@ public:
     // palette buffer is a new one, so that the slot's descriptor must be written again. The GPU must have finished the slot's
     // previous frame.
     bool WriteFrame(const VulkanContext& context, uint32_t frameSlot, std::span<const SkinnedInstance> characters,
-                    const Frustum& camera, const Frustum& sun);
+                    const skinning::FrameView& view);
+
+    // Makes `lowerDetail` the mesh that `body` is drawn with when it is far away (and, one level down again, in shadows).
+    // False when the pair cannot be linked (see skinning::LinkLowerDetail).
+    bool SetLowerDetail(CharacterHandle body, CharacterHandle lowerDetail);
 
     VkBuffer PaletteBuffer(uint32_t frameSlot) const { return slots[frameSlot].palettes.buffer; }
 
@@ -55,11 +59,12 @@ private:
         GpuBuffer palettes;
         size_t instanceCapacity = 0;
         size_t paletteCapacity = 0;  // in matrices
-        std::vector<skinning::MeshRange> ranges;  // what is drawn from this slot's buffers
+        std::vector<skinning::MeshRange> cameraRanges;  // what the scene pass draws from this slot's buffers
+        std::vector<skinning::MeshRange> sunRanges;     // what the shadow pass draws
     };
 
-    // Grows a buffer to hold at least `count` elements of `elementBytes`, keeping nothing of the old contents.
-    // Returns true when a new buffer was made.
+    // Grows a buffer to hold at least `count` elements of `elementBytes`, keeping nothing of the old contents. The new buffer is
+    // made before the old one is destroyed, so a failure leaves the old one in place. Returns true when a new buffer was made.
     static bool Grow(const VulkanContext& context, GpuBuffer& buffer, size_t& capacity, size_t count, size_t elementBytes,
                      VkBufferUsageFlags usage);
     void Draw(VkCommandBuffer cmd, VkPipeline pipeline, uint32_t frameSlot, bool forSun) const;
