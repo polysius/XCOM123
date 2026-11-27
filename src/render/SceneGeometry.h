@@ -7,6 +7,7 @@
 
 #include <volk.h>
 
+#include "render/ChunkArena.h"
 #include "render/Meshes.h"
 #include "render/VulkanUtils.h"
 #include "scene/SceneTypes.h"
@@ -37,7 +38,20 @@ public:
     void WriteBodies(const VulkanContext& context, uint32_t frameSlot, std::span<const BodyInstance> boxes,
                      std::span<const BodyInstance> spheres);
 
+    // The streamed world: chunks of boxes that come and go while frames are drawn. The first chunk makes the arena. None of
+    // these wait for the GPU; see ChunkArena for how uploads and removals are kept safe.
+    ChunkArena::ChunkId AddChunk(const VulkanContext& context, std::shared_ptr<const void> owner,
+                                 std::span<const BoxInstance> boxes, const Aabb& bounds);
+    void RemoveChunk(ChunkArena::ChunkId chunk, uint64_t frameNumber);
+    // Start of a frame, after the slot's fence: retires freed ranges and stages the pending uploads.
+    void BeginChunkFrame(uint32_t frameSlot, int64_t completedFrame);
+    void RecordChunkUploads(VkCommandBuffer cmd, uint32_t frameSlot);
+    void CullChunks(const Frustum& camera, const Frustum& sun);
+    ChunkArenaStats ChunkStats() const;
+
     void DrawBoxes(VkCommandBuffer cmd, VkPipeline pipeline) const;
+    // Draws the streamed chunks that CullChunks chose for the camera, or for the sun when `forSun`.
+    void DrawChunks(VkCommandBuffer cmd, VkPipeline pipeline, bool forSun) const;
     void DrawNpcs(VkCommandBuffer cmd, VkPipeline pipeline, uint32_t frameSlot) const;
     // Draws the props of the slot: the boxes, then the spheres, with the body pipeline.
     void DrawBodies(VkCommandBuffer cmd, VkPipeline pipeline, uint32_t frameSlot) const;
@@ -70,6 +84,9 @@ private:
     static void DestroyMesh(VkDevice device, Mesh& mesh);
     static void GrowNpcSlot(const VulkanContext& context, NpcSlot& slot, size_t npcCount);
 
+    uint32_t frameSlotCount = 0;
+    ChunkArena chunkArena;
+    bool chunkArenaCreated = false;
     Mesh cubeMesh;
     Mesh personMesh;
     Mesh sphereMesh;

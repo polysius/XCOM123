@@ -131,6 +131,7 @@ void ShadowPass::Record(VkCommandBuffer cmd, const SceneGeometry& geometry, cons
     BeginRendering(cmd, {kMapSize, kMapSize}, nullptr, &depthAttachment);
     vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &lightViewProjection);
     geometry.DrawBoxes(cmd, boxPipeline);
+    geometry.DrawChunks(cmd, boxPipeline, true);
     geometry.DrawBodies(cmd, bodyPipeline, frameSlot);
     geometry.DrawNpcs(cmd, npcPipeline, frameSlot);
     skinned.DrawForSun(cmd, skinnedPipeline, frameSlot);

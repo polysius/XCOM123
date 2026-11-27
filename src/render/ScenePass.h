@@ -17,7 +17,9 @@ struct RenderTargets;
 class ScenePass {
 public:
     // `sceneLayout` is the pipeline layout shared with the shadow pass.
-    void Create(const VulkanContext& context, VkPipelineLayout sceneLayout, VkSampleCountFlagBits samples);
+    // `litFragmentShader` names the lit surface shader: "lit.frag", or "lit_stream.frag" for the streamed world.
+    void Create(const VulkanContext& context, VkPipelineLayout sceneLayout, VkSampleCountFlagBits samples,
+                const char* litFragmentShader = "lit.frag");
     void Destroy(VkDevice device);
 
     void Record(VkCommandBuffer cmd, const RenderTargets& targets, VkExtent2D renderExtent,

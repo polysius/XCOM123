@@ -21,6 +21,7 @@ struct Options {
     std::optional<int> satelliteCount;  // satellite districts around the city; unset keeps the generator's default
     bool terraces = true;               // whether satellite districts may stand on terraces
     uint32_t propCount = 0;             // crates, barrels and balls dropped into the largest square
+    bool charactersGiven = false;       // whether --characters was on the command line; the streamed world has characters of its own by default
     uint32_t characterCount = 0;        // skinned, posed characters standing in the largest square; none unless --characters is given
     bool riverSimulation = false;       // simulate the water of the river near the props, or near the centre
     uint32_t rainPerSecond = 40;        // raindrops per second on the simulated river
@@ -34,6 +35,16 @@ struct Options {
     // Benchmark: fly the scripted camera path for this many frames, report, then quit.
     int benchmarkFrames = 0;
     std::optional<double> targetFps;  // the benchmark fails when p99 frame time misses this rate
+
+    // The streamed world: an endless city made of chunks that are generated, uploaded and released around the camera, instead
+    // of the fixed city. Everything else (people, characters, props) follows the camera through it.
+    bool stream = false;
+    float streamLoadRadius = 760.0f;  // metres around the camera that are kept loaded
+    // Streaming benchmark: fly a long path through the streamed world for this many frames, report frame times and what
+    // streaming did, then quit. Implies --stream. It fails when p99 misses --target-fps or any frame exceeds the hitch limit.
+    int streamBenchmarkFrames = 0;
+    float streamSpeedScale = 1.0f;  // multiplies the speeds of the streaming benchmark's flight
+    float hitchLimitMs = 33.0f;
 
     // Screenshot: render this many frames, save the last one as a PNG, then quit.
     std::string screenshotPath;
@@ -55,6 +66,7 @@ struct Options {
     std::vector<std::string> editorPanels;  // windows of the editor to open at the start (character, material, shortcuts); implies editor
 
     bool IsBenchmark() const { return benchmarkFrames > 0; }
+    bool IsStreamBenchmark() const { return streamBenchmarkFrames > 0; }
     bool IsScreenshot() const { return !screenshotPath.empty(); }
 };
 

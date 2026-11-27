@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <string>
 #include <string_view>
@@ -10,6 +11,7 @@
 #include "material/MaterialLibrary.h"
 #include "render/IFrameOverlay.h"
 #include "render/SkinningMath.h"
+#include "scene/Aabb.h"
 #include "scene/SceneTypes.h"
 
 // GPU time spent in one render pass.
@@ -17,6 +19,27 @@ struct GpuPassTiming {
     std::string_view name;
     double latestMs = 0.0;    // the most recent measured frame
     double smoothedMs = 0.0;  // averaged over roughly the last ten frames
+};
+
+// A chunk of the streamed world that was handed to the renderer (see IRenderModule::AddStreamedChunk).
+struct StreamedChunkHandle {
+    static constexpr uint32_t kInvalid = 0xFFFFFFFFu;
+    uint32_t index = kInvalid;
+
+    bool IsValid() const { return index != kInvalid; }
+};
+
+// What the streamed world costs the renderer: how many chunks are in the arena and drawn, and what was copied to the GPU.
+struct StreamedGeometryStats {
+    uint32_t chunksResident = 0;        // uploaded and drawable
+    uint32_t chunksPending = 0;         // added, waiting for their copy
+    uint32_t chunksDrawnByCamera = 0;   // inside the camera's view this frame
+    uint32_t chunksDrawnBySun = 0;      // inside the sun's view this frame
+    uint32_t drawCalls = 0;             // box draw calls of the camera pass and the shadow pass together
+    size_t uploadBytesThisFrame = 0;
+    size_t uploadBytesMaxFrame = 0;
+    size_t instancesUsed = 0;
+    size_t instancesCapacity = 0;
 };
 
 // What the renderer measured and decided, for the window title, benchmarks and tuning.
@@ -30,6 +53,7 @@ struct RenderStats {
     float renderScale = 1.0f;        // fraction of the window size the scene is drawn at
     uint32_t renderWidth = 0;
     uint32_t renderHeight = 0;
+    StreamedGeometryStats streamed;  // all zero unless chunks were added
 };
 
 // How the renderer picks the resolution the scene is drawn at.
@@ -47,6 +71,16 @@ public:
     virtual void SetResolutionSettings(const ResolutionSettings& settings) = 0;
     // Static geometry is uploaded once; the renderer keeps its own copy on the GPU.
     virtual void UploadStaticScene(std::span<const BoxInstance> boxes) = 0;
+    // The streamed world. A chunk is added without waiting for the GPU and is drawn from the frame after its boxes were
+    // copied (normally the next one); `owner` keeps the memory `boxes` points into alive until then. Each frame the renderer
+    // draws the chunks that are in view of the camera and, for shadows, of the sun. Removing a chunk stops drawing it at once
+    // and gives its room back when the frames that may still draw it have finished. Returns an invalid handle for an empty chunk.
+    virtual StreamedChunkHandle AddStreamedChunk(std::shared_ptr<const void> owner, std::span<const BoxInstance> boxes,
+                                                 const Aabb& bounds) = 0;
+    virtual void RemoveStreamedChunk(StreamedChunkHandle chunk) = 0;
+    // Distance from the camera, along the ground, at which everything has faded into the haze completely. Zero, the default,
+    // means no fade. The streamed world sets its load radius, so that the edge of the loaded chunks is never seen.
+    virtual void SetDistanceFade(float radius) = 0;
     // Gives the renderer the generated materials to draw surfaces with. Until this is called, surfaces are drawn
     // with the city colours and procedural detail only.
     virtual void UploadMaterials(const material::MaterialLibrary& library) = 0;

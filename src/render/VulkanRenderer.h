@@ -43,6 +43,10 @@ public:
     void SetResolution(int width, int height) override;
     void SetResolutionSettings(const ResolutionSettings& settings) override;
     void UploadStaticScene(std::span<const BoxInstance> boxes) override;
+    StreamedChunkHandle AddStreamedChunk(std::shared_ptr<const void> owner, std::span<const BoxInstance> boxes,
+                                         const Aabb& bounds) override;
+    void RemoveStreamedChunk(StreamedChunkHandle chunk) override;
+    void SetDistanceFade(float radius) override;
     void UploadMaterials(const material::MaterialLibrary& library) override;
     void ReserveNpcCapacity(size_t npcCount) override;
     CharacterHandle UploadCharacterMesh(const skinning::MeshData& mesh) override;
@@ -122,6 +126,8 @@ private:
     ScreenshotCapture screenshot;
     IFrameOverlay* overlay = nullptr;  // drawn after the tonemap pass; not owned, see SetOverlay
 
+    float distanceFadeRadius = 0.0f;  // see SetDistanceFade
+    bool drawsWithDistanceFade = false;  // whether the scene pipelines use the lit_stream.frag variant
     uint64_t lastFedMeasurement = 0;
     float currentRenderScale = 1.0f;
     VkExtent2D currentRenderExtent{0, 0};

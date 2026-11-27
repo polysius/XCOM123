@@ -6,13 +6,14 @@
 #include "render/SkinnedGeometry.h"
 #include "render/VulkanContext.h"
 
-void ScenePass::Create(const VulkanContext& context, VkPipelineLayout sceneLayout, VkSampleCountFlagBits samples) {
+void ScenePass::Create(const VulkanContext& context, VkPipelineLayout sceneLayout, VkSampleCountFlagBits samples,
+                       const char* litFragmentShader) {
     layout = sceneLayout;
 
     // Lit geometry. Depth is reversed (1 = near, 0 = far), so nearer surfaces have GREATER depth.
     PipelineDesc lit;
     lit.layout = sceneLayout;
-    lit.fragmentShader = "lit.frag";
+    lit.fragmentShader = litFragmentShader;
     lit.colorFormat = kHdrFormat;
     lit.depthFormat = kDepthFormat;
     lit.samples = samples;
@@ -90,6 +91,7 @@ void ScenePass::Record(VkCommandBuffer cmd, const RenderTargets& targets, VkExte
     BeginRendering(cmd, renderExtent, &colorAttachment, &depthAttachment);
     vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &cameraViewProjection);
     geometry.DrawBoxes(cmd, boxPipeline);
+    geometry.DrawChunks(cmd, boxPipeline, false);
     geometry.DrawBodies(cmd, bodyPipeline, frameSlot);
     geometry.DrawNpcs(cmd, npcPipeline, frameSlot);
     skinned.DrawForCamera(cmd, skinnedPipeline, frameSlot);

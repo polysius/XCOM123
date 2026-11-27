@@ -108,6 +108,19 @@ foreach(SHADER_SOURCE ${SHADER_SOURCES})
         VERBATIM)
     list(APPEND SHADER_BINARIES ${SHADER_BINARY})
 endforeach()
+
+# The streamed world draws with a variant of the lit shader that fades the far edge of the loaded chunks into the haze. The
+# fixed city keeps the plain lit.frag, which compiles to exactly the SPIR-V it always did.
+set(STREAM_LIT_BINARY ${SHADER_OUTPUT_DIR}/lit_stream.frag.spv)
+add_custom_command(
+    OUTPUT ${STREAM_LIT_BINARY}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${SHADER_OUTPUT_DIR}
+    COMMAND $<TARGET_FILE:glslang-standalone> -V --target-env vulkan1.3 -DSTREAM_FADE
+            -I${SHADER_SOURCE_DIR} -o ${STREAM_LIT_BINARY} ${SHADER_SOURCE_DIR}/lit.frag
+    DEPENDS ${SHADER_SOURCE_DIR}/lit.frag ${SHADER_INCLUDES} glslang-standalone
+    COMMENT "Compiling shader lit_stream.frag"
+    VERBATIM)
+list(APPEND SHADER_BINARIES ${STREAM_LIT_BINARY})
 add_custom_target(shaders DEPENDS ${SHADER_BINARIES})
 
 # ---------------------------------------------------------------------------
@@ -340,3 +353,17 @@ if(MSVC)
     target_compile_options(panel_model_tests PRIVATE /W4 /permissive- /MP)
 endif()
 add_test(NAME panel_model_tests COMMAND panel_model_tests)
+
+# streaming_tests checks the streamed world: the chunk generator (pure per chunk, shared borders, budgets) and the streaming
+# manager (ordering, budgets, teleports, threads). It builds the city builders, the crowd and the streaming sources, no GPU.
+file(GLOB STREAMING_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/world/stream/*.cpp)
+list(APPEND STREAMING_SOURCES src/streaming/StreamingManager.cpp src/streaming/Reaper.cpp)  # StreamedWorld.cpp needs the renderer interface
+add_executable(streaming_tests tests/StreamingTests.cpp tests/StreamingManagerTests.cpp src/render/RangeAllocator.cpp ${STREAMING_SOURCES}
+    src/core/JobSystem.cpp src/world/Crowd.cpp src/world/TerrainField.cpp ${CITY_GENERATOR_SOURCES} ${UNIT_TEST_CROWD_SOURCES})
+target_include_directories(streaming_tests PRIVATE src)
+target_link_libraries(streaming_tests PRIVATE glm::glm)
+target_compile_definitions(streaming_tests PRIVATE GLM_FORCE_RADIANS GLM_FORCE_DEPTH_ZERO_TO_ONE)
+if(MSVC)
+    target_compile_options(streaming_tests PRIVATE /W4 /permissive- /MP)
+endif()
+add_test(NAME streaming_tests COMMAND streaming_tests)
