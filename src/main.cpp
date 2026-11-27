@@ -420,6 +420,7 @@ struct StreamRunTotals {
     double chunksDrawnByCamera = 0.0;
     double chunksDrawnBySun = 0.0;
     double drawCalls = 0.0;
+    size_t uploadBytesMaxFrame = 0;  // the most copied to the GPU in one measured frame, which leaves out the start-up load
     std::set<std::pair<int, int>> chunksFlownOver;
     size_t hitchFrames = 0;  // frames over the hitch limit
     int worstFrame = 0;
@@ -464,7 +465,7 @@ void PrintStreamReport(const Engine& engine, const Options& options, const strea
     const FrameTimeSummary streamCost = SummarizeFrameTimes(totals.streamMs, 1e9);
     const RenderStats render = engine.renderer->GetStats();
     const double frameCount = static_cast<double>(std::max<size_t>(frames, 1));
-    std::printf("Streaming: %.2f km flown, %zu chunks flown over, %zu people loaded at the end\n", path.DistanceFlown() / 1000.0,
+    std::printf("Streaming: %.2f km flown through %zu chunk squares, %zu people loaded at the end\n", path.DistanceFlown() / 1000.0,
                 totals.chunksFlownOver.size(), engine.PeopleCount());
     std::printf("  chunks           %llu loaded, %llu unloaded, %llu requests dropped as stale, %llu failed; %zu resident at the end, %zu at most\n",
                 static_cast<unsigned long long>(after.delivered - before.delivered),
@@ -478,7 +479,7 @@ void PrintStreamReport(const Engine& engine, const Options& options, const strea
                 static_cast<double>(render.streamed.instancesUsed * sizeof(BoxInstance)) / (1024.0 * 1024.0),
                 static_cast<double>(render.streamed.instancesCapacity * sizeof(BoxInstance)) / (1024.0 * 1024.0));
     std::printf("  upload           %.2f MB at most in one frame (manager %.2f MB), %.0f box draw calls a frame on average\n",
-                static_cast<double>(render.streamed.uploadBytesMaxFrame) / (1024.0 * 1024.0),
+                static_cast<double>(totals.uploadBytesMaxFrame) / (1024.0 * 1024.0),
                 static_cast<double>(after.deliveredBytesMaxFrame) / (1024.0 * 1024.0), totals.drawCalls / frameCount);
     std::printf("  culling          %.1f chunks a frame drawn for the camera, %.1f for the sun, of %zu resident\n",
                 totals.chunksDrawnByCamera / frameCount, totals.chunksDrawnBySun / frameCount, after.residentChunks);
@@ -536,6 +537,7 @@ int RunStreamBenchmark(Engine& engine, const Options& options) {
         totals.chunksDrawnByCamera += render.streamed.chunksDrawnByCamera;
         totals.chunksDrawnBySun += render.streamed.chunksDrawnBySun;
         totals.drawCalls += render.streamed.drawCalls;
+        totals.uploadBytesMaxFrame = std::max(totals.uploadBytesMaxFrame, render.streamed.uploadBytesThisFrame);
         const streaming::ChunkCoord here = world::ChunkAt({camera.Position().x, camera.Position().z});
         totals.chunksFlownOver.insert({here.x, here.z});
         if (frameMs > options.hitchLimitMs) {
@@ -701,10 +703,6 @@ void UploadScanMaterials(IRenderModule& renderer, const Options& options) {
               << static_cast<int>(milliseconds) << " ms\n";
 }
 
-// The distance haze of the streamed world. It is thicker than the fixed city's, so that the far edge of the loaded chunks is
-// well hidden in it: at the load radius the haze takes most of the colour of a surface.
-constexpr float kStreamFogDensity = 0.0022f;
-
 // Sets up the endless city instead of the fixed one. Props, the simulated river and the skinned characters of the showcase
 // belong to the fixed city and are not made here.
 void StartStreamedWorld(Engine& engine, const Options& options) {
@@ -714,7 +712,7 @@ void StartStreamedWorld(Engine& engine, const Options& options) {
     if (options.scanMaterials) {
         UploadScanMaterials(*engine.renderer, options);
     }
-    engine.renderer->SetFogDensity(kStreamFogDensity);
+    // The haze keeps the density of the fixed city; the fade makes the far edge of the loaded chunks disappear into it.
     engine.renderer->SetDistanceFade(options.streamLoadRadius);
     // Room for everyone up front, so the renderer never grows buffers mid-flight.
     engine.renderer->ReserveNpcCapacity(options.npcCount);

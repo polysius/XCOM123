@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <iostream>
 
@@ -38,6 +39,17 @@ void UploadCoarserVersions(IRenderModule& renderer, const character::CharacterPa
         }
         finer = coarser;
     }
+}
+
+// A number that belongs to one person and stays the same as they walk, so that they keep their body from frame to frame: the
+// crowd gives people no identity in what it hands out for drawing, but their clothes and height are chosen once and stay.
+uint32_t PersonKey(const NpcInstance& person) {
+    const auto bits = [](float value) { return std::bit_cast<uint32_t>(value); };
+    uint32_t key = bits(person.heightScale) * 2654435761u;
+    key = (key ^ bits(person.clothingColor.r)) * 2246822519u;
+    key = (key ^ bits(person.clothingColor.g)) * 3266489917u;
+    key = (key ^ bits(person.clothingColor.b)) * 668265263u;
+    return key ^ (key >> 15);
 }
 
 }  // namespace
@@ -108,20 +120,20 @@ void CrowdCharacters::TakeNearest(std::vector<NpcInstance>& people, glm::vec3 ca
     // The palettes are written first, all of them, because the instances point into the list and it must not move afterwards.
     for (size_t i = 0; i < chosen; ++i) {
         const NpcInstance& person = people[i];
-        const Body& body = bodies[i % bodies.size()];
+        const Body& body = bodies[PersonKey(person) % bodies.size()];
         const std::array<glm::mat4, character::kJointCount> skin = character::SkinMatrices(
-            body.skeleton, WalkPose(person.walkPhase, person.stride, std::fmod(person.walkPhase * 0.318f, 1.0f)));
+            body.skeleton, WalkPose(person.walkPhase, person.stride, static_cast<float>((PersonKey(person) >> 16) & 0xFFu) / 255.0f));
         palettes.insert(palettes.end(), skin.begin(), skin.end());
     }
     for (size_t i = 0; i < chosen; ++i) {
         const NpcInstance& person = people[i];
         SkinnedInstance instance;
-        instance.mesh = bodies[i % bodies.size()].handle;
+        instance.mesh = bodies[PersonKey(person) % bodies.size()].handle;
         instance.world = glm::scale(glm::rotate(glm::translate(glm::mat4(1.0f), person.position), person.heading, glm::vec3(0.0f, 1.0f, 0.0f)),
                                     glm::vec3(person.heightScale));
         instance.palette = std::span<const glm::mat4>(palettes).subspan(i * character::kJointCount, character::kJointCount);
         instance.tint = person.clothingColor;
-        instance.seed = static_cast<float>(i) * 0.37f;
+        instance.seed = static_cast<float>(PersonKey(person) & 0xFFFFu) / 65536.0f;
         instances.push_back(instance);
     }
     people.erase(people.begin(), people.begin() + static_cast<std::ptrdiff_t>(chosen));  // they are drawn as characters now

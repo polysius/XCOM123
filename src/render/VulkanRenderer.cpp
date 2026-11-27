@@ -15,6 +15,7 @@
 static AutoRegister<VulkanRenderer> gVulkanRendererRegistration("Vulkan");
 
 namespace {
+constexpr float kFogDensity = 0.0022f;
 constexpr std::array<std::string_view, 3> kPassNames = {"shadow", "scene", "tonemap"};
 // A screenshot frame can be skipped while the swapchain is rebuilt; try this many times.
 constexpr int kScreenshotAttempts = 4;
@@ -539,7 +540,7 @@ void VulkanRenderer::WriteFrameUniforms(FrameResources& frame, const FrameInput&
     uniforms.cameraPosition = glm::vec4(input.cameraPosition, input.timeSeconds);
     uniforms.sunDirection = glm::vec4(sun, 0.0f);
     uniforms.sunColor = glm::vec4(SunRadiance(sun.y), 0.0f);
-    uniforms.settings = glm::vec4(1.0f / static_cast<float>(ShadowPass::kMapSize), fogDensity, scanStrength, distanceFadeRadius);
+    uniforms.settings = glm::vec4(1.0f / static_cast<float>(ShadowPass::kMapSize), kFogDensity, scanStrength, distanceFadeRadius);
     std::copy(scanTiles.begin(), scanTiles.end(), uniforms.scanTiles);
     std::memcpy(frame.uniforms.mapped, &uniforms, sizeof(uniforms));
 }

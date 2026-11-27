@@ -33,9 +33,14 @@ struct StreamedWorldSettings {
 //
 // Everything that belongs to a chunk (its boxes and its crowd) is made on a worker thread by world::GenerateChunk and
 // arrives whole, so the frame loop only hands a finished chunk to the renderer and starts updating its people. When a chunk
-// leaves, the renderer is told, and the chunk and its crowd are freed by the streaming manager's worker, not by the frame.
+// leaves, the renderer is told, and the manager's worker normally frees the chunk and its crowd. The last reference may just
+// as well be the frame's, in which case the frame frees it, which costs well under a millisecond for a chunk.
 //
-// Not streamed yet: physics props, the simulated river and the skinned characters of the showcase stay with the fixed city.
+// People stay in the chunk they were made in: each chunk has street graph and walkways of its own, and people turn round at
+// its edge.
+//
+// Not streamed yet: physics props (only static crates and barrels are), the simulated river (the water is still, with
+// bridges) and the grid of showcase characters stay with the fixed city.
 class StreamedWorld {
 public:
     StreamedWorld(IRenderModule& renderer, const StreamedWorldSettings& settings);
