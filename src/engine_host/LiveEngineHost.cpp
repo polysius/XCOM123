@@ -21,6 +21,8 @@ using graph_engine::PropKind;
 constexpr size_t kMaxProps = 600;               // props that can stand at once
 constexpr size_t kMaxCharacters = 64;           // stand-ins for spawned people
 constexpr int kMaxSpawnsPerFrame = 20;          // props and people added in one frame, together
+constexpr int kMaxPrintsPerFrame = 4;
+constexpr int kMaxWavesPerFrame = 8;
 constexpr float kMinCrowdRebuildSeconds = 3.0f; // making the crowd again costs a moment, so not more often than this
 constexpr size_t kMaxMessages = 8;
 constexpr float kMessageSeconds = 6.0f;
@@ -55,6 +57,9 @@ void LiveEngineHost::BeginFrame(float deltaSeconds) {
         framesPerSecond += kFpsSmoothing * (1.0f / frameSeconds - framesPerSecond);
     }
     spawnsThisFrame = 0;
+    printsThisFrame = 0;
+    wavesThisFrame = 0;
+    ApplyAskedRiverLevel();
     for (ScreenMessage& message : messages) {
         message.secondsLeft -= frameSeconds;
     }
@@ -134,9 +139,14 @@ bool LiveEngineHost::PrepareGroundForProps(glm::vec2 point) {
         return false;  // making the ground again would lose the props that are on it
     }
     // The first prop decides where the ground is: at the river when it is simulated, as for --props, and otherwise round the point.
+    // The ground at the river is made once; a spawn elsewhere is refused after that, and does not make it again.
     physics::PropSettings settings{.count = 0, .seed = world.worldSeed};
     const bool overRiver = world.river != nullptr && world.river->IsBuilt();
     if (overRiver) {
+        if (madeGroundAtRiver) {
+            return false;
+        }
+        madeGroundAtRiver = true;
         settings.dropAt = world.river->Centre();
         settings.riverBed = world.river->RestLevel() - world.river->Depth();
     } else {
@@ -151,11 +161,12 @@ bool LiveEngineHost::PrepareGroundForProps(glm::vec2 point) {
 
 uint32_t LiveEngineHost::SpawnProp(PropKind kind, glm::vec3 position) {
     physics::PropField& props = *world.props;
-    if (!MaySpawn(props.Count(), kMaxProps)) {
+    // The ground is looked at before the budget is spent, so that a spawn that cannot happen costs nothing.
+    if (!PrepareGroundForProps({position.x, position.z})) {
+        SayOnce("No ground for props there: they can be added near the first one, or at the river when it is simulated.", saidNoGround);
         return 0;
     }
-    if (!PrepareGroundForProps({position.x, position.z})) {
-        SayOnce("No ground for props there: spawn them near the first one.", saidNoGround);
+    if (!MaySpawn(props.Count(), kMaxProps)) {
         return 0;
     }
     return props.AddProp(ToPhysics(kind), position, NextRandomSeed());
@@ -225,7 +236,18 @@ void LiveEngineHost::SetRiverLevel(float metresAboveRest) {
         SayOnce("The river is not simulated: start the engine with --river-sim.", saidNoRiver);
         return;
     }
-    world.river->SetLevelAboveRest(metresAboveRest);
+    askedRiverLevel = metresAboveRest;  // applied once a frame, see BeginFrame
+}
+
+void LiveEngineHost::ApplyAskedRiverLevel() {
+    if (!askedRiverLevel) {
+        return;
+    }
+    if (askedRiverLevel != appliedRiverLevel) {
+        world.river->SetLevelAboveRest(*askedRiverLevel);
+        appliedRiverLevel = askedRiverLevel;
+    }
+    askedRiverLevel.reset();
 }
 
 void LiveEngineHost::AddRiverWave(glm::vec3 position, float amplitudeMeters, float radiusMeters) {
@@ -233,6 +255,10 @@ void LiveEngineHost::AddRiverWave(glm::vec3 position, float amplitudeMeters, flo
         SayOnce("The river is not simulated: start the engine with --river-sim.", saidNoRiver);
         return;
     }
+    if (wavesThisFrame >= kMaxWavesPerFrame) {
+        return;
+    }
+    ++wavesThisFrame;
     // A bump of this height over a disc of this radius holds this much water.
     world.river->Splash({position.x, position.z}, radiusMeters, amplitudeMeters * kPi * radiusMeters * radiusMeters);
 }
@@ -240,6 +266,10 @@ void LiveEngineHost::AddRiverWave(glm::vec3 position, float amplitudeMeters, flo
 // ----- Debug -----
 
 void LiveEngineHost::PrintToScreen(const std::string& text) {
+    if (printsThisFrame >= kMaxPrintsPerFrame) {
+        return;  // a graph that prints in a loop must not fill the console and the screen
+    }
+    ++printsThisFrame;
     std::cout << "[graph] " << text << "\n";
     messages.push_back({text, kMessageSeconds});
     if (messages.size() > kMaxMessages) {

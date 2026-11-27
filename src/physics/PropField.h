@@ -45,7 +45,8 @@ public:
     void Spawn(const CityLayout& city, const PropSettings& settings);
 
     // Props one at a time, for what happens while the program runs. Every prop has an id, from 1, that stays its own for the life of
-    // the field (Spawn gives the props it drops ids too, and starts again from 1).
+    // the field: Spawn gives the props it drops ids too, and goes on counting where it was, so that an id that a graph kept from
+    // before a new Spawn names no prop and never a different one.
     //
     // The ground of the props is the city near the place Spawn was given, which is where they can fall and rest: HasGroundAt says
     // whether a point is over it. A field that was never spawned has none, and Spawn with a count of 0 makes the ground alone.

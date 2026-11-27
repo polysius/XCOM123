@@ -98,7 +98,8 @@ public:
     // almost nothing. For bodies that have fallen out of the world.
     void Disable(uint32_t index);
     // Takes a moving body out of play, as removing it would: it touches nothing and costs nothing from now on, and the bodies that
-    // rested on it are woken. The index stays used, and the body cannot come back. Static and kinematic bodies are left alone.
+    // rested on it are woken. The caller must not use the index again: the next AddBody may hand it out for a new body. Static and
+    // kinematic bodies are left alone.
     void Retire(uint32_t index);
 
     // Simulates `seconds`, in as many fixed steps as fit, carrying the remainder to the next call.
@@ -143,6 +144,7 @@ private:
     JobSystem* jobs = nullptr;
     PhaseTimings timings;
     std::vector<Body> bodies;
+    std::vector<uint32_t> retiredBodies;  // places in `bodies` that Retire freed, for AddBody to use again
     float leftoverSeconds = 0.0f;
 
     // The grid of static bodies, filled before the first step. Bodies that cover too many cells for the

@@ -102,7 +102,6 @@ void PropField::Spawn(const CityLayout& city, const PropSettings& settings) {
     sphereInstances.clear();
     boxIds.clear();
     sphereIds.clear();
-    nextPropId = 1;
 
     const OrientedRect area = settings.dropAt ? OrientedRect(Rect{*settings.dropAt - 8.0f, *settings.dropAt + 8.0f})
                                               : ChooseDropArea(city);

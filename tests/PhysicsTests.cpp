@@ -1658,6 +1658,17 @@ void ARetiredBodyTouchesNothingAndWhatRestedOnItFalls() {
     const uint32_t dropped = AddBox(world, {0.0f, 3.0f, 0.0f});
     Simulate(world, 2.0f);
     Check(Near(world.GetBody(dropped).position.y, 0.5f, 0.05f), "and bodies fall through a retired one for good");
+
+    // The place of a retired body is used again: bodies that come and go for ever do not make the world grow.
+    world.Retire(dropped);
+    const size_t bodyCount = world.BodyCount();
+    for (int round = 0; round < 50; ++round) {
+        world.Retire(AddBox(world, {5.0f, 3.0f, 0.0f}));
+    }
+    Check(world.BodyCount() <= bodyCount + 1, "adding and retiring bodies does not grow the world, bodies " + std::to_string(world.BodyCount()) + " from " + std::to_string(bodyCount));
+    const uint32_t fresh = AddBox(world, {8.0f, 3.0f, 0.0f});
+    Simulate(world, 2.0f);
+    Check(Near(world.GetBody(fresh).position.y, 0.5f, 0.05f) && !world.GetBody(fresh).isParked, "and a body that takes a retired place is a body like any other");
 }
 
 void TheSameWalkAlwaysGivesTheSameResult() {

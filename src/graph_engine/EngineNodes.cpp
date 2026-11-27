@@ -189,8 +189,8 @@ void RegisterCameraNodes(graph::NodeRegistry& registry) {
 
 void RegisterCharacterNodes(graph::NodeRegistry& registry) {
     AddAction(registry, "characters.spawn", "Spawn Character", "Characters",
-              "Makes a person with these measurements and puts them at a place. Out of range numbers are brought into range. Making "
-              "the body takes a moment; the person is there when it is done.",
+              "Makes a person with these measurements and puts them on the ground below a place, facing the camera. Out of range numbers "
+              "are brought into range. Only a limited number of people can stand at once.",
               {Pin("Position", PinType::Vec3, glm::vec3(0.0f), "Where the person stands, in metres."),
                Pin("Stature", PinType::Float, 1.70f, "Height in metres, 1.45 to 2.05."),
                Pin("Mass", PinType::Float, 70.0f, "Body mass in kilograms, 30 to 200."),

@@ -540,7 +540,8 @@ void PropsAreAddedOneAtATimeKickedAndRemoved() {
     Check(height < 0.7f, "and falls to the ground: the removed barrel is not there to rest on, " + std::to_string(height));
 
     props.Spawn(CityWithASquare(), {.count = 5, .seed = 1});
-    Check(props.Count() == 5 && props.RemoveProp(1) && props.Count() == 4, "a new spawn starts the ids again at 1");
+    Check(props.Count() == 5 && !props.RemoveProp(crate) && !props.RemoveProp(ball) && !props.RemoveProp(onto), "ids from before a new spawn name no prop");
+    Check(props.RemoveProp(onto + 1) && props.Count() == 4, "and the new props go on counting from them");
 }
 
 struct PropsInARiver {
@@ -678,8 +679,8 @@ void PropsAddedAndRemovedOverARiverStillFloat() {
         floatingCrates += box.roughness >= 0.6f && box.material != static_cast<float>(SurfaceMaterial::Stone) && std::abs(box.center.y - surface) < 0.9f ? 1 : 0;
     }
     Check(floatingCrates >= 1, "a crate that was added floats at the surface, " + std::to_string(floatingCrates));
-    for (const BodyInstance& ball : scene.props.Spheres()) {
-        Check(std::abs(ball.center.y - surface) < 0.9f, "a ball floats at the surface, " + std::to_string(ball.center.y - surface));
+    for (const BodyInstance& sphere : scene.props.Spheres()) {
+        Check(std::abs(sphere.center.y - surface) < 0.9f, "a ball floats at the surface, " + std::to_string(sphere.center.y - surface));
     }
 }
 

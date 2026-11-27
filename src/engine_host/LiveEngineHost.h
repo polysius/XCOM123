@@ -96,6 +96,7 @@ private:
     // Makes sure the props have ground at the point, which is only possible while there are no props (see PropField::HasGroundAt).
     bool PrepareGroundForProps(glm::vec2 point);
     void RebuildCrowdIfAsked(float deltaSeconds);
+    void ApplyAskedRiverLevel();
     void SayOnce(const std::string& text, bool& alreadySaid);
 
     WorldAccess world;
@@ -103,6 +104,14 @@ private:
     float framesPerSecond = 0.0f;
     int spawnsThisFrame = 0;
     std::vector<ScreenMessage> messages;
+
+    // What a graph may do in one frame without being cut short: the lines it prints and the waves it makes. A river level is only
+    // applied once a frame, and only when it changed, because moving the whole river costs a pass over its grid.
+    int printsThisFrame = 0;
+    int wavesThisFrame = 0;
+    std::optional<float> askedRiverLevel;
+    std::optional<float> appliedRiverLevel;
+    bool madeGroundAtRiver = false;
 
     std::optional<int> askedCrowdSize;  // a size that a graph asked for and the crowd has not been made at yet
     float secondsSinceCrowdRebuild = 1.0e9f;

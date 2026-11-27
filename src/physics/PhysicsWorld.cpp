@@ -198,10 +198,17 @@ uint32_t PhysicsWorld::AddBody(const BodyDescription& description) {
         body.inverseInertiaWorld = InverseInertiaInWorld(body);
     }
     UpdateBounds(body);
-    bodies.push_back(body);
     if (body.isStatic) {
         staticGridIsStale = true;
     }
+    // The place of a retired body is used again, so that adding and retiring bodies for ever does not grow the world.
+    if (!retiredBodies.empty()) {
+        const uint32_t reused = retiredBodies.back();
+        retiredBodies.pop_back();
+        bodies[reused] = body;
+        return reused;
+    }
+    bodies.push_back(body);
     return static_cast<uint32_t>(bodies.size() - 1);
 }
 
@@ -290,6 +297,7 @@ void PhysicsWorld::Retire(uint32_t index) {
     body.linearVelocity = glm::vec3(0.0f);
     body.angularVelocity = glm::vec3(0.0f);
     ForgetContactsOf(index);
+    retiredBodies.push_back(index);
     // What rests on it may sleep with no contact on record (a sleeping pair is not kept), so whatever is close is woken too.
     constexpr float kRestingReach = 0.1f;
     for (uint32_t other = 0; other < bodies.size(); ++other) {
