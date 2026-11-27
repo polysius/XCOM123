@@ -161,8 +161,11 @@ public:
         if (texel.tile == AtlasTile::Trunk && q.y > 1.43f) {
             // The lines of the neck, running round it, above the collar bones.
             const float neck = SmoothStep(1.43f, 1.47f, q.y) * (1.0f - SmoothStep(1.52f, 1.55f, q.y));
-            const float phase = q.y * 95.0f + 3.0f * Fbm3(p * 25.0f, 2, seed + 31);
-            height -= 0.00045f * traits.wrinkles * neck * LineGroove(phase, 55.0f);
+            // Short creases that break up and wander, not rings: the phase is warped by more than a line's spacing, and the lines fade
+            // in and out along their length.
+            const float phase = q.y * 70.0f + 5.0f * Fbm3(p * 18.0f, 3, seed + 31);
+            const float broken = SmoothStep(-0.1f, 0.5f, Fbm3(p * 30.0f, 2, seed + 32));
+            height -= 0.00018f * traits.wrinkles * neck * broken * LineGroove(phase, 30.0f);
         }
 
         // Veins, bluish and a little raised, on the backs of the hands, the forearms and the temples.
@@ -172,8 +175,22 @@ public:
         const float lip = onHead ? LipWeight(landmarks, p) : 0.0f;
         if (lip > 0.0f) {
             const glm::vec3 lipColour = glm::mix(traits.skinColour * glm::vec3(1.08f, 0.62f, 0.62f), glm::vec3(0.12f, 0.045f, 0.04f), 0.7f * traits.melanin);
-            albedo = glm::mix(albedo, lipColour, 0.85f * lip);
+            // The colour is not flat: it fades into the skin at the edge of the lips (a pale border, then the red), the upper lip is in the
+            // shadow of the nose and darker, the lower one catches the light.
+            const float below = SmoothStep(-0.006f, 0.007f, MouthLineY(q.x) - q.y);
+            const float border = SmoothStep(0.15f, 0.55f, lip);
+            const glm::vec3 shaded = lipColour * glm::mix(0.82f, 1.12f, below);
+            albedo = glm::mix(albedo, shaded, 0.88f * border);
             height -= 0.00015f * lip * LineGroove(p.x * 700.0f + 2.0f * Fbm3(p * 90.0f, 2, seed + 41), 40.0f) * (0.5f + traits.wrinkles);
+        }
+        if (onHead) {
+            // The line where the lips meet, dark, deepest in the middle and running out to the corners of the mouth.
+            const float lineAcross = 1.0f - SmoothStep(0.022f, 0.030f, std::abs(q.x));
+            const float line = Gaussian(q.y - MouthLineY(q.x), 0.00075f) * lineAcross * SmoothStep(0.062f, 0.076f, q.z);
+            albedo *= 1.0f - 0.55f * line;
+            height -= 0.0009f * line;
+            height += EarRelief(q, albedo);
+            height += EyelidCrease(q, albedo);
         }
 
         // Pores: shallow pits on a loose grid, most on the nose and cheeks. The grid is never finer than the texels can show.
@@ -304,22 +321,77 @@ private:
         return -0.00030f * crease * (0.3f + traits.wrinkles);
     }
 
+    // Where the lips meet, at a distance x from the middle (head units): a gentle curve that turns down a little at the corners.
+    float MouthLineY(float x) const {
+        const float across = x / 0.027f;
+        return 1.5662f - 0.0022f * across * across;
+    }
+
+    // The folds of an ear, in the normal map: a raised rim (the helix), a ridge inside it (the antihelix) and the hollow of the bowl
+    // between them and the ear canal, a little darker and redder. The ear of the head mesh is a smooth slab and has none of this.
+    float EarRelief(glm::vec3 q, glm::vec3& albedo) const {
+        float height = 0.0f;
+        for (int i = 0; i < 2; ++i) {
+            const glm::vec3 ear = landmarks.ears[i] / scale;
+            const float outward = std::abs(q.x) - 0.060f * landmarks.headWidth;
+            if (outward < 0.0f || (q.x > 0.0f) != (i == 0)) {
+                continue;
+            }
+            const float along = (q.y - (ear.y - 0.003f)) / 0.026f;  // up the ear
+            const float depth = (q.z - (ear.z - 0.002f)) / 0.013f;  // front to back
+            const float radius = std::sqrt(along * along + depth * depth);
+            if (radius > 1.35f) {
+                continue;
+            }
+            // The rim runs round the edge and is thickest at the top; the antihelix is a ridge on a smaller ring that opens to the front.
+            const float rim = Gaussian(radius - 0.88f, 0.13f) * (0.8f + 0.2f * along);
+            const float ridge = Gaussian(radius - 0.50f, 0.10f) * SmoothStep(-0.6f, 0.3f, depth);
+            const float bowl = Gaussian(radius - 0.22f, 0.20f);
+            height += 0.0011f * rim + 0.0006f * ridge - 0.0009f * bowl;
+            albedo *= glm::mix(glm::vec3(1.0f), glm::vec3(0.92f, 0.80f, 0.78f), 0.6f * bowl + 0.2f * (1.0f - rim));
+        }
+        return height;
+    }
+
+    // The crease of the upper eyelid, an arc above the eye that follows its shape, and the faint fold under it.
+    float EyelidCrease(glm::vec3 q, glm::vec3& albedo) const {
+        float height = 0.0f;
+        for (int i = 0; i < 2; ++i) {
+            const glm::vec3 eye = landmarks.eyeSockets[i].centre / scale;
+            const float dx = q.x - eye.x;
+            const float spread = dx / 0.019f;
+            const float creaseY = eye.y + 0.0108f + 0.0032f * (1.0f - spread * spread);
+            const float along = (1.0f - SmoothStep(0.80f, 1.15f, std::abs(spread))) * SmoothStep(0.05f, 0.075f, q.z);
+            const float crease = Gaussian(q.y - creaseY, 0.00085f) * along;
+            albedo *= 1.0f - 0.30f * crease;
+            height -= 0.0008f * crease;
+            // The lid above the crease is a little fuller, and a little darker.
+            height += 0.0004f * SmoothStep(creaseY, creaseY + 0.004f, q.y) * (1.0f - SmoothStep(creaseY + 0.004f, creaseY + 0.009f, q.y)) * along;
+        }
+        return height;
+    }
+
     glm::vec3 PaintHairOnSkin(glm::vec3 p, glm::vec3 albedo, float& shine) const {
         const float grey = traits.greyFraction;
         const glm::vec3 hairColour = glm::mix(traits.hairColour, glm::vec3(0.42f), grey * 0.85f);
         if (settings.hairStyle != HairStyle::Bald) {
-            // The scalp under the hair is dark with the roots; a thinning head shows some skin through.
-            const float scalp = ScalpWeight(landmarks, traits, p) * glm::clamp(traits.hairDensity * 1.25f - 0.1f, 0.0f, 1.0f);
+            // The scalp under the hair is dark with the roots; a thinning head shows some skin through. The hairline is broken up by noise
+            // so that it fades out over a few millimetres and has no edge.
+            const float edge = ScalpWeight(landmarks, traits, p) + 0.22f * Fbm3(p * 110.0f, 2, seed + 113);
+            const float scalp = SmoothStep(0.25f, 0.85f, edge) * glm::clamp(traits.hairDensity * 1.25f - 0.1f, 0.0f, 1.0f);
             albedo = glm::mix(albedo, hairColour * 0.75f, 0.9f * scalp);
             shine = std::max(shine, 0.9f * scalp);
         }
         if (settings.facialHair != FacialHair::None) {
-            const float beard = BeardWeight(landmarks, p);
-            // Stubble: a shadow of dots, the roots of hairs that have just come through.
+            // A beard is dense at the chin and thins towards its edge. The paint is made of the roots of hairs, dots with gaps of skin
+            // between them, the more of them the nearer the middle of the beard, and the edge is broken up by noise like the hairline.
+            const float weight = BeardWeight(landmarks, p);
+            const float beard = SmoothStep(0.10f, 0.80f, weight + 0.25f * Fbm3(p * 90.0f, 2, seed + 114));
             const Cellular3 roots = CellularNoise3(p / 0.0016f, seed + 111);
-            const float dot = 1.0f - SmoothStep(0.10f, 0.38f, roots.nearest);
-            const float cover = settings.facialHair == FacialHair::Beard ? 0.90f : 0.30f + 0.35f * dot;
-            albedo = glm::mix(albedo, hairColour * 0.8f + glm::vec3(0.01f, 0.012f, 0.02f), cover * beard * 0.9f);
+            const float dot = 1.0f - SmoothStep(0.10f, 0.42f, roots.nearest);
+            const float density = settings.facialHair == FacialHair::Beard ? 0.45f + 0.45f * weight : 0.18f + 0.30f * weight;
+            const float cover = density * (0.55f + 0.45f * dot);
+            albedo = glm::mix(albedo, hairColour * 0.8f + glm::vec3(0.01f, 0.012f, 0.02f), glm::clamp(cover * beard * 1.1f, 0.0f, 0.95f));
             shine = std::max(shine, cover * beard);
         }
         return albedo;

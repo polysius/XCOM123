@@ -30,14 +30,22 @@ glm::vec3 SrgbToLinear(glm::vec3 c) {
 }
 
 // A bilinear lookup in an 8 bit image at uv (in 0 to 1, clamped), as values 0 to 1 per channel.
-glm::vec4 Lookup(const ByteImage& image, glm::vec2 uv) {
-    const float x = glm::clamp(uv.x, 0.0f, 1.0f) * static_cast<float>(image.width) - 0.5f;
+glm::vec4 Lookup(const ByteImage& image, glm::vec2 uv, bool wrapU = false) {
+    const float u = wrapU ? uv.x - std::floor(uv.x) : glm::clamp(uv.x, 0.0f, 1.0f);
+    const float x = u * static_cast<float>(image.width) - 0.5f;
     const float y = glm::clamp(uv.y, 0.0f, 1.0f) * static_cast<float>(image.height) - 0.5f;
-    const int x0 = std::clamp(static_cast<int>(std::floor(x)), 0, image.width - 1);
+    int x0 = static_cast<int>(std::floor(x));
+    int x1 = x0 + 1;
+    if (wrapU) {
+        x0 = (x0 % image.width + image.width) % image.width;
+        x1 = x1 % image.width;
+    } else {
+        x0 = std::clamp(x0, 0, image.width - 1);
+        x1 = std::min(x1, image.width - 1);
+    }
     const int y0 = std::clamp(static_cast<int>(std::floor(y)), 0, image.height - 1);
-    const int x1 = std::min(x0 + 1, image.width - 1);
     const int y1 = std::min(y0 + 1, image.height - 1);
-    const float fx = glm::clamp(x - static_cast<float>(x0), 0.0f, 1.0f);
+    const float fx = x - std::floor(x);
     const float fy = glm::clamp(y - static_cast<float>(y0), 0.0f, 1.0f);
     glm::vec4 result(0.0f, 0.0f, 0.0f, 1.0f);
     for (int c = 0; c < image.channels; ++c) {
@@ -62,6 +70,8 @@ struct Surface {
     float subsurface = 0.0f;  // 0 = none; skin wraps red light round the terminator
     float specular = 1.0f;
     bool twoSided = false;
+    // Hair cards: a texture of strands, repeating across the card, whose alpha cuts the card to the strands and whose grey lights each strand.
+    const ByteImage* strands = nullptr;
 };
 
 class View {
@@ -175,6 +185,13 @@ private:
                 if (z <= stored) {
                     continue;
                 }
+                if (surface.strands != nullptr) {
+                    // A card of hair is only where its strands are.
+                    const glm::vec2 cardUv = w0 * tri.uv[0] + w1 * tri.uv[1] + w2 * tri.uv[2];
+                    if (Lookup(*surface.strands, cardUv, true).w < 0.5f) {
+                        continue;
+                    }
+                }
                 stored = z;
                 colour[static_cast<size_t>(y) * width + x] = Shade(surface, tri, w0, w1, w2);
             }
@@ -189,6 +206,10 @@ private:
             albedo = SrgbToLinear(glm::vec3(Lookup(*surface.albedo, uv)));
         }
         albedo *= surface.tint;
+        if (surface.strands != nullptr) {
+            // Each strand of a card is lighter or darker than the next.
+            albedo *= 1.4f * std::pow(Lookup(*surface.strands, uv, true).x, 2.0f);
+        }
         if (surface.roughnessMap != nullptr) {
             roughness = Lookup(*surface.roughnessMap, uv).x;
         }
@@ -200,7 +221,7 @@ private:
             inside = 0.55f;
         }
         if (surface.normalMap != nullptr) {
-            const glm::vec4 texel = Lookup(*surface.normalMap, uv);
+            const glm::vec4 texel = Lookup(*surface.normalMap, uv, surface.strands != nullptr);
             const glm::vec3 tangentSpace(texel.x * 2.0f - 1.0f, texel.y * 2.0f - 1.0f, texel.z * 2.0f - 1.0f);
             const glm::vec3 t = glm::normalize(tri.tangent - n * glm::dot(tri.tangent, n));
             const glm::vec3 b = glm::cross(n, t);
@@ -289,6 +310,10 @@ void DrawAppearance(View& view, const CharacterAppearance& appearance) {
         surface.roughness = roughness;
         surface.twoSided = true;
         surface.specular = 0.7f;
+        if (set.strandTexture) {
+            surface.strands = &appearance.hair.textures.strands;
+            surface.normalMap = &appearance.hair.textures.normal;
+        }
         view.Draw(surface);
     };
     drawRibbons(appearance.hair.scalp, 0.45f);
@@ -385,6 +410,16 @@ bool WriteTextures(const std::filesystem::path& folder, const std::string& name,
     save("skin_normal", appearance.skin.textures.normal);
     save("skin_roughness", appearance.skin.textures.roughness);
     save("eye_albedo", appearance.eyes.textures.albedo);
+    // The strand texture of the hair cards: the grey of the strands, their alpha as a picture of its own, and the normal map.
+    save("hair_strands", appearance.hair.textures.strands);
+    save("hair_normal", appearance.hair.textures.normal);
+    ByteImage alpha(appearance.hair.textures.strands.width, appearance.hair.textures.strands.height, 1);
+    for (int y = 0; y < alpha.height; ++y) {
+        for (int x = 0; x < alpha.width; ++x) {
+            *alpha.Pixel(x, y) = appearance.hair.textures.strands.Pixel(x, y)[3];
+        }
+    }
+    save("hair_alpha", alpha);
     for (const Garment& garment : appearance.outfit.garments) {
         const std::string label = std::string("garment_") + GarmentName(garment.kind);
         save(label + "_albedo", garment.textures.albedo);

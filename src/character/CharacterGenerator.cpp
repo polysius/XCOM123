@@ -285,6 +285,7 @@ CharacterMesh GenerateCharacter(const CharacterParameters& parameters, const Mes
         }
     }
     mesh.girth = girth;
+    mesh.voxelMeters = voxel;
 
     // The body first, with its weights, then the finer pieces, each fastened to one bone.
     mesh.positions = std::move(body.positions);

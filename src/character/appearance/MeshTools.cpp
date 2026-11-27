@@ -229,6 +229,26 @@ TriangleGrid::TriangleGrid(const std::vector<glm::vec3>& positionList, const std
     for (size_t cell = 0; cell < cells; ++cell) {
         cellStart[cell + 1] += cellStart[cell];
     }
+    vertexNormals = VertexNormals(positions, indices);
+    // The rim of an open surface (a garment): a vertex on an edge that has no triangle the other way round.
+    onBoundary.assign(positions.size(), 0);
+    {
+        std::unordered_map<uint64_t, int> directed;
+        for (size_t t = 0; t + 2 < indices.size(); t += 3) {
+            for (int c = 0; c < 3; ++c) {
+                directed[(static_cast<uint64_t>(indices[t + c]) << 32) | indices[t + (c + 1) % 3]] += 1;
+            }
+        }
+        for (const auto& [edge, uses] : directed) {
+            (void)uses;
+            const uint32_t from = static_cast<uint32_t>(edge >> 32);
+            const uint32_t to = static_cast<uint32_t>(edge & 0xFFFFFFFFu);
+            if (directed.find((static_cast<uint64_t>(to) << 32) | from) == directed.end()) {
+                onBoundary[from] = 1;
+                onBoundary[to] = 1;
+            }
+        }
+    }
     cellTriangles.resize(cellStart[cells]);
     std::vector<uint32_t> fill(cellStart.begin(), cellStart.end() - 1);
     for (size_t t = 0; t < triangleCount; ++t) {
@@ -243,6 +263,34 @@ glm::ivec3 TriangleGrid::CellOf(glm::vec3 point) const {
 
 size_t TriangleGrid::CellIndex(glm::ivec3 cell) const {
     return (static_cast<size_t>(cell.z) * cellCount.y + cell.y) * cellCount.x + cell.x;
+}
+
+void TriangleGrid::FinishNearest(Nearest& nearest, glm::vec3 point) const {
+    const uint32_t id[3] = {indices[nearest.triangle * 3], indices[nearest.triangle * 3 + 1], indices[nearest.triangle * 3 + 2]};
+    const glm::vec3 a = positions[id[0]];
+    const glm::vec3 edge1 = positions[id[1]] - a;
+    const glm::vec3 edge2 = positions[id[2]] - a;
+    const glm::vec3 offset = nearest.point - a;
+    const float d11 = glm::dot(edge1, edge1);
+    const float d12 = glm::dot(edge1, edge2);
+    const float d22 = glm::dot(edge2, edge2);
+    const float denominator = d11 * d22 - d12 * d12;
+    glm::vec3 normal = nearest.faceNormal;
+    float boundaryShare = 0.0f;
+    if (std::abs(denominator) > 1e-18f) {
+        const float w1 = (d22 * glm::dot(offset, edge1) - d12 * glm::dot(offset, edge2)) / denominator;
+        const float w2 = (d11 * glm::dot(offset, edge2) - d12 * glm::dot(offset, edge1)) / denominator;
+        const glm::vec3 blended = (1.0f - w1 - w2) * vertexNormals[id[0]] + w1 * vertexNormals[id[1]] + w2 * vertexNormals[id[2]];
+        boundaryShare = (1.0f - w1 - w2) * onBoundary[id[0]] + w1 * onBoundary[id[1]] + w2 * onBoundary[id[2]];
+        if (glm::length(blended) > 1e-6f) {
+            normal = glm::normalize(blended);
+        }
+    }
+    nearest.surfaceNormal = normal;
+    // Beyond the rim of an open surface (past the end of a sleeve) there is no inside: the nearest point is on its edge, where the
+    // normal says nothing about which side a point is on.
+    const bool atRim = boundaryShare > 0.999f;
+    nearest.signedDistance = (!atRim && glm::dot(point - nearest.point, normal) < 0.0f) ? -nearest.distance : nearest.distance;
 }
 
 TriangleGrid::Nearest TriangleGrid::FindNearest(glm::vec3 point, float searchRadius) const {
@@ -270,6 +318,9 @@ TriangleGrid::Nearest TriangleGrid::FindNearest(glm::vec3 point, float searchRad
                 }
             }
         }
+    }
+    if (best.distance < 1e8f) {
+        FinishNearest(best, point);
     }
     return best;
 }

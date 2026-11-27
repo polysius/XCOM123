@@ -6,6 +6,7 @@
 #include "character/BodyShape.h"
 #include "character/CharacterGenerator.h"
 #include "character/DetailShapes.h"
+#include "character/ParallelEach.h"
 #include "character/appearance/MeshTools.h"
 #include "character/appearance/Noise3D.h"
 #include "material/MaterialNoise.h"
@@ -14,7 +15,7 @@ namespace character {
 namespace {
 
 constexpr float kTwoPi = 6.28318530718f;
-constexpr float kEyeRadius = 0.0112f;       // metres at a stature of 1.75 m; an adult eye is 23 to 25 mm across
+constexpr float kEyeRadius = 0.0108f;       // metres at a stature of 1.75 m; an adult eye is 23 to 25 mm across
 constexpr float kCorneaBulge = 0.0017f;
 constexpr float kIrisRadiusShare = 0.4875f;  // sin of the angle of the edge of the iris: 11.7 mm of iris across 24 mm of eye
 constexpr float kPupilShare = 0.36f;         // of the radius of the iris
@@ -167,33 +168,35 @@ RenderMesh BuildSlab(const std::vector<glm::vec3>& inner, const std::vector<glm:
 }
 
 // One lid: the upper lid when `upper` is true. It spreads from the edge of the opening out over the brow or the cheek.
-RenderMesh BuildLid(const BodyShape& head, const EyeFrame& frame, bool upper) {
+RenderMesh BuildLid(const BodyShape& head, const EyeFrame& frame, bool upper, JobSystem* jobs) {
     constexpr int kAcross = 28;
     constexpr int kAlong = 10;
     constexpr float kAzimuthInner = -1.40f;
     constexpr float kAzimuthOuter = 1.20f;
     const float reach = upper ? 0.85f : 0.70f;
     const int columns = kAcross + 1;
-    std::vector<glm::vec3> directions;
-    std::vector<float> spheres;  // the radius of the eyeball plus the clearance, in each direction
-    std::vector<float> radii;    // the radius of the inner surface of the lid
-    for (int b = 0; b <= kAlong; ++b) {
+    const int pointCount = columns * (kAlong + 1);
+    std::vector<glm::vec3> directions(pointCount);
+    std::vector<float> spheres(pointCount);  // the radius of the eyeball plus the clearance, in each direction
+    std::vector<float> radii(pointCount);    // the radius of the inner surface of the lid
+    // Looking for the wall of the socket along a ray is the cost of a lid, and every ray is its own: they run on the job system.
+    ParallelEach(jobs, pointCount, [&](int i) {
+        const int a = i % columns;
+        const int b = i / columns;
         const float spread = static_cast<float>(b) / kAlong;
-        for (int a = 0; a <= kAcross; ++a) {
-            const float azimuth = glm::mix(kAzimuthInner, kAzimuthOuter, static_cast<float>(a) / kAcross);
-            const float edge = upper ? UpperEdge(azimuth) : LowerEdge(azimuth);
-            const float elevation = edge + (upper ? reach : -reach) * spread;
-            const glm::vec3 direction = frame.Direction(azimuth, elevation);
-            const float sphere = frame.BallRadius(direction) + kLidClearance * frame.scale;
-            // Far from the opening the lid is carried out to the wall of the socket, so that no gap shows between it and the skin.
-            // The rim is buried in the skin: it lies below the surface of the face.
-            const float wall = SocketWall(head, frame, direction, sphere);
-            const float buried = wall > 0.0f ? wall - 0.0014f * frame.scale : sphere + 0.0015f * frame.scale;
-            directions.push_back(direction);
-            spheres.push_back(sphere);
-            radii.push_back(glm::mix(sphere, std::max(buried, sphere), SmoothStep(0.20f, 0.95f, spread)));
-        }
-    }
+        const float azimuth = glm::mix(kAzimuthInner, kAzimuthOuter, static_cast<float>(a) / kAcross);
+        const float edge = upper ? UpperEdge(azimuth) : LowerEdge(azimuth);
+        const float elevation = edge + (upper ? reach : -reach) * spread;
+        const glm::vec3 direction = frame.Direction(azimuth, elevation);
+        const float sphere = frame.BallRadius(direction) + kLidClearance * frame.scale;
+        // Far from the opening the lid is carried out to the wall of the socket, so that no gap shows between it and the skin.
+        // The rim is buried in the skin: it lies below the surface of the face.
+        const float wall = SocketWall(head, frame, direction, sphere);
+        const float buried = wall > 0.0f ? wall - 0.0014f * frame.scale : sphere + 0.0015f * frame.scale;
+        directions[i] = direction;
+        spheres[i] = sphere;
+        radii[i] = glm::mix(sphere, std::max(buried, sphere), SmoothStep(0.20f, 0.95f, spread));
+    });
     // The wall of the socket is found ray by ray and is ragged where a ray just misses a feature; smooth the radii of the lid,
     // which leaves its edge on the eyeball alone.
     for (int pass = 0; pass < 4; ++pass) {
@@ -311,13 +314,13 @@ EyePixel PaintEye(float u, float v, const PersonTraits& traits, uint32_t seed) {
     return pixel;
 }
 
-EyeTextures BakeEyeTextures(const PersonTraits& traits, uint32_t seed, int size, float scale) {
+EyeTextures BakeEyeTextures(const PersonTraits& traits, uint32_t seed, int size, float scale, JobSystem* jobs) {
     EyeTextures textures;
     textures.albedo = ByteImage(size, size, 4);
     textures.normal = ByteImage(size, size, 4);
     textures.roughness = ByteImage(size, size, 1);
     std::vector<float> heights(static_cast<size_t>(size) * size);
-    for (int y = 0; y < size; ++y) {
+    ParallelEach(jobs, size, [&](int y) {
         for (int x = 0; x < size; ++x) {
             const EyePixel pixel = PaintEye((static_cast<float>(x) + 0.5f) / size, (static_cast<float>(y) + 0.5f) / size, traits, seed);
             const glm::vec3 colour = ToSrgb(pixel.albedo);
@@ -329,7 +332,7 @@ EyeTextures BakeEyeTextures(const PersonTraits& traits, uint32_t seed, int size,
             *textures.roughness.Pixel(x, y) = Byte(pixel.roughness);
             heights[static_cast<size_t>(y) * size + x] = pixel.height;
         }
-    }
+    });
     // One texel is a fraction of the diameter of the eye.
     const float metersPerTexel = 2.0f * kEyeRadius * scale / static_cast<float>(size);
     const auto heightAt = [&](int x, int y) { return heights[static_cast<size_t>(std::clamp(y, 0, size - 1)) * size + std::clamp(x, 0, size - 1)]; };
@@ -350,7 +353,14 @@ EyeTextures BakeEyeTextures(const PersonTraits& traits, uint32_t seed, int size,
 
 }  // namespace
 
-EyeSet BuildEyes(const CharacterParameters& rawParameters, const PersonTraits& traits, const EyeSettings& settings) {
+float EyeballRadiusToward(const EyeParts& eye, glm::vec3 point) {
+    EyeFrame frame;
+    frame.scale = eye.radius / kEyeRadius;
+    const glm::vec3 offset = point - eye.centre;
+    return glm::length(offset) > 1e-9f ? frame.BallRadius(glm::normalize(offset)) : frame.Radius();
+}
+
+EyeSet BuildEyes(const CharacterParameters& rawParameters, const PersonTraits& traits, const EyeSettings& settings, JobSystem* jobs) {
     const CharacterParameters parameters = Sanitised(rawParameters);
     const HeadLandmarks landmarks = ComputeHeadLandmarks(parameters);
     const BodyShape head = BuildHeadShape(parameters);
@@ -368,12 +378,12 @@ EyeSet BuildEyes(const CharacterParameters& rawParameters, const PersonTraits& t
         eye.centre = frame.centre;
         eye.radius = frame.Radius();
         eye.eyeball = BuildEyeball(frame);
-        eye.upperLid = BuildLid(head, frame, true);
-        eye.lowerLid = BuildLid(head, frame, false);
+        eye.upperLid = BuildLid(head, frame, true, jobs);
+        eye.lowerLid = BuildLid(head, frame, false, jobs);
         AddLashes(eye.lashes, frame, traits, parameters.seed + static_cast<uint32_t>(i) * 31u, true);
         AddLashes(eye.lashes, frame, traits, parameters.seed + static_cast<uint32_t>(i) * 31u, false);
     }
-    set.textures = BakeEyeTextures(traits, parameters.seed, std::clamp(settings.textureSize, 64, 2048), scale);
+    set.textures = BakeEyeTextures(traits, parameters.seed, std::clamp(settings.textureSize, 64, 2048), scale, jobs);
     return set;
 }
 

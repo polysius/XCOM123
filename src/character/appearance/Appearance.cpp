@@ -33,9 +33,10 @@ T Pick(const std::array<std::pair<float, T>, N>& table, float draw) {
 
 OutfitSettings ChooseOutfit(const CharacterParameters& parameters) {
     OutfitSettings outfit;
-    const std::array<std::pair<float, TopKind>, 4> tops = {{{0.03f, TopKind::None}, {0.55f, TopKind::TShirt}, {0.20f, TopKind::Jacket}, {0.22f, TopKind::TShirtAndJacket}}};
-    const std::array<std::pair<float, LegwearKind>, 3> legs = {{{0.05f, LegwearKind::None}, {0.65f, LegwearKind::Trousers}, {0.30f, LegwearKind::Shorts}}};
-    const std::array<std::pair<float, FootwearKind>, 3> feet = {{{0.20f, FootwearKind::None}, {0.55f, FootwearKind::Shoes}, {0.25f, FootwearKind::Boots}}};
+    // Everyone is dressed: a top and something on the legs always, and shoes for nine in ten.
+    const std::array<std::pair<float, TopKind>, 3> tops = {{{0.55f, TopKind::TShirt}, {0.10f, TopKind::Jacket}, {0.35f, TopKind::TShirtAndJacket}}};
+    const std::array<std::pair<float, LegwearKind>, 2> legs = {{{0.70f, LegwearKind::Trousers}, {0.30f, LegwearKind::Shorts}}};
+    const std::array<std::pair<float, FootwearKind>, 3> feet = {{{0.10f, FootwearKind::None}, {0.60f, FootwearKind::Shoes}, {0.30f, FootwearKind::Boots}}};
     outfit.top = Pick(tops, Random01(parameters.seed, kSaltTop, 1u));
     outfit.legs = Pick(legs, Random01(parameters.seed, kSaltLegs, 1u));
     outfit.feet = Pick(feet, Random01(parameters.seed, kSaltFeet, 1u));
@@ -80,6 +81,28 @@ void ProjectUvsOntoSkin(RenderMesh& target, const SkinResult& skin, MeshPieceKin
         }
     }
 }
+// The skin of the head is a mesh of 5 mm triangles with a shallow hollow where the eye goes, and the front of the eyeball has to come
+// out through the hollow. The part of the skin that lies inside an eyeball is carried out onto its surface, so that skin and eye meet
+// without the skin showing through the eye. (The character mesh is not touched; this is the copy of it that is drawn.)
+void FitSkinAroundEyes(SkinResult& skin, const EyeSet& eyes) {
+    constexpr float kMargin = 0.0003f;
+    for (const MeshPiece& piece : skin.pieces) {
+        if (piece.kind != MeshPieceKind::Head) {
+            continue;
+        }
+        for (uint32_t v = piece.firstVertex; v < piece.firstVertex + piece.vertexCount; ++v) {
+            for (const EyeParts& eye : eyes.eyes) {
+                glm::vec3& p = skin.mesh.positions[v];
+                const glm::vec3 offset = p - eye.centre;
+                const float distance = glm::length(offset);
+                const float radius = EyeballRadiusToward(eye, p) + kMargin;
+                if (distance < radius && distance > 1e-9f) {
+                    p = eye.centre + offset / distance * radius;
+                }
+            }
+        }
+    }
+}
 
 }  // namespace
 
@@ -89,6 +112,15 @@ AppearanceSettings ChooseAppearance(const CharacterParameters& parameters) {
     settings.facialHair = ChooseFacialHair(parameters);
     settings.outfit = ChooseOutfit(Sanitised(parameters));
     return settings;
+}
+
+AppearanceSettings LowDetail(const AppearanceSettings& settings) {
+    AppearanceSettings low = settings;
+    low.skinTileSize = 128;
+    low.eyeTextureSize = 128;
+    low.outfit.tileSize = 128;
+    low.hairDetail = 0.4f;
+    return low;
 }
 
 CharacterAppearance GenerateAppearance(const CharacterMesh& character, const AppearanceSettings& settings, JobSystem* jobs) {
@@ -102,6 +134,9 @@ CharacterAppearance GenerateAppearance(const CharacterMesh& character, const App
     skinSettings.facialHair = settings.facialHair;
     appearance.skin = BuildSkin(character, appearance.traits, skinSettings, jobs);
 
+    // The clothes come before the hair, which lies on the outside of them.
+    appearance.outfit = BuildOutfit(character, settings.outfit, jobs);
+
     bool hasHead = false;
     for (const MeshPiece& piece : character.pieces) {
         hasHead = hasHead || piece.kind == MeshPieceKind::Head;
@@ -109,14 +144,18 @@ CharacterAppearance GenerateAppearance(const CharacterMesh& character, const App
     if (hasHead) {
         EyeSettings eyeSettings;
         eyeSettings.textureSize = settings.eyeTextureSize;
-        appearance.eyes = BuildEyes(character.parameters, appearance.traits, eyeSettings);
+        appearance.eyes = BuildEyes(character.parameters, appearance.traits, eyeSettings, jobs);
+        FitSkinAroundEyes(appearance.skin, appearance.eyes);
         for (EyeParts& eye : appearance.eyes.eyes) {
             ProjectUvsOntoSkin(eye.upperLid, appearance.skin, MeshPieceKind::Head);
             ProjectUvsOntoSkin(eye.lowerLid, appearance.skin, MeshPieceKind::Head);
         }
-        appearance.hair = BuildHair(character, appearance.traits, {settings.hairStyle, settings.facialHair}, jobs);
+        HairSettings hairSettings;
+        hairSettings.style = settings.hairStyle;
+        hairSettings.facialHair = settings.facialHair;
+        hairSettings.detail = settings.hairDetail;
+        appearance.hair = BuildHair(character, appearance.traits, hairSettings, &appearance.outfit, jobs);
     }
-    appearance.outfit = BuildOutfit(character, settings.outfit, jobs);
     return appearance;
 }
 

@@ -21,6 +21,7 @@ struct RibbonSet {
     std::vector<glm::vec3> colours;        // one for each vertex, linear
     std::vector<glm::vec3> roots;          // where each ribbon starts
     std::vector<uint32_t> firstVertex;     // the first vertex of each ribbon
+    bool strandTexture = false;            // the ribbons are cards that show the strand texture (see Hair.h): a renderer alpha-tests them with it
     size_t RibbonCount() const { return roots.size(); }
 };
 
@@ -28,6 +29,9 @@ struct RibbonSet {
 // there), `rootWidth` wide at the first point and `tipWidth` at the last, and the colour fades from `rootColour` to
 // `tipColour`. Every vertex follows `bone` with full weight.
 void AddRibbon(RibbonSet& set, const std::vector<glm::vec3>& points, glm::vec3 faceDirection, float rootWidth, float tipWidth, glm::vec3 rootColour, glm::vec3 tipColour,
-               Joint bone);
+               Joint bone, float uOffset = 0.0f);
+
+// Removes the ribbons that are marked in `drop` (one flag for each ribbon of the set, in order), and closes up everything else.
+void RemoveRibbons(RibbonSet& set, const std::vector<char>& drop);
 
 }  // namespace character

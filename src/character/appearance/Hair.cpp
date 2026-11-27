@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
+#include <utility>
 
 #include "character/BodyShape.h"
 #include "character/DetailShapes.h"
@@ -87,11 +89,30 @@ struct GrowthPlan {
 // The surface that locks must not enter: the head and, for long hair, the neck and body.
 class Obstacle {
 public:
-    Obstacle(const BodyShape& head, const BodyShape* body) : head(head), body(body) {}
+    Obstacle(const BodyShape& head, const BodyShape* body, std::vector<const TriangleGrid*> garments) : head(head), body(body), garments(std::move(garments)) {}
 
+    // Negative inside the head, the body or a garment. A lock lies on the outside of the cloth: it is held outside the outer surface of
+    // every garment, where a beard meets the collar of a jacket and long hair the shoulders of one.
     float Distance(glm::vec3 p) const {
-        const float h = head.Distance(p);
-        return body != nullptr ? std::min(h, body->Distance(p)) : h;
+        float d = head.Distance(p);
+        if (body != nullptr) {
+            d = std::min(d, body->Distance(p));
+        }
+        return std::min(d, ClothDistance(p));
+    }
+
+    bool HasCloth() const { return !garments.empty(); }
+
+    // Negative inside a garment; large when no garment is near.
+    float ClothDistance(glm::vec3 p) const {
+        float d = 1e9f;
+        for (const TriangleGrid* garment : garments) {
+            const TriangleGrid::Nearest nearest = garment->FindNearest(p, 0.03f);
+            if (nearest.distance < 1e8f) {
+                d = std::min(d, nearest.signedDistance);
+            }
+        }
+        return d;
     }
 
     glm::vec3 Gradient(glm::vec3 p) const {
@@ -104,6 +125,7 @@ public:
 private:
     const BodyShape& head;
     const BodyShape* body;
+    std::vector<const TriangleGrid*> garments;
 };
 
 std::vector<glm::vec3> Grow(const GrowthPlan& plan, const Obstacle& obstacle) {
@@ -133,15 +155,26 @@ std::vector<glm::vec3> Grow(const GrowthPlan& plan, const Obstacle& obstacle) {
             wanted = glm::normalize(wanted + sideways * (plan.wave / step) * 0.35f * std::sin(t * 9.0f + static_cast<float>(plan.salt % 97)));
         }
         direction = glm::normalize(glm::mix(direction, wanted, plan.stiffness));
-        position += direction * step;
-        // A lock never enters the head or the body: push it out along the surface, a few strands' thickness above it.
+        // A step is made in pieces of at most 8 mm, each checked, so that a long step cannot jump across a thin wall of cloth unseen.
+        const int pieces = std::max(1, static_cast<int>(std::ceil(step / 0.008f)));
         const float clearance = 0.0012f + plan.lift * std::min(1.0f, static_cast<float>(k) / 2.0f);
-        for (int pass = 0; pass < 3; ++pass) {
-            const float distance = obstacle.Distance(position);
-            if (distance >= clearance) {
-                break;
+        bool tuckedIn = false;
+        for (int piece = 0; piece < pieces && !tuckedIn; ++piece) {
+            position += direction * (step / static_cast<float>(pieces));
+            // A lock never enters the head or the body: push it out along the surface, a few strands' thickness above it.
+            for (int pass = 0; pass < 3; ++pass) {
+                const float distance = obstacle.Distance(position);
+                if (distance >= clearance) {
+                    break;
+                }
+                position += obstacle.Gradient(position) * (clearance - distance);
             }
-            position += obstacle.Gradient(position) * (clearance - distance);
+            // A lock that is still inside a garment after being pushed (a beard that has reached the inside of a collar) is tucked in:
+            // it ends where it meets the cloth.
+            tuckedIn = obstacle.ClothDistance(position) < -0.0005f;
+        }
+        if (tuckedIn) {
+            break;
         }
         points.push_back(position);
     }
@@ -160,11 +193,51 @@ void GrowAndAdd(RibbonSet& set, const std::vector<GrowthPlan>& plans, const Obst
                 JobSystem* jobs) {
     std::vector<std::vector<glm::vec3>> locks(plans.size());
     ParallelEach(jobs, static_cast<int>(plans.size()), [&](int i) { locks[i] = Grow(plans[i], obstacle); });
+    const size_t firstNewVertex = set.mesh.positions.size();
+    const size_t firstNewRibbon = set.RibbonCount();
     for (size_t i = 0; i < plans.size(); ++i) {
+        if (locks[i].size() < 2) {
+            continue;  // a lock that started inside a garment, or ended at once, is not drawn
+        }
         const glm::vec3 colour = StrandColour(traits, seed, plans[i].salt, static_cast<uint32_t>(i));
         // The face direction of a ribbon is the way the head faces where the lock lies, a third of the way along.
-        const glm::vec3 faceDirection = obstacle.Gradient(locks[i][locks[i].size() / 3]);
-        AddRibbon(set, locks[i], faceDirection, rootWidth, tipWidth, colour * 0.55f, colour * 1.1f, Joint::Head);
+        // A short lock, and a lock of a beard, lies along the skin it grows from; the gradient near a collar or a jaw is not steady
+        // enough to orient a card by.
+        const glm::vec3 faceDirection = plans[i].length < 0.06f ? plans[i].root.normal : obstacle.Gradient(locks[i][locks[i].size() / 3]);
+        // The strand texture repeats across the ribbon; each ribbon starts at another place in it.
+        const float uOffset = Random01(seed, plans[i].salt + 7u, static_cast<uint32_t>(i));
+        AddRibbon(set, locks[i], faceDirection, rootWidth, tipWidth, colour * 0.55f, colour * 1.1f, Joint::Head, uOffset);
+    }
+    // The edges of a ribbon that lies on a curved surface can dip into it; lift every vertex that is below the surface.
+    constexpr float kEdgeClearance = 0.0006f;
+    ParallelEach(jobs, static_cast<int>(set.mesh.positions.size() - firstNewVertex), [&](int i) {
+        glm::vec3& p = set.mesh.positions[firstNewVertex + i];
+        for (int pass = 0; pass < 2; ++pass) {
+            const float distance = obstacle.Distance(p);
+            if (distance >= kEdgeClearance) {
+                break;
+            }
+            p += obstacle.Gradient(p) * (kEdgeClearance - distance);
+        }
+    });
+    // A card that still has a vertex inside a garment (the push could not get it out of a fold of the cloth) is left out: hair that
+    // goes through a jacket is worse than a little less hair.
+    if (obstacle.HasCloth()) {
+        std::vector<char> drop(set.RibbonCount(), 0);
+        bool any = false;
+        for (size_t r = firstNewRibbon; r < set.RibbonCount(); ++r) {
+            const uint32_t first = set.firstVertex[r];
+            const uint32_t end = r + 1 < set.RibbonCount() ? set.firstVertex[r + 1] : static_cast<uint32_t>(set.mesh.positions.size());
+            for (uint32_t v = first; v < end && drop[r] == 0; ++v) {
+                if (obstacle.ClothDistance(set.mesh.positions[v]) < -0.0010f) {
+                    drop[r] = 1;
+                    any = true;
+                }
+            }
+        }
+        if (any) {
+            RemoveRibbons(set, drop);
+        }
     }
 }
 
@@ -182,14 +255,15 @@ struct StyleSetting {
 
 StyleSetting SettingOf(HairStyle style) {
     switch (style) {
+        // A ribbon is a card with a strand texture on it (see MakeHairTextures), so it is wider than a lock and there are fewer.
         case HairStyle::Short:
-            return {7000, 0.008f, 0.022f, 4, 0.35f, 0.6f, 0.0008f, 0.0f, 0.0034f};
+            return {6000, 0.008f, 0.024f, 4, 0.35f, 0.6f, 0.0008f, 0.0f, 0.0050f};
         case HairStyle::Medium:
-            return {4600, 0.070f, 0.110f, 9, 0.80f, 0.45f, 0.0035f, 0.0020f, 0.0050f};
+            return {4200, 0.070f, 0.110f, 9, 0.80f, 0.45f, 0.0035f, 0.0020f, 0.0085f};
         case HairStyle::Long:
-            return {5200, 0.300f, 0.380f, 16, 1.00f, 0.40f, 0.0040f, 0.0040f, 0.0055f};
+            return {4600, 0.300f, 0.380f, 16, 1.00f, 0.40f, 0.0040f, 0.0040f, 0.0090f};
         case HairStyle::Tied:
-            return {4600, 0.250f, 0.300f, 16, 0.0f, 0.55f, 0.0030f, 0.0015f, 0.0050f};
+            return {4200, 0.250f, 0.300f, 16, 0.0f, 0.55f, 0.0030f, 0.0015f, 0.0085f};
         default:
             return {0, 0, 0, 2, 0, 0, 0, 0, 0};
     }
@@ -202,7 +276,7 @@ void GrowScalpHair(HairSet& set, const TriangleMesh& head, const HeadLandmarks& 
         return;
     }
     const float scale = landmarks.scale;
-    const RootSampler sampler(head, [&](glm::vec3 p) { return ScalpWeight(landmarks, traits, p); }, 0.35f);
+    const RootSampler sampler(head, [&](glm::vec3 p) { return ScalpWeight(landmarks, traits, p); }, 0.05f);
     if (sampler.Empty()) {
         return;
     }
@@ -212,7 +286,7 @@ void GrowScalpHair(HairSet& set, const TriangleMesh& head, const HeadLandmarks& 
     const glm::vec3 whorl = (combedBack ? glm::vec3(0.0f, 1.690f, 0.095f) : glm::vec3(0.0f, 1.735f, -0.040f)) * scale;
     const float partX = 0.018f * scale;
     const glm::vec3 tie = glm::vec3(0.0f, 1.690f, -0.112f) * scale;
-    const int count = static_cast<int>(style.count * traits.hairDensity);
+    const int count = static_cast<int>(style.count * traits.hairDensity * std::clamp(settings.detail, 0.25f, 1.0f));
     std::vector<GrowthPlan> plans(count);
     for (int i = 0; i < count; ++i) {
         GrowthPlan& plan = plans[i];
@@ -307,18 +381,18 @@ void GrowFacialHair(HairSet& set, const TriangleMesh& head, const HeadLandmarks&
     }
     const bool beard = settings.facialHair == FacialHair::Beard;
     const float scale = landmarks.scale;
-    const RootSampler sampler(head, [&](glm::vec3 p) { return BeardWeight(landmarks, p); }, 0.35f);
+    const RootSampler sampler(head, [&](glm::vec3 p) { return BeardWeight(landmarks, p); }, 0.05f);
     if (sampler.Empty()) {
         return;
     }
-    const int count = beard ? 12000 : 6000;
+    const int count = static_cast<int>((beard ? 9000 : 6000) * std::clamp(settings.detail, 0.25f, 1.0f));
     std::vector<GrowthPlan> plans;
     for (int i = 0; i < count; ++i) {
         GrowthPlan plan;
         plan.salt = 600u;
         plan.root = sampler.Draw(seed, plan.salt, static_cast<uint32_t>(i));
         const float weight = BeardWeight(landmarks, plan.root.position);
-        if (weight < 0.25f || Random01(seed, 610u, static_cast<uint32_t>(i)) > weight * 1.1f) {
+        if (weight < 0.40f || Random01(seed, 610u, static_cast<uint32_t>(i)) > weight * 1.1f) {
             continue;
         }
         const glm::vec3 q = plan.root.position / scale;
@@ -334,13 +408,78 @@ void GrowFacialHair(HairSet& set, const TriangleMesh& head, const HeadLandmarks&
         plan.wave = beard ? 0.002f * scale * (Random01(seed, 630u, static_cast<uint32_t>(i)) - 0.5f) : 0.0f;
         plans.push_back(plan);
     }
-    GrowAndAdd(set.facial, plans, obstacle, traits, seed, (beard ? 0.0019f : 0.0009f) * scale, (beard ? 0.0007f : 0.0004f) * scale, jobs);
+    GrowAndAdd(set.facial, plans, obstacle, traits, seed, (beard ? 0.0046f : 0.0009f) * scale, (beard ? 0.0016f : 0.0004f) * scale, jobs);
 }
 
 }  // namespace
 
-HairSet BuildHair(const CharacterMesh& character, const PersonTraits& traits, const HairSettings& settings, JobSystem* jobs) {
+HairTextures MakeHairTextures(uint32_t seed, int width, int height) {
+    constexpr int kStrands = 7;  // across the card
+    HairTextures textures;
+    textures.strands = ByteImage(width, height, 4);
+    textures.normal = ByteImage(width, height, 4);
+    struct Strand {
+        float centre;
+        float halfWidth;
+        float length;  // how far along the card (0 root to 1 tip) the strand reaches
+        float shade;
+        float sway;
+        float phase;
+    };
+    std::vector<Strand> strands(kStrands);
+    for (int k = 0; k < kStrands; ++k) {
+        const uint32_t i = static_cast<uint32_t>(k);
+        strands[k].centre = (static_cast<float>(k) + 0.5f + 0.3f * (Random01(seed, 1100u, i) - 0.5f)) / kStrands;
+        strands[k].halfWidth = (0.30f + 0.12f * Random01(seed, 1101u, i)) / kStrands;
+        strands[k].length = 0.55f + 0.45f * Random01(seed, 1102u, i);
+        strands[k].shade = 0.70f + 0.45f * Random01(seed, 1103u, i);
+        strands[k].sway = (0.10f + 0.20f * Random01(seed, 1104u, i)) / kStrands;
+        strands[k].phase = 6.28f * Random01(seed, 1105u, i);
+    }
+    for (int y = 0; y < height; ++y) {
+        const float v = (static_cast<float>(y) + 0.5f) / static_cast<float>(height);
+        for (int x = 0; x < width; ++x) {
+            const float u = (static_cast<float>(x) + 0.5f) / static_cast<float>(width);
+            float alpha = 0.0f;
+            float shade = 0.0f;
+            float slope = 0.0f;  // across the strand, -1 to 1, for the normal
+            for (const Strand& strand : strands) {
+                if (v > strand.length) {
+                    continue;
+                }
+                // A strand wanders a little as it goes, and narrows to a point at its end.
+                const float taper = 1.0f - 0.85f * std::pow(v / strand.length, 2.0f);
+                const float halfWidth = strand.halfWidth * taper;
+                float across = u - (strand.centre + strand.sway * std::sin(v * 7.0f + strand.phase));
+                across -= std::round(across);  // the texture repeats across
+                if (std::abs(across) < halfWidth) {
+                    const float edge = std::abs(across) / halfWidth;
+                    alpha = 1.0f;
+                    // A lighter line down the middle of each strand, where it catches the light, and a little noise along it.
+                    shade = strand.shade * (0.85f + 0.25f * (1.0f - edge)) * (0.92f + 0.16f * Random01(static_cast<uint32_t>(x), static_cast<uint32_t>(y / 8), seed));
+                    slope = across / halfWidth;
+                }
+            }
+            uint8_t* albedo = textures.strands.Pixel(x, y);
+            const uint8_t grey = static_cast<uint8_t>(std::lround(glm::clamp(shade * 0.85f, 0.0f, 1.0f) * 255.0f));
+            albedo[0] = albedo[1] = albedo[2] = grey;
+            albedo[3] = alpha > 0.5f ? 255 : 0;
+            const glm::vec3 normal = glm::normalize(glm::vec3(0.9f * slope, 0.0f, 1.0f));
+            uint8_t* n = textures.normal.Pixel(x, y);
+            n[0] = static_cast<uint8_t>(std::lround((0.5f + 0.5f * normal.x) * 255.0f));
+            n[1] = 128;
+            n[2] = static_cast<uint8_t>(std::lround((0.5f + 0.5f * normal.z) * 255.0f));
+            n[3] = 255;
+        }
+    }
+    return textures;
+}
+
+HairSet BuildHair(const CharacterMesh& character, const PersonTraits& traits, const HairSettings& settings, const Outfit* outfit, JobSystem* jobs) {
     HairSet set;
+    set.scalp.strandTexture = true;
+    set.facial.strandTexture = settings.facialHair == FacialHair::Beard;
+    set.textures = MakeHairTextures(character.parameters.seed);
     size_t headPiece = character.pieces.size();
     for (size_t piece = 0; piece < character.pieces.size(); ++piece) {
         if (character.pieces[piece].kind == MeshPieceKind::Head) {
@@ -361,10 +500,20 @@ HairSet BuildHair(const CharacterMesh& character, const PersonTraits& traits, co
 
     const BodyShape headShape = BuildHeadShape(parameters);
     // Long hair also lies on the neck and the shoulders. The body is built as the generator built it, without head and hands.
-    const BodyShape bodyShape = BuildBodyShape(character.skeleton, parameters, {.girth = character.girth, .minimumRadius = 0.0132f, .includeHead = false, .includeHands = false});
+    // The thinnest part the generator allowed is the same fraction of its grid as when it was cut.
+    const BodyShape bodyShape = BuildBodyShape(character.skeleton, parameters, {.girth = character.girth, .minimumRadius = 0.55f * character.voxelMeters, .includeHead = false, .includeHands = false});
     const bool longHair = settings.style == HairStyle::Medium || settings.style == HairStyle::Long || settings.style == HairStyle::Tied;
-    const Obstacle obstacle(headShape, longHair ? &bodyShape : nullptr);
-    const Obstacle faceObstacle(headShape, nullptr);
+    // Hair lies outside every garment: the outer surfaces are found by their own grids, built here once for all the strands.
+    std::vector<std::unique_ptr<OuterSurface>> cloth;
+    std::vector<const TriangleGrid*> clothGrids;
+    if (outfit != nullptr) {
+        for (const Garment& garment : outfit->garments) {
+            cloth.push_back(std::make_unique<OuterSurface>(garment));
+            clothGrids.push_back(cloth.back()->grid.get());
+        }
+    }
+    const Obstacle obstacle(headShape, longHair ? &bodyShape : nullptr, clothGrids);
+    const Obstacle faceObstacle(headShape, &bodyShape, clothGrids);
 
     GrowScalpHair(set, head, landmarks, traits, settings, obstacle, parameters.seed, jobs);
     GrowEyebrows(set, grid, landmarks, parameters, traits);

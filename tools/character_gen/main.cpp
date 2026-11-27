@@ -296,12 +296,15 @@ double NumberOrExit(const std::string& option, const std::string& text, double l
 struct AppearanceChoices {
     bool dress = false;
     bool textures = false;
-    const char* hair = nullptr;
-    const char* beard = nullptr;
-    const char* top = nullptr;
-    const char* legs = nullptr;
-    const char* feet = nullptr;
+    // The position of the name given in the list of its option; -1 when the option was not given. They are checked as the command
+    // line is read, so that a mistake is reported before anything is made or written.
+    int hair = -1;
+    int beard = -1;
+    int top = -1;
+    int legs = -1;
+    int feet = -1;
     int skinSize = 1024;
+    bool lowDetail = false;
     bool look = false;
     float lookX = 0.0f, lookY = 1.0f, lookZ = 0.0f, lookHeight = 0.5f, lookTurn = 0.0f;
 };
@@ -323,22 +326,27 @@ int ChoiceOrExit(const std::string& option, const std::string& text, const std::
 
 character::AppearanceSettings ApplyChoices(character::AppearanceSettings settings, const AppearanceChoices& choices) {
     using namespace character;
-    if (choices.hair != nullptr) {
-        settings.hairStyle = static_cast<HairStyle>(ChoiceOrExit("--hair", choices.hair, {"bald", "short", "medium", "long", "tied"}));
+    if (choices.hair >= 0) {
+        settings.hairStyle = static_cast<HairStyle>(choices.hair);
     }
-    if (choices.beard != nullptr) {
-        settings.facialHair = static_cast<FacialHair>(ChoiceOrExit("--beard", choices.beard, {"none", "stubble", "beard"}));
+    if (choices.beard >= 0) {
+        settings.facialHair = static_cast<FacialHair>(choices.beard);
     }
-    if (choices.top != nullptr) {
-        settings.outfit.top = static_cast<TopKind>(ChoiceOrExit("--top", choices.top, {"none", "tshirt", "jacket", "both"}));
+    if (choices.top >= 0) {
+        settings.outfit.top = static_cast<TopKind>(choices.top);
     }
-    if (choices.legs != nullptr) {
-        settings.outfit.legs = static_cast<LegwearKind>(ChoiceOrExit("--legs", choices.legs, {"none", "trousers", "shorts"}));
+    if (choices.legs >= 0) {
+        settings.outfit.legs = static_cast<LegwearKind>(choices.legs);
     }
-    if (choices.feet != nullptr) {
-        settings.outfit.feet = static_cast<FootwearKind>(ChoiceOrExit("--feet", choices.feet, {"none", "shoes", "boots"}));
+    if (choices.feet >= 0) {
+        settings.outfit.feet = static_cast<FootwearKind>(choices.feet);
     }
-    settings.skinTileSize = choices.skinSize;
+    if (choices.lowDetail) {
+        settings = LowDetail(settings);
+    } else {
+        settings.skinTileSize = choices.skinSize;
+        settings.outfit.tileSize = std::min(choices.skinSize, 1024);
+    }
     return settings;
 }
 
@@ -416,9 +424,21 @@ int main(int argc, char** argv) {
             choices.dress = true;
             choices.textures = true;
         } else if (option == "--hair" || option == "--beard" || option == "--top" || option == "--legs" || option == "--feet") {
-            // The strings live in argv for the whole run.
-            const char* value = (i + 1 < argc) ? argv[++i] : "";
-            (option == "--hair" ? choices.hair : option == "--beard" ? choices.beard : option == "--top" ? choices.top : option == "--legs" ? choices.legs : choices.feet) = value;
+            const std::string value = next();
+            if (option == "--hair") {
+                choices.hair = ChoiceOrExit(option, value, {"bald", "short", "medium", "long", "tied"});
+            } else if (option == "--beard") {
+                choices.beard = ChoiceOrExit(option, value, {"none", "stubble", "beard"});
+            } else if (option == "--top") {
+                choices.top = ChoiceOrExit(option, value, {"none", "tshirt", "jacket", "both"});
+            } else if (option == "--legs") {
+                choices.legs = ChoiceOrExit(option, value, {"none", "trousers", "shorts"});
+            } else {
+                choices.feet = ChoiceOrExit(option, value, {"none", "shoes", "boots"});
+            }
+            choices.dress = true;
+        } else if (option == "--low-detail") {
+            choices.lowDetail = true;
             choices.dress = true;
         } else if (option == "--look") {
             // --look x y z height turn: also writes <name>_look.png, one view of a detail (metres, degrees).

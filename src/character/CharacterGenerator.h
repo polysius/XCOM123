@@ -58,6 +58,7 @@ struct CharacterMesh {
     std::vector<uint32_t> indices;  // three to a triangle, counter-clockwise seen from outside
     std::vector<MeshPiece> pieces;  // the closed surfaces the lists above are made of, in order
     float girth = 1.0f;             // the factor on the radii of the trunk and limbs that gave the mass
+    float voxelMeters = 0.024f;     // the grid the body was cut from, which also sets how thin a part of it can be
     float volumeCubicMeters = 0.0f;
     // The volume at the density of a living body. The head and the hands overlap the body a little at the neck and the wrists,
     // and the overlap is counted twice, which is less than 1 percent of the mass.

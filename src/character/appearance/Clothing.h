@@ -1,11 +1,13 @@
 #pragma once
 
+#include <memory>
 #include <vector>
 
 #include <glm/glm.hpp>
 
 #include "character/CharacterGenerator.h"
 #include "character/appearance/AppearanceTypes.h"
+#include "character/appearance/MeshTools.h"
 #include "material/MaterialGenerator.h"
 
 class JobSystem;
@@ -76,8 +78,19 @@ struct Garment {
     struct Solid {
         std::vector<glm::vec3> positions;
         std::vector<uint32_t> indices;
+        uint32_t outerFirstVertex = 0;  // the vertices from this one on are on the outer surface, the ones before it on the inner
     } solid;
     GarmentTextures textures;
+};
+
+// The outer surface of a garment as a surface of its own, with the grid that finds the nearest point of it and which side a point is on.
+// The things that are made after a garment and must stay outside it (the garments above it, the hair) are held clear of this.
+struct OuterSurface {
+    std::vector<glm::vec3> positions;
+    std::vector<uint32_t> indices;
+    std::unique_ptr<TriangleGrid> grid;
+
+    explicit OuterSurface(const Garment& garment);
 };
 
 struct Outfit {
@@ -92,5 +105,6 @@ Outfit BuildOutfit(const CharacterMesh& character, const OutfitSettings& setting
 // The least distance from the vertices and the triangle middles of a garment's inner surface (layer 0) to the triangles of the character. The
 // garment itself records this, and the tests measure it again independently with this function.
 float MeasureClearance(const CharacterMesh& character, const Garment& garment);
+float MeasureClearance(const TriangleGrid& character, const Garment& garment);
 
 }  // namespace character

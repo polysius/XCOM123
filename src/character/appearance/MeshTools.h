@@ -52,8 +52,12 @@ class TriangleGrid {
 public:
     struct Nearest {
         float distance = 1e9f;  // to the surface, 1e9 when no triangle is within the search radius
+        // Negative inside the surface. The side is read from the normal of the surface at the nearest point, interpolated between the
+        // smooth vertex normals of its triangle, which stays right where the nearest point is on an edge or a corner.
+        float signedDistance = 1e9f;
         glm::vec3 point{0.0f};
         glm::vec3 faceNormal{0.0f};
+        glm::vec3 surfaceNormal{0.0f, 1.0f, 0.0f};  // unit, pointing out of the surface, at `point`
         uint32_t triangle = 0;
     };
 
@@ -66,6 +70,7 @@ public:
     float Raycast(glm::vec3 origin, glm::vec3 direction, float maxDistance) const;
 
 private:
+    void FinishNearest(Nearest& nearest, glm::vec3 point) const;
     glm::ivec3 CellOf(glm::vec3 point) const;
     size_t CellIndex(glm::ivec3 cell) const;
 
@@ -74,6 +79,8 @@ private:
     glm::vec3 origin{0.0f};
     glm::ivec3 cellCount{1};
     float cellSize = 0.03f;
+    std::vector<glm::vec3> vertexNormals;  // smooth, for the side of a point
+    std::vector<char> onBoundary;          // per vertex: on an edge that only one triangle has, the rim of an open surface
     std::vector<uint32_t> cellStart;      // cell -> first entry of `cellTriangles`, one extra at the end
     std::vector<uint32_t> cellTriangles;  // the triangles of every cell one after the other
 };

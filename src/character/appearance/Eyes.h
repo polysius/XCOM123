@@ -7,6 +7,8 @@
 #include "character/appearance/Ribbons.h"
 #include "character/appearance/Traits.h"
 
+class JobSystem;
+
 // The eyes: two eyeballs, the lids around them and the lashes, set in the hollows that the head carves for them
 // (see HeadLandmarks in DetailShapes.h).
 //
@@ -47,6 +49,10 @@ struct EyeSettings {
     int textureSize = 512;  // 64 to 2048
 };
 
-EyeSet BuildEyes(const CharacterParameters& parameters, const PersonTraits& traits, const EyeSettings& settings = {});
+EyeSet BuildEyes(const CharacterParameters& parameters, const PersonTraits& traits, const EyeSettings& settings = {}, JobSystem* jobs = nullptr);
+
+// The radius of the eyeball, cornea included, in the direction of a point from its centre: a point nearer to the centre than this is
+// inside the eyeball.
+float EyeballRadiusToward(const EyeParts& eye, glm::vec3 point);
 
 }  // namespace character
