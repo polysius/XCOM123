@@ -49,6 +49,9 @@ public:
     void Push(glm::vec2 point, float radius, glm::vec2 velocity);
     // Adds `change` to the speed of the water at a world point, strongest at the centre.
     void Nudge(glm::vec2 point, float radius, glm::vec2 change);
+    // Raises or lowers the whole river to `metres` above its still level (below it when negative), and the sponge at the edges keeps
+    // it there. The water that is there moves to the new level at once; its ripples settle on their own.
+    void SetLevelAboveRest(float metres);
 
     bool IsBuilt() const { return built; }
     // The middle of the window, in world X and Z.

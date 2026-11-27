@@ -17,6 +17,8 @@ public:
     // Whether the Close button was pressed since the last call.
     bool TakeCloseRequest();
     bool IsPaletteOpen() const { return state.paletteOpen; }
+    // Zooms to show every node, as the toolbar's "Show all" does.
+    void ShowWholeGraph() { canvas.RequestFrame(false); }
     // Whether the editor window had the keyboard focus when it was last drawn.
     bool IsFocused() const { return focused; }
 

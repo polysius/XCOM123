@@ -33,6 +33,19 @@ NodePins PinsOf(const Graph& graph, const NodeRegistry& registry, const Node& no
     return pins;
 }
 
+Value PropertyValue(const Node& node, const NodeDescription& description, const std::string& name) {
+    const auto listed = std::find_if(description.properties.begin(), description.properties.end(),
+                                     [&](const PropertyDescription& property) { return property.name == name; });
+    if (listed == description.properties.end()) {
+        return DefaultValue(PinType::Float);
+    }
+    const auto held = node.properties.find(name);
+    if (held != node.properties.end() && TypeOf(held->second) == listed->type) {
+        return held->second;
+    }
+    return listed->defaultValue;
+}
+
 uint32_t Graph::AddNode(const std::string& type, glm::vec2 position) {
     Node node;
     node.id = nextId++;

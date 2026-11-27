@@ -108,4 +108,8 @@ struct NodePins {
 };
 NodePins PinsOf(const Graph& graph, const NodeRegistry& registry, const Node& node);
 
+// The value of a setting of a node (see PropertyDescription): what the node holds, or the default of its kind when it holds
+// none or one of another type. A name the kind does not list gives the default of a decimal number, 0.
+Value PropertyValue(const Node& node, const NodeDescription& description, const std::string& name);
+
 }  // namespace graph

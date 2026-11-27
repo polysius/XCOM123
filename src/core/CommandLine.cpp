@@ -68,6 +68,19 @@ int ParsePositiveInt(const std::string& option, const std::string& text) {
     return value;
 }
 
+// "character,material,shortcuts": the windows of the editor to open at the start.
+std::vector<std::string> ParseEditorPanels(const std::string& text) {
+    std::vector<std::string> panels;
+    std::stringstream stream(text);
+    for (std::string name; std::getline(stream, name, ',');) {
+        if (name != "character" && name != "material" && name != "shortcuts") {
+            throw std::invalid_argument("--editor-panels takes character, material and shortcuts, separated by commas, not '" + name + "'");
+        }
+        panels.push_back(name);
+    }
+    return panels;
+}
+
 // "x,y,z,yawDeg,pitchDeg"
 CameraPlacement ParseCameraPlacement(const std::string& text) {
     std::vector<float> numbers;
@@ -179,6 +192,9 @@ Options ParseCommandLine(int argc, char** argv) {
         } else if (option == "--editor-play") {
             options.editorPlay = true;
             options.editor = true;
+        } else if (option == "--editor-panels") {
+            options.editorPanels = ParseEditorPanels(arguments.ValueFor(option));
+            options.editor = true;
         } else if (option == "--help") {
             options.showHelp = true;
         } else {
@@ -224,6 +240,8 @@ void PrintUsage() {
         "  --editor                 open the graph editor over the scene at the start (F1 opens and closes it)\n"
         "  --editor-graph FILE      load a graph into the editor at the start (implies --editor)\n"
         "  --editor-play            run the graph in the editor at the start (implies --editor)\n"
+        "  --editor-panels LIST     open windows of the editor at the start: character, material, shortcuts, separated by\n"
+        "                           commas (implies --editor)\n"
         "Measuring:\n"
         "  --benchmark FRAMES       fly a fixed camera path for FRAMES frames without vsync, then report\n"
         "                           (exit code 2 if the window closes before all frames are measured)\n"

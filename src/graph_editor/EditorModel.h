@@ -24,6 +24,10 @@
 //
 // Positions given to the model are canvas points (see Viewport), and the pointer functions take the pointer's position as one.
 
+namespace graph_engine {
+class EngineHost;
+}
+
 namespace graph_editor {
 
 enum class SelectMode {
@@ -187,6 +191,11 @@ public:
     bool IsPlaying() const { return interpreter != nullptr; }
     // Does nothing unless playing.
     void Tick(float deltaSeconds);
+    // The engine that the nodes of a run act on; null (the start) means they do nothing. Each Play uses the host given at that
+    // time, and the host must outlive the model's runs.
+    void SetHost(graph_engine::EngineHost* newHost) { host = newHost; }
+    // A key went down: runs the "On Key Pressed" events that wait for it. Does nothing unless playing.
+    void SendKey(const std::string& keyName);
     // How brightly a node should light up, from 1 when it has just run to 0 a moment later.
     float NodeGlow(uint32_t node) const;
     // The lines of the log of the current or last run, and what stopped it if something did.
@@ -258,6 +267,7 @@ private:
     // A run: the interpreter reads its own copy of the graph, because it must not see edits.
     std::unique_ptr<graph::Graph> runGraph;
     std::unique_ptr<graph::Interpreter> interpreter;
+    graph_engine::EngineHost* host = nullptr;
     std::map<uint32_t, float> secondsSinceRun;  // by node, for the glow of a node that ran a moment ago
     std::vector<std::string> lastLog;           // kept after Stop so that the output can still be read
     std::string lastRuntimeError;

@@ -312,3 +312,31 @@ if(MSVC)
     target_compile_options(skinning_tests PRIVATE /W4 /permissive- /MP)
 endif()
 add_test(NAME skinning_tests COMMAND skinning_tests)
+
+# ---------------------------------------------------------------------------
+# Engine nodes: what a graph can do to the engine
+# ---------------------------------------------------------------------------
+# graph_engine_tests runs the engine nodes and the example graphs of assets/graphs against a host that records its calls, and the
+# editor model's play with that host. It builds the graph, the editor model and src/graph_engine, and nothing of the engine itself.
+file(GLOB GRAPH_ENGINE_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/graph_engine/*.cpp)
+add_executable(graph_engine_tests tests/GraphEngineTests.cpp ${GRAPH_ENGINE_SOURCES} ${GRAPH_SOURCES} ${GRAPH_EDITOR_SOURCES})
+target_include_directories(graph_engine_tests PRIVATE src)
+target_link_libraries(graph_engine_tests PRIVATE glm::glm)
+target_compile_definitions(graph_engine_tests PRIVATE GLM_FORCE_RADIANS GLM_FORCE_DEPTH_ZERO_TO_ONE
+    XCOM_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets")
+if(MSVC)
+    target_compile_options(graph_engine_tests PRIVATE /W4 /permissive- /MP)
+endif()
+add_test(NAME graph_engine_tests COMMAND graph_engine_tests)
+
+# panel_model_tests checks the models of the generator panels: the numbers of the controls, and the character and material generators
+# running in the background. It builds src/panel_model with the generators and the job system, and no ImGui.
+file(GLOB PANEL_MODEL_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/panel_model/*.cpp)
+add_executable(panel_model_tests tests/PanelModelTests.cpp ${PANEL_MODEL_SOURCES} ${CHARACTER_SOURCES} ${MATERIAL_SOURCES} src/core/JobSystem.cpp)
+target_include_directories(panel_model_tests PRIVATE src)
+target_link_libraries(panel_model_tests PRIVATE glm::glm)
+target_compile_definitions(panel_model_tests PRIVATE GLM_FORCE_RADIANS GLM_FORCE_DEPTH_ZERO_TO_ONE)
+if(MSVC)
+    target_compile_options(panel_model_tests PRIVATE /W4 /permissive- /MP)
+endif()
+add_test(NAME panel_model_tests COMMAND panel_model_tests)

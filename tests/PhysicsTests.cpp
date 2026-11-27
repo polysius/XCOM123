@@ -1639,6 +1639,38 @@ void APersonIsDrivenNoFasterThanTheTopSpeed() {
     Check(std::isfinite(world.GetBody(person).linearVelocity.x), "and a target that is not a number is ignored");
 }
 
+void ARetiredBodyTouchesNothingAndWhatRestedOnItFalls() {
+    PhysicsWorld world;
+    const uint32_t ground = AddGround(world);
+    const uint32_t lower = AddBox(world, {0.0f, 0.5f, 0.0f});
+    Simulate(world, 1.0f);
+    const uint32_t upper = AddBox(world, {0.0f, 1.5f, 0.0f});
+    Simulate(world, 1.5f);
+    Check(Near(world.GetBody(upper).position.y, 1.5f, 0.05f), "a box rests on the one under it");
+    world.Retire(lower);
+    Simulate(world, 1.0f);
+    Check(Near(world.GetBody(upper).position.y, 0.5f, 0.05f), "when the one under it is retired the box falls to the ground, through the place where it stood, y " +
+                                                                  std::to_string(world.GetBody(upper).position.y) + " asleep " + std::to_string(world.GetBody(upper).isAsleep));
+    Check(Near(world.GetBody(lower).position.y, 0.5f, 1e-5f) && glm::length(world.GetBody(lower).linearVelocity) == 0.0f, "and the retired body stays where it was and still");
+    world.Retire(ground);
+    Check(world.GetBody(ground).isStatic && !world.GetBody(ground).isParked, "a body that cannot move is left alone");
+    world.Retire(upper);
+    const uint32_t dropped = AddBox(world, {0.0f, 3.0f, 0.0f});
+    Simulate(world, 2.0f);
+    Check(Near(world.GetBody(dropped).position.y, 0.5f, 0.05f), "and bodies fall through a retired one for good");
+
+    // The place of a retired body is used again: bodies that come and go for ever do not make the world grow.
+    world.Retire(dropped);
+    const size_t bodyCount = world.BodyCount();
+    for (int round = 0; round < 50; ++round) {
+        world.Retire(AddBox(world, {5.0f, 3.0f, 0.0f}));
+    }
+    Check(world.BodyCount() <= bodyCount + 1, "adding and retiring bodies does not grow the world, bodies " + std::to_string(world.BodyCount()) + " from " + std::to_string(bodyCount));
+    const uint32_t fresh = AddBox(world, {8.0f, 3.0f, 0.0f});
+    Simulate(world, 2.0f);
+    Check(Near(world.GetBody(fresh).position.y, 0.5f, 0.05f) && !world.GetBody(fresh).isParked, "and a body that takes a retired place is a body like any other");
+}
+
 void TheSameWalkAlwaysGivesTheSameResult() {
     const auto run = [] {
         PhysicsWorld world;
@@ -1695,6 +1727,7 @@ int main() {
         {"AParkedPersonTouchesNothing", AParkedPersonTouchesNothing},
         {"APersonIsPlacedAtOnceAndStops", APersonIsPlacedAtOnceAndStops},
         {"APersonIsDrivenNoFasterThanTheTopSpeed", APersonIsDrivenNoFasterThanTheTopSpeed},
+        {"ARetiredBodyTouchesNothingAndWhatRestedOnItFalls", ARetiredBodyTouchesNothingAndWhatRestedOnItFalls},
         {"TheSameWalkAlwaysGivesTheSameResult", TheSameWalkAlwaysGivesTheSameResult},
         {"APileSettlesDownAndNothingFallsThroughTheGround", APileSettlesDownAndNothingFallsThroughTheGround},
         {"ThePileNeverGainsEnergy", ThePileNeverGainsEnergy},

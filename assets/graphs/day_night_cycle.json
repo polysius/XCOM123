@@ -1,0 +1,210 @@
+{
+  "version": 1,
+  "nextId": 11,
+  "variables": [
+    {
+      "name": "Hour",
+      "type": "float",
+      "value": {
+        "t": "float",
+        "v": 6
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "id": 1,
+      "type": "event.start",
+      "x": 40,
+      "y": 40
+    },
+    {
+      "id": 2,
+      "type": "debug.print_on_screen",
+      "x": 320,
+      "y": 40,
+      "inputs": {
+        "1": {
+          "t": "string",
+          "v": "Day and night: R starts the day again"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "event.tick",
+      "x": 40,
+      "y": 240
+    },
+    {
+      "id": 4,
+      "type": "variable.get",
+      "x": 40,
+      "y": 400,
+      "properties": {
+        "variable": {
+          "t": "string",
+          "v": "Hour"
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "math.multiply",
+      "x": 40,
+      "y": 480,
+      "inputs": {
+        "1": {
+          "t": "float",
+          "v": 0.5
+        }
+      }
+    },
+    {
+      "id": 6,
+      "type": "math.add",
+      "x": 320,
+      "y": 400
+    },
+    {
+      "id": 7,
+      "type": "variable.set",
+      "x": 600,
+      "y": 240,
+      "properties": {
+        "variable": {
+          "t": "string",
+          "v": "Hour"
+        }
+      }
+    },
+    {
+      "id": 8,
+      "type": "world.set_time_of_day",
+      "x": 880,
+      "y": 240
+    },
+    {
+      "id": 9,
+      "type": "event.key_pressed",
+      "x": 40,
+      "y": 620,
+      "properties": {
+        "Key": {
+          "t": "string",
+          "v": "R"
+        }
+      }
+    },
+    {
+      "id": 10,
+      "type": "variable.set",
+      "x": 320,
+      "y": 620,
+      "inputs": {
+        "1": {
+          "t": "float",
+          "v": 6
+        }
+      },
+      "properties": {
+        "variable": {
+          "t": "string",
+          "v": "Hour"
+        }
+      }
+    }
+  ],
+  "connections": [
+    {
+      "from": [
+        1,
+        0
+      ],
+      "to": [
+        2,
+        0
+      ]
+    },
+    {
+      "from": [
+        3,
+        1
+      ],
+      "to": [
+        5,
+        0
+      ]
+    },
+    {
+      "from": [
+        4,
+        0
+      ],
+      "to": [
+        6,
+        0
+      ]
+    },
+    {
+      "from": [
+        5,
+        0
+      ],
+      "to": [
+        6,
+        1
+      ]
+    },
+    {
+      "from": [
+        3,
+        0
+      ],
+      "to": [
+        7,
+        0
+      ]
+    },
+    {
+      "from": [
+        6,
+        0
+      ],
+      "to": [
+        7,
+        1
+      ]
+    },
+    {
+      "from": [
+        7,
+        0
+      ],
+      "to": [
+        8,
+        0
+      ]
+    },
+    {
+      "from": [
+        7,
+        1
+      ],
+      "to": [
+        8,
+        1
+      ]
+    },
+    {
+      "from": [
+        9,
+        0
+      ],
+      "to": [
+        10,
+        0
+      ]
+    }
+  ]
+}

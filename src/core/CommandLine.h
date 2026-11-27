@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <glm/glm.hpp>
 
@@ -51,6 +52,7 @@ struct Options {
     bool editor = false;          // open the editor from the start (F1 opens and closes it in an interactive run either way)
     std::string editorGraphPath;  // a graph file for the editor to load at the start; implies editor
     bool editorPlay = false;      // run the graph in the editor from the start; implies editor
+    std::vector<std::string> editorPanels;  // windows of the editor to open at the start (character, material, shortcuts); implies editor
 
     bool IsBenchmark() const { return benchmarkFrames > 0; }
     bool IsScreenshot() const { return !screenshotPath.empty(); }

@@ -31,6 +31,18 @@ enum class NodeKind {
 
 using NodeFunction = std::function<void(NodeContext&)>;
 
+// A setting of a node that is not a pin: a value a person picks once, such as the key an event waits for. It is kept in the
+// node's properties; a node that has none of it (one added from the palette) uses the default.
+struct PropertyDescription {
+    std::string name;
+    PinType type = PinType::Float;
+    Value defaultValue;
+    std::string tooltip;
+    // For a String property: the only values that mean something. The editor offers them in a list, and validation warns of
+    // any other text. Empty means any text will do.
+    std::vector<std::string> choices;
+};
+
 struct NodeDescription {
     std::string id;        // "math.add"; also what a saved graph calls the kind
     std::string title;     // "Add"
@@ -45,6 +57,12 @@ struct NodeDescription {
     bool continuesAutomatically = true;
     // A variable node works on the variable named in its "variable" property. Its pins are those of the variable's type.
     bool usesVariable = false;
+    // The settings a person can change on the node, besides its pins.
+    std::vector<PropertyDescription> properties;
+    // An event that waits for time to pass runs when the seconds in this Float property have gone by since the graph started (or
+    // since it last ran, when it repeats). Empty for every other event.
+    std::string timerSecondsProperty;
+    bool timerRepeats = false;
 };
 
 class NodeRegistry {

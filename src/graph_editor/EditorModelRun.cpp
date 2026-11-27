@@ -8,6 +8,8 @@
 #include "graph/GraphFile.h"
 #include "graph_editor/AutoLayout.h"
 #include "graph_editor/EditorModel.h"
+#include "graph_engine/EngineHost.h"
+#include "graph_engine/KeyNames.h"
 
 namespace graph_editor {
 namespace {
@@ -30,6 +32,7 @@ bool EditorModel::Play() {
     }
     runGraph = std::make_unique<graph::Graph>(graph);
     interpreter = std::make_unique<graph::Interpreter>(*runGraph, registry);
+    interpreter->SetHost(host);
     lastLog.clear();
     lastRuntimeError.clear();
     interpreter->Start();
@@ -65,6 +68,14 @@ void EditorModel::Tick(float deltaSeconds) {
         it = it->second > kGlowSeconds ? secondsSinceRun.erase(it) : std::next(it);
     }
     interpreter->Tick(deltaSeconds);
+    NoteNodesThatRan();
+}
+
+void EditorModel::SendKey(const std::string& keyName) {
+    if (interpreter == nullptr) {
+        return;
+    }
+    interpreter->FireEvent(graph_engine::kKeyPressedEvent, graph_engine::KeyFilter(keyName));
     NoteNodesThatRan();
 }
 

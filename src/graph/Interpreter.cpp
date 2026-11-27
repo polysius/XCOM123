@@ -1,6 +1,7 @@
 #include "graph/Interpreter.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace graph {
 namespace {
@@ -13,6 +14,9 @@ constexpr int kMaxDepth = 64;
 // Pure nodes ask for their inputs by calling each other, so a long chain of them uses a deep stack; this keeps well inside the
 // smallest stack a thread may have.
 constexpr int kMaxPureDepth = 200;
+
+// The shortest time between two runs of a timer event, so that a graph cannot ask for one every frame by typing 0.
+constexpr float kMinTimerSeconds = 0.05f;
 
 constexpr const char* kStartEvent = "event.start";
 constexpr const char* kTickEvent = "event.tick";
@@ -50,6 +54,18 @@ ValidationReport Validate(const Graph& graph, const NodeRegistry& registry) {
             if (named == node.properties.end() || !std::holds_alternative<std::string>(named->second) ||
                 graph.FindVariable(std::get<std::string>(named->second)) == nullptr) {
                 error(node.id, "Choose a variable that exists.");
+            }
+        }
+        for (const PropertyDescription& property : pins.description->properties) {
+            const auto held = node.properties.find(property.name);
+            if (held == node.properties.end()) {
+                continue;
+            }
+            if (TypeOf(held->second) != property.type) {
+                warning(node.id, "The setting '" + property.name + "' is not a " + PinTypeName(property.type) + ", so the default is used.");
+            } else if (!property.choices.empty() && std::holds_alternative<std::string>(held->second) &&
+                       std::find(property.choices.begin(), property.choices.end(), std::get<std::string>(held->second)) == property.choices.end()) {
+                warning(node.id, "'" + std::get<std::string>(held->second) + "' is not one of the choices for '" + property.name + "'.");
             }
         }
     }
@@ -185,6 +201,11 @@ const Value* NodeContext::Property(const std::string& name) const {
     return found != node.properties.end() ? &found->second : nullptr;
 }
 
+Value NodeContext::PropertyOrDefault(const std::string& name) const {
+    const NodeDescription* description = interpreter.registry.Find(node.type);
+    return description != nullptr ? PropertyValue(node, *description, name) : DefaultValue(PinType::Float);
+}
+
 // ---------------------------------------------------------------------------------------------------------------------
 // Interpreter
 // ---------------------------------------------------------------------------------------------------------------------
@@ -204,6 +225,9 @@ void Interpreter::Start() {
     log.clear();
     runtimeError.clear();
     randomState = seed;
+    timerElapsed.clear();
+    timersDone.clear();
+    executed.clear();
     RunEvents(kStartEvent, 0.0f);
 }
 
@@ -211,25 +235,63 @@ void Interpreter::Tick(float deltaSeconds) {
     if (!CanRun()) {
         return;
     }
+    executed.clear();
     RunEvents(kTickEvent, deltaSeconds);
+    RunTimers(deltaSeconds);
 }
 
-void Interpreter::RunEvents(const std::string& eventType, float deltaSeconds) {
+void Interpreter::FireEvent(const std::string& eventType, const EventFilter& accepts) {
+    if (!CanRun()) {
+        return;
+    }
     executed.clear();
+    RunEvents(eventType, 0.0f, accepts);
+}
+
+void Interpreter::RunEvents(const std::string& eventType, float deltaSeconds, const EventFilter& accepts) {
     for (const Node& node : graph.Nodes()) {
-        if (node.type != eventType) {
+        if (node.type != eventType || (accepts && !accepts(node))) {
             continue;
         }
-        stepsLeft = kMaxSteps;
-        depth = 0;
-        stopped = false;
-        currentDelta = deltaSeconds;
-        const int next = RunNode(node);
-        if (next >= 0) {
-            Follow({node.id, next});
-        }
+        RunEventNode(node, deltaSeconds);
+    }
+}
+
+void Interpreter::RunEventNode(const Node& node, float deltaSeconds) {
+    stepsLeft = kMaxSteps;
+    depth = 0;
+    stopped = false;
+    currentDelta = deltaSeconds;
+    const int next = RunNode(node);
+    if (next >= 0) {
+        Follow({node.id, next});
     }
     currentDelta = 0.0f;
+}
+
+void Interpreter::RunTimers(float deltaSeconds) {
+    if (!std::isfinite(deltaSeconds) || deltaSeconds < 0.0f) {
+        deltaSeconds = 0.0f;
+    }
+    for (const Node& node : graph.Nodes()) {
+        const NodeDescription* description = registry.Find(node.type);
+        if (description == nullptr || description->timerSecondsProperty.empty() || timersDone.count(node.id) != 0) {
+            continue;
+        }
+        const Value seconds = PropertyValue(node, *description, description->timerSecondsProperty);
+        const float period = std::isfinite(std::get<float>(seconds)) ? std::max(std::get<float>(seconds), kMinTimerSeconds) : kMinTimerSeconds;
+        float& elapsed = timerElapsed[node.id];
+        elapsed += deltaSeconds;
+        if (elapsed < period) {
+            continue;
+        }
+        if (description->timerRepeats) {
+            elapsed = std::fmod(elapsed, period);  // keeps the rhythm and drops the runs a long frame skipped
+        } else {
+            timersDone.insert(node.id);
+        }
+        RunEventNode(node, deltaSeconds);
+    }
 }
 
 void Interpreter::Follow(PinRef execOutput) {

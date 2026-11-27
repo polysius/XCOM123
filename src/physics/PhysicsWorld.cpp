@@ -198,10 +198,17 @@ uint32_t PhysicsWorld::AddBody(const BodyDescription& description) {
         body.inverseInertiaWorld = InverseInertiaInWorld(body);
     }
     UpdateBounds(body);
-    bodies.push_back(body);
     if (body.isStatic) {
         staticGridIsStale = true;
     }
+    // The place of a retired body is used again, so that adding and retiring bodies for ever does not grow the world.
+    if (!retiredBodies.empty()) {
+        const uint32_t reused = retiredBodies.back();
+        retiredBodies.pop_back();
+        bodies[reused] = body;
+        return reused;
+    }
+    bodies.push_back(body);
     return static_cast<uint32_t>(bodies.size() - 1);
 }
 
@@ -272,6 +279,35 @@ void PhysicsWorld::Disable(uint32_t index) {
     body.linearVelocity = glm::vec3(0.0f);
     body.angularVelocity = glm::vec3(0.0f);
     staticGridIsStale = true;
+}
+
+void PhysicsWorld::Retire(uint32_t index) {
+    Body& body = bodies[index];
+    if (body.isStatic || body.isKinematic) {
+        return;
+    }
+    Wake(index);
+    // A parked kinematic body is the way this world keeps a body out of play (see SetParked).
+    body.isKinematic = true;
+    body.isParked = true;
+    body.isPushable = false;
+    body.inverseMass = 0.0f;
+    body.inverseInertiaLocal = glm::vec3(0.0f);
+    body.inverseInertiaWorld = glm::mat3(0.0f);
+    body.linearVelocity = glm::vec3(0.0f);
+    body.angularVelocity = glm::vec3(0.0f);
+    ForgetContactsOf(index);
+    retiredBodies.push_back(index);
+    // What rests on it may sleep with no contact on record (a sleeping pair is not kept), so whatever is close is woken too.
+    constexpr float kRestingReach = 0.1f;
+    for (uint32_t other = 0; other < bodies.size(); ++other) {
+        const Body& near = bodies[other];
+        if (other != index && IsDynamic(near) && near.isAsleep && HasUsableBounds(near) &&
+            glm::all(glm::lessThanEqual(near.boundsMin, body.boundsMax + kRestingReach)) &&
+            glm::all(glm::lessThanEqual(body.boundsMin - kRestingReach, near.boundsMax))) {
+            Wake(other);
+        }
+    }
 }
 
 size_t PhysicsWorld::IslandSize(uint32_t index) const {
