@@ -32,7 +32,8 @@ constexpr glm::vec3 kPersonHalfSize{0.25f, 0.9f, 0.25f};  // a person is a box 5
 constexpr float kPersonDeadBand = 0.01f;   // a person who has moved less than this (metres) since the last call has not moved: the body stays
 constexpr float kPersonJump = 1.5f;        // a person further than this from their body (metres) is put down at once, not walked to
 constexpr uint32_t kNoPerson = 0xFFFFFFFFu;
-constexpr float kFallDepth = 80.0f;        // props this far below the ground under the heap have fallen out of the world
+constexpr float kTrustedGroundShare = 0.6f;  // props can be added this far out, as a share of the reach of the ground
+constexpr float kFallDepth = 80.0f;       // props this far below the ground under the heap have fallen out of the world
 
 const glm::vec3 kWoods[] = {{0.52f, 0.36f, 0.20f}, {0.45f, 0.30f, 0.16f}, {0.60f, 0.45f, 0.26f}, {0.38f, 0.26f, 0.15f}};
 const glm::vec3 kBarrelPaints[] = {{0.45f, 0.10f, 0.08f}, {0.10f, 0.22f, 0.40f}, {0.12f, 0.32f, 0.16f}, {0.30f, 0.30f, 0.32f}};
@@ -99,10 +100,15 @@ void PropField::Spawn(const CityLayout& city, const PropSettings& settings) {
     sphereBodies.clear();
     boxInstances.clear();
     sphereInstances.clear();
+    boxIds.clear();
+    sphereIds.clear();
+    nextPropId = 1;
 
     const OrientedRect area = settings.dropAt ? OrientedRect(Rect{*settings.dropAt - 8.0f, *settings.dropAt + 8.0f})
                                               : ChooseDropArea(city);
     const glm::vec2 centre = area.Center();
+    groundCentre = centre;
+    groundRadius = settings.colliderRadius;
 
     // The city near the drop area is solid ground for the props.
     for (size_t i = 0; i < city.boxes.size(); ++i) {
@@ -178,12 +184,14 @@ void PropField::Spawn(const CityLayout& city, const PropSettings& settings) {
             boxInstances.push_back(MakeInstance(description.shape.halfExtents, stone ? kStone : kWoods[i % 4],
                                                 stone ? SurfaceMaterial::Stone : SurfaceMaterial::Wood, 0.85f, seed));
             boxBodies.push_back(world.AddBody(description));
+            boxIds.push_back(nextPropId++);
         } else if (kind < 8) {  // a barrel, which is a box here, and hollow
             description.shape = Shape::Box({0.3f, 0.45f, 0.3f});
             description.density = 150.0f;
             description.material = {0.4f, 0.2f, 0.05f};
             boxInstances.push_back(MakeInstance(description.shape.halfExtents, kBarrelPaints[i % 4], SurfaceMaterial::Metal, 0.5f, seed));
             boxBodies.push_back(world.AddBody(description));
+            boxIds.push_back(nextPropId++);
         } else {  // a ball
             const float radius = 0.2f + 0.25f * Unit(random);
             description.shape = Shape::Sphere(radius);
@@ -191,6 +199,7 @@ void PropField::Spawn(const CityLayout& city, const PropSettings& settings) {
             description.material = {0.5f, 0.65f, 0.05f};
             sphereInstances.push_back(MakeInstance(glm::vec3(radius), kBallColours[i % 4], SurfaceMaterial::Rubber, 0.4f, seed));
             sphereBodies.push_back(world.AddBody(description));
+            sphereIds.push_back(nextPropId++);
         }
     }
     // The bodies of people come last, parked until someone needs one.
@@ -211,6 +220,93 @@ void PropField::Spawn(const CityLayout& city, const PropSettings& settings) {
     restarted.assign(boxBodies.size() + sphereBodies.size(), 0);
     pendingSeconds = 0.0f;
     RefreshInstances();
+}
+
+bool PropField::HasGroundAt(glm::vec2 point) const {
+    // The city boxes within the reach of the ground are solid, but near the edge of it a prop would land on a street that is only
+    // half there, so only the inner part counts.
+    return groundRadius > 0.0f && glm::distance(point, groundCentre) <= kTrustedGroundShare * groundRadius;
+}
+
+std::optional<PropField::PropSlot> PropField::FindProp(uint32_t id) const {
+    for (bool isSphere : {false, true}) {
+        const std::vector<uint32_t>& ids = isSphere ? sphereIds : boxIds;
+        const auto found = std::find(ids.begin(), ids.end(), id);
+        if (found != ids.end()) {
+            return PropSlot{isSphere, static_cast<size_t>(found - ids.begin())};
+        }
+    }
+    return std::nullopt;
+}
+
+uint32_t PropField::AddProp(PropKind kind, glm::vec3 position, uint32_t seed) {
+    if (!std::isfinite(position.y) || !HasGroundAt({position.x, position.z})) {
+        return 0;
+    }
+    std::mt19937 random(seed * 2654435761u + 17u);
+    BodyDescription description;
+    description.position = position;
+    const glm::vec3 axis = glm::normalize(glm::vec3(Unit(random) + 0.1f, Unit(random), Unit(random)));
+    description.orientation = glm::angleAxis(Unit(random) * 6.2831853f, axis);
+    description.angularVelocity = {Unit(random) - 0.5f, Unit(random) - 0.5f, Unit(random) - 0.5f};
+    const float instanceSeed = Unit(random);
+
+    const uint32_t id = nextPropId++;
+    if (kind == PropKind::Ball) {
+        const float radius = 0.2f + 0.25f * Unit(random);
+        description.shape = Shape::Sphere(radius);
+        description.density = 300.0f;
+        description.material = {0.5f, 0.65f, 0.05f};
+        sphereInstances.push_back(MakeInstance(glm::vec3(radius), kBallColours[seed % 4], SurfaceMaterial::Rubber, 0.4f, instanceSeed));
+        sphereBodies.push_back(world.AddBody(description));
+        sphereIds.push_back(id);
+        submergedVolume.push_back(0.0f);
+        restarted.push_back(0);
+    } else {
+        const bool isCrate = kind == PropKind::Crate;
+        description.shape = isCrate ? Shape::Box({0.25f + 0.3f * Unit(random), 0.25f + 0.25f * Unit(random), 0.25f + 0.3f * Unit(random)})
+                                    : Shape::Box({0.3f, 0.45f, 0.3f});
+        description.density = isCrate ? 450.0f : 150.0f;
+        description.material = isCrate ? Material{0.6f, 0.1f, 0.05f} : Material{0.4f, 0.2f, 0.05f};
+        boxInstances.push_back(isCrate ? MakeInstance(description.shape.halfExtents, kWoods[seed % 4], SurfaceMaterial::Wood, 0.85f, instanceSeed)
+                                       : MakeInstance(description.shape.halfExtents, kBarrelPaints[seed % 4], SurfaceMaterial::Metal, 0.5f, instanceSeed));
+        boxBodies.push_back(world.AddBody(description));
+        boxIds.push_back(id);
+        // The per prop lists of the water run over the boxes first and then the spheres, so a new box goes in before the spheres.
+        submergedVolume.insert(submergedVolume.begin() + static_cast<std::ptrdiff_t>(boxBodies.size() - 1), 0.0f);
+        restarted.insert(restarted.begin() + static_cast<std::ptrdiff_t>(boxBodies.size() - 1), 0);
+    }
+    RefreshInstances();
+    return id;
+}
+
+bool PropField::RemoveProp(uint32_t id) {
+    const std::optional<PropSlot> slot = FindProp(id);
+    if (!slot) {
+        return false;
+    }
+    std::vector<uint32_t>& bodies = slot->isSphere ? sphereBodies : boxBodies;
+    std::vector<uint32_t>& ids = slot->isSphere ? sphereIds : boxIds;
+    std::vector<BodyInstance>& instances = slot->isSphere ? sphereInstances : boxInstances;
+    const size_t waterSlot = slot->isSphere ? boxBodies.size() + slot->index : slot->index;
+    world.Retire(bodies[slot->index]);
+    bodies.erase(bodies.begin() + static_cast<std::ptrdiff_t>(slot->index));
+    ids.erase(ids.begin() + static_cast<std::ptrdiff_t>(slot->index));
+    instances.erase(instances.begin() + static_cast<std::ptrdiff_t>(slot->index));
+    submergedVolume.erase(submergedVolume.begin() + static_cast<std::ptrdiff_t>(waterSlot));
+    restarted.erase(restarted.begin() + static_cast<std::ptrdiff_t>(waterSlot));
+    RefreshInstances();
+    return true;
+}
+
+bool PropField::ApplyImpulse(uint32_t id, glm::vec3 impulse) {
+    const std::optional<PropSlot> slot = FindProp(id);
+    if (!slot) {
+        return false;
+    }
+    const uint32_t body = (slot->isSphere ? sphereBodies : boxBodies)[slot->index];
+    world.ApplyImpulse(body, impulse, world.GetBody(body).position);
+    return true;
 }
 
 void PropField::Update(float seconds) {

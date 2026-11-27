@@ -51,6 +51,11 @@ std::string NodeTitle(const graph::NodeRegistry& registry, const graph::Node& no
             return description->title + " " + std::get<std::string>(named->second);
         }
     }
+    // An event is told from another of its kind by its setting: the key it waits for, the seconds between its runs.
+    if (description->kind == graph::NodeKind::Event && !description->properties.empty()) {
+        const graph::PropertyDescription& setting = description->properties.front();
+        return description->title + " (" + graph::ToText(graph::PropertyValue(node, *description, setting.name)) + ")";
+    }
     return description->title;
 }
 

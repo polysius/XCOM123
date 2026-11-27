@@ -37,10 +37,26 @@ struct PropSettings {
     std::optional<float> riverBed;
 };
 
+enum class PropKind { Crate, Barrel, Ball };
+
 class PropField {
 public:
     // Drops the props above the largest square of `city`, or above its centre when it has none.
     void Spawn(const CityLayout& city, const PropSettings& settings);
+
+    // Props one at a time, for what happens while the program runs. Every prop has an id, from 1, that stays its own for the life of
+    // the field (Spawn gives the props it drops ids too, and starts again from 1).
+    //
+    // The ground of the props is the city near the place Spawn was given, which is where they can fall and rest: HasGroundAt says
+    // whether a point is over it. A field that was never spawned has none, and Spawn with a count of 0 makes the ground alone.
+    bool HasGroundAt(glm::vec2 point) const;
+    // Adds a prop that falls from `position`. `seed` decides its size and how it starts to turn. Returns its id, or 0 when there is
+    // no ground under the point.
+    uint32_t AddProp(PropKind kind, glm::vec3 position, uint32_t seed);
+    // Takes a prop out of the world. Returns false when there is no prop with this id.
+    bool RemoveProp(uint32_t id);
+    // Changes the speed of a prop by an impulse (newton seconds) at its middle. Returns false when there is no such prop.
+    bool ApplyImpulse(uint32_t id, glm::vec3 impulse);
 
     // The river the props share the world with, or null for none. The river must outlive the field.
     void SetWater(fluid::RiverWater* river) { water = river; }
@@ -78,7 +94,19 @@ private:
     // Applies the forces of the water to every prop for one step of `seconds`, and the reaction of the props on the water.
     void ApplyWater(float seconds);
 
+    // Where a prop is, by id: in the boxes or in the spheres, and which of them.
+    struct PropSlot {
+        bool isSphere = false;
+        size_t index = 0;
+    };
+    std::optional<PropSlot> FindProp(uint32_t id) const;
+
     PhysicsWorld world;
+    glm::vec2 groundCentre{0.0f};  // the middle of the city boxes that became solid, and how far they reach; 0 for none
+    float groundRadius = 0.0f;
+    uint32_t nextPropId = 1;
+    std::vector<uint32_t> boxIds;     // per box prop, in step with boxBodies
+    std::vector<uint32_t> sphereIds;
     glm::vec2 dropCentre{0.0f};
     float fallLimit = -100.0f;  // props that fall below this height have left the world and are taken out
     fluid::RiverWater* water = nullptr;

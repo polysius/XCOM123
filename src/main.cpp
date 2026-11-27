@@ -23,7 +23,9 @@
 #include "core/JobSystem.h"
 #include "demo/CharacterShowcase.h"
 #include "editor_ui/EditorSession.h"
+#include "engine_host/LiveEngineHost.h"
 #include "fluid/RiverWater.h"
+#include "graph_engine/SunPath.h"
 #include "material/MaterialLibrary.h"
 #include "physics/PropField.h"
 #include "render/IRenderModule.h"
@@ -91,25 +93,33 @@ float WindowAspectRatio(GLFWwindow* window) {
     return height > 0 ? static_cast<float>(width) / static_cast<float>(height) : 0.0f;
 }
 
-FrameInput MakeFrameInput(const FlyCamera& camera, float aspect, float sunElevation, float worldSeconds) {
+FrameInput MakeFrameInput(const FlyCamera& camera, float aspect, const graph_engine::SunSettings& sun, float worldSeconds) {
     FrameInput frame;
     frame.view = camera.ViewMatrix();
     frame.projection = camera.ProjectionMatrix(aspect);
     frame.cameraPosition = camera.Position();
-    frame.sunDirection = SunDirection(sunElevation, kSunAzimuthDegrees);
+    frame.sunDirection = SunDirection(sun.elevationDegrees, sun.azimuthDegrees);
     frame.timeSeconds = worldSeconds;
     return frame;
 }
 
+// The sun as the benchmark and the screenshot start it, at the default direction.
+graph_engine::SunSettings DefaultSun(const Options& options) {
+    return {options.sunElevationDegrees.value_or(kDefaultSunElevation), kSunAzimuthDegrees};
+}
+
 // Moves the crowd forward and gathers the people the camera can see into the frame. Returns the
-// time this took in milliseconds.
-double UpdateCrowd(Engine& engine, float deltaSeconds, FrameInput& frame) {
+// time this took in milliseconds. `host` is the engine host of a run that has one: the people that graphs spawned are drawn too.
+double UpdateCrowd(Engine& engine, float deltaSeconds, FrameInput& frame, const engine_host::LiveEngineHost* host = nullptr) {
     const Clock::time_point start = Clock::now();
     // The crowd simulates people near this point in the most detail.
     engine.crowd.SetFocusPoint(frame.cameraPosition);
     engine.crowd.SetMovableObstacles(engine.props.Obstacles());  // where the crates are, as of the last frame
     engine.crowd.Update(deltaSeconds);
     engine.crowd.CollectVisible(Frustum(frame.projection * frame.view), engine.visibleNpcs);
+    if (host != nullptr) {
+        host->AppendCharacters(engine.visibleNpcs);
+    }
     frame.npcs = engine.visibleNpcs;
     return MillisecondsBetween(start, Clock::now());
 }
@@ -225,11 +235,26 @@ FlyCamera MakeStartCamera(const Options& options, const Engine& engine) {
     return FlyCamera(start, std::atan2(-start.x, -start.z), -0.32f);
 }
 
+// What the engine host may reach in the running program.
+engine_host::WorldAccess MakeWorldAccess(Engine& engine, FlyCamera& camera, graph_engine::SunSettings& sun, const Options& options) {
+    engine_host::WorldAccess access;
+    access.camera = &camera;
+    access.sun = &sun;
+    access.city = &engine.city;
+    access.crowd = &engine.crowd;
+    access.props = &engine.props;
+    access.river = &engine.river;
+    access.renderer = engine.renderer;
+    access.worldSeed = options.seed;
+    return access;
+}
+
 int RunInteractive(Engine& engine, const Options& options) {
     FlyCamera camera = MakeStartCamera(options, engine);
-    float sunElevation = options.sunElevationDegrees.value_or(kDefaultSunElevation);
+    graph_engine::SunSettings sun = DefaultSun(options);
     TitleBar title(engine.window, engine.renderer->GetDeviceName());
-    editor_ui::EditorSession editor(*engine.renderer, engine.window, options);
+    engine_host::LiveEngineHost host(MakeWorldAccess(engine, camera, sun, options));
+    editor_ui::EditorSession editor(*engine.renderer, engine.window, options, &host);
 
     const Clock::time_point startTime = Clock::now();
     Clock::time_point previousFrame = startTime;
@@ -246,22 +271,23 @@ int RunInteractive(Engine& engine, const Options& options) {
         const float deltaSeconds = static_cast<float>(std::min(MillisecondsBetween(previousFrame, now) / 1000.0, 0.1));
         previousFrame = now;
 
+        host.BeginFrame(deltaSeconds);
         editor.BeginFrame(deltaSeconds);
         // The camera and the sun keys leave the pointer and the keys to the editor while it is using them. The camera still
         // sees every frame, so that a look that began before the editor took the pointer ends when the button is let go.
         camera.Update(engine.window, deltaSeconds, !editor.CapturesMouse(), !editor.CapturesKeyboard());
         if (!editor.CapturesKeyboard() && glfwGetKey(engine.window, GLFW_KEY_Z) == GLFW_PRESS) {
-            sunElevation -= kSunTurnSpeed * deltaSeconds;
+            sun.elevationDegrees -= kSunTurnSpeed * deltaSeconds;
         }
         if (!editor.CapturesKeyboard() && glfwGetKey(engine.window, GLFW_KEY_X) == GLFW_PRESS) {
-            sunElevation += kSunTurnSpeed * deltaSeconds;
+            sun.elevationDegrees += kSunTurnSpeed * deltaSeconds;
         }
-        sunElevation = std::clamp(sunElevation, -5.0f, 85.0f);
+        sun.elevationDegrees = std::clamp(sun.elevationDegrees, -5.0f, 85.0f);
 
         const float worldSeconds = options.worldTimeSeconds.value_or(0.0f) +
                                    static_cast<float>(MillisecondsBetween(startTime, now) / 1000.0);
-        FrameInput frame = MakeFrameInput(camera, aspect, sunElevation, worldSeconds);
-        const double crowdMs = UpdateCrowd(engine, deltaSeconds, frame);
+        FrameInput frame = MakeFrameInput(camera, aspect, sun, worldSeconds);
+        const double crowdMs = UpdateCrowd(engine, deltaSeconds, frame, &host);
         UpdateProps(engine, deltaSeconds, frame);
         UpdateCharacters(engine, worldSeconds, frame);
         UpdateRiver(engine, deltaSeconds, frame);
@@ -297,7 +323,7 @@ int RunBenchmark(Engine& engine, const Options& options) {
     }
     BenchmarkRecorder recorder(shotNames);
     FlyCamera camera = MakeStartCamera(options, engine);
-    const float sunElevation = options.sunElevationDegrees.value_or(kDefaultSunElevation);
+    const graph_engine::SunSettings sun = DefaultSun(options);
     const float startSeconds = options.worldTimeSeconds.value_or(0.0f);
     TitleBar title(engine.window, engine.renderer->GetDeviceName());
 
@@ -315,7 +341,7 @@ int RunBenchmark(Engine& engine, const Options& options) {
 
         const float aspect = std::max(WindowAspectRatio(engine.window), 0.01f);
         const float worldSeconds = startSeconds + static_cast<float>(frameIndex) * kFixedTimeStep;
-        FrameInput frame = MakeFrameInput(camera, aspect, sunElevation, worldSeconds);
+        FrameInput frame = MakeFrameInput(camera, aspect, sun, worldSeconds);
         const double crowdMs = UpdateCrowd(engine, kFixedTimeStep, frame);
         UpdateProps(engine, kFixedTimeStep, frame);
         UpdateCharacters(engine, worldSeconds, frame);
@@ -381,8 +407,9 @@ void PreRollWorld(Engine& engine, float seconds) {
 
 // Renders a few frames from a fixed camera at a fixed world time and saves the last one.
 int RunScreenshot(Engine& engine, const Options& options) {
-    const FlyCamera camera = MakeStartCamera(options, engine);
-    const float sunElevation = options.sunElevationDegrees.value_or(kDefaultSunElevation);
+    // The camera and the sun are changed only by the graph of an editor that is there, through the engine host.
+    FlyCamera camera = MakeStartCamera(options, engine);
+    graph_engine::SunSettings sun = DefaultSun(options);
     const int frames = options.screenshotFrames;
     // The last frame shows the world at `--time`; the frames before it lead up to it.
     const float renderedSeconds = static_cast<float>(frames) * kFixedTimeStep;
@@ -391,9 +418,11 @@ int RunScreenshot(Engine& engine, const Options& options) {
     engine.crowd.SetFocusPoint(camera.Position());
     // Only a screenshot that asks for the editor has one; every other screenshot is drawn exactly as before. A graph that cannot be
     // loaded ends the run before the long part: nobody is there to read a message, and a screenshot of the wrong graph would mislead.
+    std::optional<engine_host::LiveEngineHost> host;
     std::optional<editor_ui::EditorSession> editor;
     if (options.editor) {
-        editor.emplace(*engine.renderer, engine.window, options);
+        host.emplace(MakeWorldAccess(engine, camera, sun, options));
+        editor.emplace(*engine.renderer, engine.window, options, &*host);
         if (!editor->StartupError().empty()) {
             std::cerr << "Cannot take the screenshot: " << editor->StartupError() << "\n";
             return 1;
@@ -407,14 +436,16 @@ int RunScreenshot(Engine& engine, const Options& options) {
         }
         const float aspect = std::max(WindowAspectRatio(engine.window), 0.01f);
         const float worldSeconds = firstFrameSeconds + static_cast<float>(frameIndex + 1) * kFixedTimeStep;
-        FrameInput frame = MakeFrameInput(camera, aspect, sunElevation, worldSeconds);
-        UpdateCrowd(engine, kFixedTimeStep, frame);
+        // The graph runs first, so that what it does to the camera and the sun is in this frame.
+        if (editor) {
+            host->BeginFrame(kFixedTimeStep);
+            editor->BeginFrame(kFixedTimeStep);
+        }
+        FrameInput frame = MakeFrameInput(camera, aspect, sun, worldSeconds);
+        UpdateCrowd(engine, kFixedTimeStep, frame, host ? &*host : nullptr);
         UpdateProps(engine, kFixedTimeStep, frame);
         UpdateCharacters(engine, worldSeconds, frame);
         UpdateRiver(engine, kFixedTimeStep, frame);
-        if (editor) {
-            editor->BeginFrame(kFixedTimeStep);
-        }
 
         const bool lastFrame = frameIndex + 1 == frames;
         if (!lastFrame) {

@@ -97,6 +97,9 @@ public:
     // Takes a body out of the simulation for good: it stays where it is, as an immovable body, and costs
     // almost nothing. For bodies that have fallen out of the world.
     void Disable(uint32_t index);
+    // Takes a moving body out of play, as removing it would: it touches nothing and costs nothing from now on, and the bodies that
+    // rested on it are woken. The index stays used, and the body cannot come back. Static and kinematic bodies are left alone.
+    void Retire(uint32_t index);
 
     // Simulates `seconds`, in as many fixed steps as fit, carrying the remainder to the next call.
     void Update(float seconds);

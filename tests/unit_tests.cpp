@@ -130,6 +130,11 @@ void CommandLineReadsTheEditorOptions() {
     Check(withGraph.editor && withGraph.editorGraphPath == "my graph.json", "--editor-graph names a file and opens the editor");
     Check(Parse({"--editor-play"}).editor && Parse({"--editor-play"}).editorPlay, "--editor-play opens the editor and runs the graph");
     Check(Parse({"--editor", "--screenshot", "a.png"}).editor, "a screenshot may show the editor");
+    Check(defaults.editorPanels.empty(), "no window of the editor is opened by default");
+    const Options withPanels = Parse({"--editor-panels", "character,material"});
+    Check(withPanels.editor && withPanels.editorPanels == std::vector<std::string>({"character", "material"}), "--editor-panels names windows and opens the editor");
+    Check(IsRejected({"--editor-panels", "weather"}) && IsRejected({"--editor-panels"}), "a window that does not exist, and none named");
+    Check(IsRejected({"--editor-panels", "character", "--benchmark", "100"}), "the benchmark must not have the editor windows either");
     Check(IsRejected({"--editor", "--benchmark", "100"}), "the benchmark must not have the editor");
     Check(IsRejected({"--editor-graph"}), "a missing graph file name");
     Check(IsRejected({"--editor-graph", "--novsync"}), "an option where the graph file name should be");
@@ -478,6 +483,66 @@ CityLayout CityWithAWideRiver() {
     return city;
 }
 
+void PropsAreAddedOneAtATimeKickedAndRemoved() {
+    physics::PropField props;
+    Check(!props.HasGroundAt({0.0f, 0.0f}) && props.AddProp(physics::PropKind::Crate, {0.0f, 3.0f, 0.0f}, 1) == 0, "a field that was not spawned has no ground, and takes no prop");
+    props.Spawn(CityWithASquare(), {.count = 0, .seed = 1, .dropAt = glm::vec2(0.0f)});
+    Check(props.HasGroundAt({0.0f, 0.0f}) && props.Count() == 0, "a spawn of no props makes the ground alone");
+    Check(!props.HasGroundAt({5000.0f, 0.0f}), "far from the ground there is none");
+
+    const uint32_t crate = props.AddProp(physics::PropKind::Crate, {0.0f, 3.0f, 0.0f}, 1);
+    const uint32_t barrel = props.AddProp(physics::PropKind::Barrel, {2.0f, 3.0f, 0.0f}, 2);
+    const uint32_t ball = props.AddProp(physics::PropKind::Ball, {-2.0f, 3.0f, 0.0f}, 3);
+    Check(crate != 0 && barrel != 0 && ball != 0 && crate != barrel && barrel != ball && crate != ball, "each prop has an id of its own, and not 0");
+    Check(props.Count() == 3 && props.Boxes().size() == 2 && props.Spheres().size() == 1, "two boxes and a sphere");
+    Check(props.AddProp(physics::PropKind::Crate, {500.0f, 3.0f, 0.0f}, 1) == 0, "no prop is added where there is no ground");
+
+    for (int step = 0; step < 5 * 60; ++step) {
+        props.Update(1.0f / 60.0f);
+    }
+    Check(InstancesAreFinite(props.Boxes()) && InstancesAreFinite(props.Spheres()), "the props have numbers that are numbers");
+    for (const BodyInstance& instance : props.Boxes()) {
+        Check(instance.center.y > 0.15f && instance.center.y < 1.0f, "a box has fallen and rests on the ground");
+    }
+
+    // A kick sends the ball rolling along Z, and an id that is not a prop is refused.
+    const float before = props.Spheres()[0].center.z;
+    Check(props.ApplyImpulse(ball, {0.0f, 0.0f, 500.0f}) && !props.ApplyImpulse(9999, {0.0f, 0.0f, 1.0f}), "an impulse reaches the prop with the id and no other");
+    for (int step = 0; step < 60; ++step) {
+        props.Update(1.0f / 60.0f);
+    }
+    Check(props.Spheres()[0].center.z - before > 0.3f, "the kicked ball has rolled on");
+
+    // Removing the barrel leaves the crate and the ball with their ids, and the place of the barrel free.
+    glm::vec3 barrelAt(0.0f);
+    for (const BodyInstance& instance : props.Boxes()) {
+        if (instance.halfSize.y == 0.45f) {  // the barrel is the box 90 cm tall
+            barrelAt = instance.center;
+        }
+    }
+    Check(barrelAt.y > 0.3f, "the barrel stands on the ground");
+    Check(props.RemoveProp(barrel) && !props.RemoveProp(barrel), "a prop is removed once");
+    Check(props.Count() == 2 && props.Boxes().size() == 1, "one box is left");
+    // The bodies that move in the physics world are the props and nothing else: the removed barrel is out of play, not left standing.
+    size_t movingBodies = 0;
+    for (size_t index = 0; index < props.World().BodyCount(); ++index) {
+        const physics::Body& body = props.World().GetBody(static_cast<uint32_t>(index));
+        movingBodies += !body.isStatic && !body.isKinematic ? 1 : 0;
+    }
+    Check(movingBodies == props.Count(), "and the physics has no body for the barrel any more, moving bodies " + std::to_string(movingBodies));
+    Check(props.ApplyImpulse(crate, {0.0f, 1.0f, 0.0f}) && props.ApplyImpulse(ball, {0.0f, 1.0f, 0.0f}), "the other props keep their ids");
+    const uint32_t onto = props.AddProp(physics::PropKind::Crate, barrelAt + glm::vec3(0.0f, 3.0f, 0.0f), 4);
+    for (int step = 0; step < 3 * 60; ++step) {
+        props.Update(1.0f / 60.0f);
+    }
+    Check(onto != 0 && props.Boxes().size() == 2, "a crate is dropped where the barrel was");
+    const float height = props.Boxes().back().center.y;  // the newest box is last
+    Check(height < 0.7f, "and falls to the ground: the removed barrel is not there to rest on, " + std::to_string(height));
+
+    props.Spawn(CityWithASquare(), {.count = 5, .seed = 1});
+    Check(props.Count() == 5 && props.RemoveProp(1) && props.Count() == 4, "a new spawn starts the ids again at 1");
+}
+
 struct PropsInARiver {
     fluid::RiverWater river;
     physics::PropField props;
@@ -594,6 +659,28 @@ void ACrateOfWoodSettlesAtTheDraftItsDensityGivesAndFallsAsleep() {
     const float draft = DraftOf(scene.props.Boxes().front(), scene.river.RestLevel());
     Check(draft > 0.42f && draft < 0.49f, "a crate of density 450 sinks 45% of its height into the water, " + std::to_string(draft));
     Check(scene.props.AwakeCount() == 0, "and comes to rest and falls asleep, awake " + std::to_string(scene.props.AwakeCount()));
+}
+
+void PropsAddedAndRemovedOverARiverStillFloat() {
+    PropsInARiver scene(6, 2);
+    // Props come and go while the water runs: the list the water keeps for each prop must stay in step with the props.
+    Check(scene.props.RemoveProp(1) && scene.props.RemoveProp(2), "two props are taken out");
+    const uint32_t crate = scene.props.AddProp(physics::PropKind::Crate, {scene.river.Centre().x + 3.0f, scene.river.RestLevel() + 3.0f, scene.river.Centre().y}, 7);
+    const uint32_t ball = scene.props.AddProp(physics::PropKind::Ball, {scene.river.Centre().x - 3.0f, scene.river.RestLevel() + 3.0f, scene.river.Centre().y}, 8);
+    Check(crate != 0 && ball != 0 && scene.props.Count() == 6, "and two are added over the river");
+    for (int frame = 0; frame < 15 * 60; ++frame) {
+        scene.Frame();
+    }
+    Check(InstancesAreFinite(scene.props.Boxes()) && InstancesAreFinite(scene.props.Spheres()), "every prop has numbers that are numbers");
+    const float surface = scene.river.RestLevel();
+    int floatingCrates = 0;
+    for (const BodyInstance& box : scene.props.Boxes()) {
+        floatingCrates += box.roughness >= 0.6f && box.material != static_cast<float>(SurfaceMaterial::Stone) && std::abs(box.center.y - surface) < 0.9f ? 1 : 0;
+    }
+    Check(floatingCrates >= 1, "a crate that was added floats at the surface, " + std::to_string(floatingCrates));
+    for (const BodyInstance& ball : scene.props.Spheres()) {
+        Check(std::abs(ball.center.y - surface) < 0.9f, "a ball floats at the surface, " + std::to_string(ball.center.y - surface));
+    }
 }
 
 void AHeapOfPropsFloatsAndSettlesInsteadOfChurningForEver() {
@@ -1026,6 +1113,7 @@ int main() {
         {"PropsInAHeapCannotBePushed", PropsInAHeapCannotBePushed},
         {"PeopleTakeBodiesKeepThemAndAreCountedWhenThereAreNone", PeopleTakeBodiesKeepThemAndAreCountedWhenThereAreNone},
         {"ABodyFollowsItsPersonAndStopsWhenTheyAreNotLookedAfter", ABodyFollowsItsPersonAndStopsWhenTheyAreNotLookedAfter},
+        {"PropsAreAddedOneAtATimeKickedAndRemoved", PropsAreAddedOneAtATimeKickedAndRemoved},
         {"PropsAreDroppedOverTheLargestSquare", PropsAreDroppedOverTheLargestSquare},
         {"PropsAreTheSameEveryTime", PropsAreTheSameEveryTime},
         {"APropOnAHeightenedGroundIsDroppedOnItToo", APropOnAHeightenedGroundIsDroppedOnItToo},
@@ -1035,6 +1123,7 @@ int main() {
         {"PropsInARiverAreTheSameEveryTime", PropsInARiverAreTheSameEveryTime},
         {"TheHeapIsDroppedWhereAskedAndOnlyThere", TheHeapIsDroppedWhereAskedAndOnlyThere},
         {"ACrateOfWoodSettlesAtTheDraftItsDensityGivesAndFallsAsleep", ACrateOfWoodSettlesAtTheDraftItsDensityGivesAndFallsAsleep},
+        {"PropsAddedAndRemovedOverARiverStillFloat", PropsAddedAndRemovedOverARiverStillFloat},
         {"AHeapOfPropsFloatsAndSettlesInsteadOfChurningForEver", AHeapOfPropsFloatsAndSettlesInsteadOfChurningForEver},
         {"ACurrentCarriesWhatFloatsWithIt", ACurrentCarriesWhatFloatsWithIt},
         {"ASleepingCrateIsWokenByTheWaterMovingUnderIt", ASleepingCrateIsWokenByTheWaterMovingUnderIt},

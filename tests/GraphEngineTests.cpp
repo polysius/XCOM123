@@ -21,11 +21,13 @@
 #include "graph/GraphFile.h"
 #include "graph/Interpreter.h"
 #include "graph/NodeRegistry.h"
+#include "graph_editor/EditorModel.h"
 #include "graph_engine/EngineHost.h"
 #include "graph_engine/EngineNodes.h"
 #include "graph_engine/ExampleGraphs.h"
 #include "graph_engine/KeyNames.h"
 #include "graph_engine/MockEngineHost.h"
+#include "graph_engine/SunPath.h"
 
 #ifndef XCOM_ASSET_DIR
 #error "XCOM_ASSET_DIR must name the assets folder of the repository"
@@ -558,6 +560,7 @@ void AfterNSecondsRunsOnceAndStartAgainStartsTheClockAgain() {
     interpreter.Start();
     Check(interpreter.Log().empty(), "starting again clears the log");
     interpreter.Tick(0.125f);
+    Check(interpreter.Log().empty(), "the new run is not at 0.25 seconds yet after 0.125, whatever the clock said before");
     interpreter.Tick(0.125f);
     Check(interpreter.Log().size() == 1, "and the clock runs again from 0: once more at 0.25 seconds");
 }
@@ -614,6 +617,63 @@ void AGraphThatUsesEngineNodesSavesAndLoadsBackTheSame() {
     Check(spawn != loaded.Nodes().end() && std::get<std::string>(spawn->inputValues.at(8)) == "overcoat" && std::get<float>(spawn->inputValues.at(2)) == 1.9f,
           "a character kept the values typed into its pins");
     Check(!graph::HasErrors(graph::Validate(loaded, fixture.registry)), "the loaded graph has no errors");
+}
+
+// ----- The editor model with a host ---------------------------------------------------------------------------------------
+
+void ThePlayingEditorActsOnTheHostAndGetsItsKeys() {
+    graph::NodeRegistry registry;
+    graph::RegisterStandardNodes(registry);
+    RegisterEngineNodes(registry);
+    graph_editor::EditorModel model(registry);
+    MockEngineHost host;
+
+    const uint32_t start = model.AddNode("event.start", {0.0f, 0.0f});
+    const uint32_t sun = model.AddNode("world.set_sun_elevation", {200.0f, 0.0f});
+    model.SetInputValue(sun, 1, 30.0f);
+    const uint32_t key = model.AddNode(kKeyPressedEvent, {0.0f, 200.0f});
+    model.SetProperty(key, kKeyProperty, std::string("K"));
+    const uint32_t crowd = model.AddNode("characters.set_crowd_size", {200.0f, 200.0f});
+    model.SetInputValue(crowd, 1, 500);
+    Check(model.ConnectPins({{start, 0}, true}, {{sun, 0}, false}).accepted, "start to sun");
+    Check(model.ConnectPins({{key, 0}, true}, {{crowd, 0}, false}).accepted, "key to crowd");
+
+    model.SetHost(&host);
+    Check(model.Play(), "the graph plays");
+    Check(host.CountOf("SetSunElevation") == 1 && Near(host.LastOf("SetSunElevation")->numbers[0], 30.0f), "Start reaches the host given before Play");
+    model.SendKey("J");
+    Check(host.CountOf("SetCrowdSize") == 0, "a key nobody waits for does nothing");
+    model.SendKey("K");
+    Check(host.CountOf("SetCrowdSize") == 1 && host.LastOf("SetCrowdSize")->numbers[0] == 500.0f, "the key an event waits for runs it");
+    Check(model.NodeGlow(crowd) > 0.0f && model.NodeGlow(key) > 0.0f, "and the nodes that ran light up");
+
+    model.Stop();
+    model.SendKey("K");
+    Check(host.CountOf("SetCrowdSize") == 1, "a key after Stop does nothing");
+    host.ClearCalls();
+    model.SetHost(nullptr);
+    Check(model.Play() && host.Calls().empty(), "a run with no host acts on nothing, and does not fail");
+}
+
+// ----- The sun -------------------------------------------------------------------------------------------------------
+
+void TheSunFollowsTheHourOfTheDay() {
+    const SunSettings sunrise = SunAtTimeOfDay(6.0f);
+    const SunSettings noon = SunAtTimeOfDay(12.0f);
+    const SunSettings sunset = SunAtTimeOfDay(18.0f);
+    const SunSettings midnight = SunAtTimeOfDay(0.0f);
+    Check(Near(sunrise.elevationDegrees, 0.0f, 0.01f) && Near(sunrise.azimuthDegrees, 90.0f, 0.01f), "the sun rises in the east (+X) at 6");
+    Check(Near(noon.elevationDegrees, kNoonSunElevation, 0.01f) && Near(noon.azimuthDegrees, 180.0f, 0.01f), "it is highest in the south (-Z) at 12");
+    Check(Near(sunset.elevationDegrees, 0.0f, 0.01f) && Near(sunset.azimuthDegrees, 270.0f, 0.01f), "it sets in the west at 18");
+    Check(midnight.elevationDegrees == kSunElevationMin, "at midnight it is as far below the horizon as the renderer allows");
+    Check(Near(SunAtTimeOfDay(30.0f).azimuthDegrees, SunAtTimeOfDay(6.0f).azimuthDegrees), "the day wraps round");
+    for (float hour = -30.0f; hour < 60.0f; hour += 0.37f) {
+        const SunSettings sun = SunAtTimeOfDay(hour);
+        Check(sun.elevationDegrees >= kSunElevationMin && sun.elevationDegrees <= kSunElevationMax && sun.azimuthDegrees >= 0.0f && sun.azimuthDegrees < 360.0f,
+              "the angles are in range at hour " + std::to_string(hour));
+    }
+    const SunSettings broken = SunAtTimeOfDay(kNaN);
+    Check(Near(broken.elevationDegrees, kNoonSunElevation, 0.01f), "an hour that is not a number is noon");
 }
 
 // ----- The graphs that ship -------------------------------------------------------------------------------------------
@@ -743,6 +803,8 @@ int main(int argc, char** argv) {
         {"AfterNSecondsRunsOnceAndStartAgainStartsTheClockAgain", AfterNSecondsRunsOnceAndStartAgainStartsTheClockAgain},
         {"ASettingThatDoesNotFitIsReportedAndAMissingOneUsesTheDefault", ASettingThatDoesNotFitIsReportedAndAMissingOneUsesTheDefault},
         {"AGraphThatUsesEngineNodesSavesAndLoadsBackTheSame", AGraphThatUsesEngineNodesSavesAndLoadsBackTheSame},
+        {"ThePlayingEditorActsOnTheHostAndGetsItsKeys", ThePlayingEditorActsOnTheHostAndGetsItsKeys},
+        {"TheSunFollowsTheHourOfTheDay", TheSunFollowsTheHourOfTheDay},
         {"EveryShippedGraphLoadsIsCleanAndIsWhatTheCodeMakes", EveryShippedGraphLoadsIsCleanAndIsWhatTheCodeMakes},
         {"TheDayNightCycleAdvancesTheHourAndRestartsOnR", TheDayNightCycleAdvancesTheHourAndRestartsOnR},
         {"TheCrowdGraphActsOnItsKeys", TheCrowdGraphActsOnItsKeys},

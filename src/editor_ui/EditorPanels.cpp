@@ -181,6 +181,31 @@ void DrawToolbar(graph_editor::EditorModel& model, PanelState& state, GraphCanva
 
 namespace {
 
+// One setting of a node (see PropertyDescription): a list when only some texts mean something, otherwise the control of its type.
+void DrawProperty(graph_editor::EditorModel& model, PanelState& state, const graph::Node& node, const graph::NodeDescription& description,
+                  const graph::PropertyDescription& property) {
+    ImGui::PushID(property.name.c_str());
+    ColoredText(ColorOfPinType(property.type), property.name.c_str());
+    ImGui::SetItemTooltip("%s", property.tooltip.c_str());
+    graph::Value value = graph::PropertyValue(node, description, property.name);
+    if (!property.choices.empty()) {
+        const std::string& current = std::get<std::string>(value);
+        ImGui::SetNextItemWidth(-1.0f);
+        if (ImGui::BeginCombo("##choice", current.c_str())) {
+            for (const std::string& choice : property.choices) {
+                if (ImGui::Selectable(choice.c_str(), choice == current)) {
+                    model.SetProperty(node.id, property.name, choice);
+                }
+            }
+            ImGui::EndCombo();
+        }
+    } else if (EditValue("setting", value, property.type, -1.0f)) {
+        model.SetProperty(node.id, property.name, value);
+        state.editingValue = true;
+    }
+    ImGui::PopID();
+}
+
 void DrawNodeDetails(graph_editor::EditorModel& model, PanelState& state, const graph::Node& node) {
     const graph::NodeDescription* description = model.Registry().Find(node.type);
     ImGui::PushTextWrapPos(0.0f);
@@ -206,6 +231,13 @@ void DrawNodeDetails(graph_editor::EditorModel& model, PanelState& state, const 
             ImGui::EndCombo();
         }
         ImGui::SetItemTooltip("The variable this node works on.");
+    }
+
+    if (description != nullptr && !description->properties.empty()) {
+        SectionTitle("Settings");
+        for (const graph::PropertyDescription& property : description->properties) {
+            DrawProperty(model, state, node, *description, property);
+        }
     }
 
     const graph::NodePins pins = graph::PinsOf(model.GetGraph(), model.Registry(), node);

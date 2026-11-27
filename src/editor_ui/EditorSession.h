@@ -5,6 +5,8 @@
 
 #include "core/CommandLine.h"
 #include "editor_ui/IEditorUi.h"
+#include "editor_ui/KeyPoller.h"
+#include "engine_host/LiveEngineHost.h"
 #include "render/IRenderModule.h"
 
 struct GLFWwindow;
@@ -17,7 +19,9 @@ namespace editor_ui {
 
 class EditorSession {
 public:
-    EditorSession(IRenderModule& renderer, GLFWwindow* window, const Options& options);
+    // `host` is the engine that the nodes of the editor's graph act on, and the source of the lines printed on the screen. It must
+    // outlive the session, and may be null.
+    EditorSession(IRenderModule& renderer, GLFWwindow* window, const Options& options, engine_host::LiveEngineHost* host);
     ~EditorSession();
     EditorSession(const EditorSession&) = delete;
     EditorSession& operator=(const EditorSession&) = delete;
@@ -34,10 +38,13 @@ public:
     bool CapturesKeyboard() const { return editor->CapturesKeyboard(); }
 
 private:
+    void UploadFinishedMaterials();
+
     IRenderModule& renderer;
     GLFWwindow* window;
     std::unique_ptr<IEditorUi> editor;
     std::string startupError;
+    KeyPoller keyPoller;
     bool f1WasDown = false;
 };
 
