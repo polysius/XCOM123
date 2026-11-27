@@ -64,6 +64,11 @@ public:
     size_t UploadBytes() const override { return layout.boxes.size() * sizeof(BoxInstance); }
 };
 
+// The number of people each chunk gets so that about `peopleTotal` people stand within `loadRadius` of the camera: the density
+// of a disc of that radius, times the area of a chunk. Sizing by density, not by how many chunks are loaded, keeps the number
+// of people near the camera steady however many chunks the prefetch and the hysteresis keep around. Zero people give zero.
+uint32_t PeoplePerChunk(uint32_t peopleTotal, float loadRadius);
+
 std::shared_ptr<ChunkData> GenerateChunk(const ChunkSettings& settings, streaming::ChunkCoord coord);
 
 }  // namespace world

@@ -283,6 +283,7 @@ void TestBudgetedDelivery() {
 void TestTeleport() {
     StreamingSettings settings = SyncSettings();
     settings.uploadChunksPerFrame = 1;
+    settings.teleportBoostFactor = 1;  // this test is about the order and the budget, without the boost after a jump
     StreamingManager manager(settings, SmallGenerator());
 
     manager.Update(kCentreOfOrigin, kStanding);
@@ -598,6 +599,95 @@ void TestThreadSafetyStress() {
     }
 }
 
+// Distance from a point to the nearest point of a chunk of 256 m.
+float DistanceTo(ChunkCoord coord, glm::vec2 point) {
+    const glm::vec2 low(static_cast<float>(coord.x) * 256.0f, static_cast<float>(coord.z) * 256.0f);
+    return glm::length(point - glm::clamp(point, low, low + glm::vec2(256.0f)));
+}
+
+// A full memory cap makes room by unloading chunks, but never one that is within the load radius, even when a nearer chunk is
+// waiting for the room: the chunks around the player must not be traded away for each other.
+void TestMakeRoomNeverEvictsInsideLoadRadius() {
+    StreamingSettings settings = SyncSettings();
+    settings.maxResidentChunks = 5;
+    StreamingManager manager(settings, SmallGenerator());
+
+    manager.Update(kCentreOfOrigin, kStanding);
+    Check(manager.Stats().residentChunks == 5, "setup: the cap of five chunks is full");
+
+    // Move so that some resident chunks are behind (beyond the load radius) and some are still inside it but now farther than
+    // chunks that are waiting for room.
+    const glm::vec2 moved(378.0f, 128.0f);
+    bool evictedInside = false;
+    for (int frame = 0; frame < 5; ++frame) {
+        const StreamingFrame result = manager.Update(moved, kStanding);
+        for (const ChunkCoord& coord : result.unloaded) {
+            evictedInside = evictedInside || DistanceTo(coord, moved) <= settings.loadRadius;
+        }
+        Check(manager.Stats().residentChunks <= 5, "the cap is kept");
+    }
+    Check(!evictedInside, "a chunk within the load radius is never unloaded to make room");
+    Check(manager.IsResident({0, -1}) && manager.IsResident({0, 1}), "the chunks inside the radius stay, though nearer chunks wait");
+}
+
+// After a teleport everything around the new place is missing at once. The first frames deliver and generate more per frame,
+// nearest first, so the gap closes in a few frames instead of a few seconds.
+int FramesToFillAfterTeleport(uint32_t boostFactor) {
+    StreamingSettings settings = SyncSettings();
+    settings.loadRadius = 700.0f;
+    settings.unloadRadius = 800.0f;
+    settings.uploadChunksPerFrame = 2;
+    settings.teleportBoostFactor = boostFactor;
+    settings.teleportDistance = 1200.0f;
+    StreamingManager manager(settings, SmallGenerator());
+    for (int frame = 0; frame < 40; ++frame) {
+        manager.Update({128.0f, 128.0f}, kStanding);
+    }
+    const glm::vec2 landing(20128.0f, 128.0f);
+    // Everything within 0.75 of the load radius has to be there.
+    std::vector<ChunkCoord> needed;
+    for (int z = -4; z <= 4; ++z) {
+        for (int x = 78; x <= 86; ++x) {
+            if (DistanceTo({x, z}, landing) <= 0.75f * settings.loadRadius) {
+                needed.push_back({x, z});
+            }
+        }
+    }
+    for (int frame = 1; frame <= 60; ++frame) {
+        manager.Update(landing, kStanding);
+        const bool all = std::all_of(needed.begin(), needed.end(), [&](ChunkCoord coord) { return manager.IsResident(coord); });
+        if (all) {
+            return frame;
+        }
+    }
+    return 61;
+}
+
+void TestTeleportFillsQuickly() {
+    const int boosted = FramesToFillAfterTeleport(8);
+    const int plain = FramesToFillAfterTeleport(1);
+    std::cout << "    after a teleport the " << "nearby chunks are all there after " << boosted << " frames with the boost, " << plain
+              << " without\n";
+    Check(boosted <= 4, "with the boost the chunks near the landing place are all resident within four frames");
+    Check(plain > boosted * 2, "without the boost the same takes much longer, so the boost is what closes the gap");
+}
+
+void TestLatencySamplesAreBounded() {
+    StreamingSettings settings = SyncSettings();
+    settings.latencySamples = 16;
+    settings.uploadChunksPerFrame = 1;
+    double fakeTime = 0.0;
+    StreamingManager manager(settings, SmallGenerator(), [&fakeTime] { return fakeTime; });
+    for (int frame = 0; frame < 200; ++frame) {
+        // The player walks on, so that new chunks keep arriving.
+        manager.Update({128.0f + 40.0f * static_cast<float>(frame), 128.0f}, {40.0f, 0.0f});
+        fakeTime += 0.1;
+    }
+    const StreamingStats stats = manager.Stats();
+    Check(stats.delivered > 16, "setup: more chunks were delivered than the ring holds");
+    Check(stats.latencies.size() == 16, "only the latest latency samples are kept");
+}
+
 }  // namespace
 
 int RunStreamingManagerTests() {
@@ -613,6 +703,9 @@ int RunStreamingManagerTests() {
         {"no leak", TestNoLeak},
         {"latency percentiles", TestLatencyPercentiles},
         {"failing generators", TestFailingGenerators},
+        {"make room keeps the load radius", TestMakeRoomNeverEvictsInsideLoadRadius},
+        {"teleport fills quickly", TestTeleportFillsQuickly},
+        {"latency samples are bounded", TestLatencySamplesAreBounded},
         {"thread safety stress", TestThreadSafetyStress},
     };
     for (const auto& [name, run] : tests) {

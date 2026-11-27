@@ -6,6 +6,12 @@
 #include <exception>
 #include <utility>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#endif
+
 namespace streaming {
 
 namespace {
@@ -16,6 +22,8 @@ constexpr double kAheadBias = 0.4;
 constexpr float kMinDirectionSpeed = 0.01f;
 // The chunk under the player beats every other chunk, whatever the direction of travel.
 constexpr double kPlayerChunkPriority = -1.0;
+// How often Update tries to take the lock again before it gives up for this frame.
+constexpr int kLockRetries = 20;
 
 ChunkCoord ChunkAt(glm::vec2 point, float chunkSize) {
     return {static_cast<int32_t>(std::floor(point.x / chunkSize)), static_cast<int32_t>(std::floor(point.y / chunkSize))};
@@ -133,6 +141,11 @@ std::vector<ChunkCoord> StreamingManager::WantedCoords(const Interest& interest)
 void StreamingManager::StartWorkers() {
     for (unsigned i = 0; i < settings_.workerThreads; ++i) {
         workers_.emplace_back([this] { WorkerLoop(); });
+#ifdef _WIN32
+        if (settings_.lowerWorkerPriority) {
+            SetThreadPriority(workers_.back().native_handle(), THREAD_PRIORITY_BELOW_NORMAL);
+        }
+#endif
     }
 }
 
@@ -225,8 +238,24 @@ StreamingFrame StreamingManager::Update(glm::vec2 position, glm::vec2 velocity) 
     interest.predicted = position + velocity * settings_.lookAheadSeconds;
 
     StreamingFrame frame;
-    std::unique_lock<std::mutex> lock(mutex_);
     const bool synchronous = workers_.empty();
+    // A worker holds the lock only for bookkeeping, but a worker that runs below normal priority can be put aside by the
+    // scheduler while it holds it, and the frame would wait for it. The frame never waits: planning is repeated every Update, so
+    // skipping one costs nothing.
+    std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
+    // A worker that has just finished a chunk lets go within microseconds, so a few quick retries cost nothing; a worker that
+    // was put aside holding the lock is not waited for.
+    for (int attempt = 0; attempt < kLockRetries && !lock.owns_lock(); ++attempt) {
+        std::this_thread::yield();
+        if (lock.try_lock()) {
+            break;
+        }
+    }
+    if (!lock.owns_lock()) {
+        std::lock_guard<std::mutex> counting(skippedMutex_);
+        ++skippedUpdates_;
+        return frame;
+    }
     if (synchronous) {
         DestroyGraveyard(lock);
     }
@@ -243,15 +272,22 @@ StreamingFrame StreamingManager::Update(glm::vec2 position, glm::vec2 velocity) 
     DiscardUnwantedResults(interest);
     UnloadLeftBehind(interest, frame);
 
+    const uint32_t boost = boostFramesLeft_ > 0 ? settings_.teleportBoostFactor : 1u;
+    if (boostFramesLeft_ > 0) {
+        --boostFramesLeft_;
+    }
     if (synchronous) {
-        for (uint32_t i = 0; i < settings_.uploadChunksPerFrame && !queue_.empty(); ++i) {
+        for (uint32_t i = 0; i < settings_.uploadChunksPerFrame * boost && !queue_.empty(); ++i) {
             GenerateNext(lock);
         }
     }
-    DeliverReady(interest, now, frame);
+    DeliverReady(interest, now, frame, boost);
 
+    const bool workWaiting = !queue_.empty() || !graveyard_.empty();
     lock.unlock();
-    workAvailable_.notify_all();
+    if (workWaiting) {
+        workAvailable_.notify_all();
+    }
     return frame;
 }
 
@@ -265,6 +301,7 @@ void StreamingManager::DropTeleportedWork() {
     }
     ready_.clear();
     ++stats_.teleports;
+    boostFramesLeft_ = settings_.teleportBoostFrames;
 }
 
 bool StreamingManager::AlreadyHandled(ChunkCoord coord) const {
@@ -320,7 +357,7 @@ void StreamingManager::UnloadLeftBehind(const Interest& interest, StreamingFrame
     }
 }
 
-void StreamingManager::DeliverReady(const Interest& interest, double now, StreamingFrame& frame) {
+void StreamingManager::DeliverReady(const Interest& interest, double now, StreamingFrame& frame, uint32_t boost) {
     std::vector<std::pair<float, ChunkCoord>> order;
     for (const auto& entry : ready_) {
         order.emplace_back(DistanceToChunk(entry.first, interest.position, settings_.chunkSize), entry.first);
@@ -335,8 +372,8 @@ void StreamingManager::DeliverReady(const Interest& interest, double now, Stream
 
         // The first chunk of a frame is exempt from the budget, so that a chunk bigger than the budget still gets through.
         if (!frame.delivered.empty()) {
-            const bool tooMany = frame.delivered.size() >= settings_.uploadChunksPerFrame;
-            const bool tooManyBytes = uploadedBytes + uploadBytes > settings_.uploadBytesPerFrame;
+            const bool tooMany = frame.delivered.size() >= settings_.uploadChunksPerFrame * boost;
+            const bool tooManyBytes = uploadedBytes + uploadBytes > settings_.uploadBytesPerFrame * boost;
             const bool tooSlow = settings_.uploadSecondsPerFrame > 0.0 &&
                                  clock_() - now >= settings_.uploadSecondsPerFrame;
             if (tooMany || tooManyBytes || tooSlow) {
@@ -412,6 +449,15 @@ void StreamingManager::Bury(std::shared_ptr<const ChunkPayload> payload) {
     graveyard_.push_back(std::move(payload));
 }
 
+void StreamingManager::RecordLatency(double seconds) {
+    if (latencyRing_.size() < settings_.latencySamples) {
+        latencyRing_.push_back(seconds);
+    } else if (!latencyRing_.empty()) {
+        latencyRing_[latencyNext_] = seconds;
+        latencyNext_ = (latencyNext_ + 1) % latencyRing_.size();
+    }
+}
+
 void StreamingManager::RecordDelivery(ChunkCoord coord, ReadyChunk ready, double now, StreamingFrame& frame) {
     ResidentEntry entry;
     entry.payload = ready.payload;
@@ -420,7 +466,7 @@ void StreamingManager::RecordDelivery(ChunkCoord coord, ReadyChunk ready, double
     resident_.emplace(coord, std::move(entry));
 
     frame.delivered.push_back({coord, std::move(ready.payload)});
-    stats_.latencies.push_back(std::max(0.0, now - ready.requestTime));
+    RecordLatency(std::max(0.0, now - ready.requestTime));
     ++stats_.delivered;
     stats_.residentChunksPeak = std::max(stats_.residentChunksPeak, resident_.size());
     stats_.residentBytesPeak = std::max(stats_.residentBytesPeak, residentBytes_);
@@ -448,6 +494,13 @@ bool StreamingManager::IsResident(ChunkCoord coord) const {
 StreamingStats StreamingManager::Stats() const {
     std::lock_guard<std::mutex> lock(mutex_);
     StreamingStats stats = stats_;
+    // Oldest first: once the ring is full, the oldest sample is the one the next sample will replace.
+    stats.latencies.assign(latencyRing_.begin() + static_cast<std::ptrdiff_t>(latencyNext_), latencyRing_.end());
+    stats.latencies.insert(stats.latencies.end(), latencyRing_.begin(), latencyRing_.begin() + static_cast<std::ptrdiff_t>(latencyNext_));
+    {
+        std::lock_guard<std::mutex> counting(skippedMutex_);
+        stats.skippedUpdates = skippedUpdates_;
+    }
     stats.residentChunks = resident_.size();
     stats.residentBytes = residentBytes_;
     stats.queuedChunks = queue_.size();

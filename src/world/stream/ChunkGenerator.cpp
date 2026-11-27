@@ -502,6 +502,15 @@ size_t ChunkData::ResidentBytes() const {
     return layout.boxes.size() * kBytesPerBoxEntry + (crowd ? kBytesPerCrowd : 0u);
 }
 
+uint32_t PeoplePerChunk(uint32_t peopleTotal, float loadRadius) {
+    if (peopleTotal == 0 || loadRadius <= 0.0f) {
+        return 0;
+    }
+    constexpr float kPi = 3.14159265f;
+    const float perSquareMetre = static_cast<float>(peopleTotal) / (kPi * loadRadius * loadRadius);
+    return std::max(1u, static_cast<uint32_t>(std::lround(perSquareMetre * kChunkSize * kChunkSize)));
+}
+
 std::shared_ptr<ChunkData> GenerateChunk(const ChunkSettings& settings, streaming::ChunkCoord coord) {
     auto chunk = std::make_shared<ChunkData>();
     chunk->coord = coord;

@@ -177,6 +177,8 @@ Options ParseCommandLine(int argc, char** argv) {
         } else if (option == "--benchmark-stream") {
             options.streamBenchmarkFrames = ParsePositiveInt(option, arguments.ValueFor(option));
             options.stream = true;
+        } else if (option == "--stream-speed-scale") {
+            options.streamSpeedScale = ParseFloatInRange(option, arguments.ValueFor(option), 0.1f, 20.0f);
         } else if (option == "--hitch-limit") {
             options.hitchLimitMs = ParseFloatInRange(option, arguments.ValueFor(option), 1.0f, 1000.0f);
         } else if (option == "--target-fps") {
@@ -254,6 +256,7 @@ void PrintUsage() {
         "  --stream-radius METRES   how far around the camera chunks are kept loaded (300 to 2500, default 760)\n"
         "  --benchmark-stream N     fly a long path through the streamed world for N frames and report frame times and streaming\n"
         "                           (implies --stream; exit code 2 on a missed --target-fps or a frame over --hitch-limit)\n"
+        "  --stream-speed-scale X   with --benchmark-stream: multiply the speeds of the flight (30 m/s cruise, 100 burst, 300 stress)\n"
         "  --hitch-limit MS         with --benchmark-stream: fail when any frame takes longer than this (default 33)\n"
         "Display:\n"
         "  --novsync                do not wait for the display's refresh\n"

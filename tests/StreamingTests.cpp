@@ -3,6 +3,7 @@
 // RunStreamingManagerTests, the streaming manager. Like the other test programs there is no framework: each test calls
 // Check, and main reports every failure it finds.
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -19,6 +20,7 @@
 #include "render/RangeAllocator.h"
 #include "render/RetirementQueue.h"
 #include "scene/Frustum.h"
+#include "streaming/Reaper.h"
 #include "world/stream/ChunkGenerator.h"
 #include "world/stream/WorldSkeleton.h"
 
@@ -455,6 +457,10 @@ void TestChunkCulling() {
     Check(sun.ContainsBox({-5.0f, -5.0f, -100.0f}, {5.0f, 5.0f, -90.0f}), "a box inside the sun's view is kept");
     Check(!sun.ContainsBox({300.0f, -5.0f, -100.0f}, {310.0f, 5.0f, -90.0f}), "a box outside the sun's view is culled");
 
+    // Touching positions on different pages are not touching: the pages are different buffers.
+    std::vector<InstanceRange> twoPages{{0, 0, 10}, {1, 10, 5}};
+    MergeAdjacentRanges(twoPages);
+    Check(twoPages.size() == 2, "ranges that touch in position but lie on different pages are not merged");
     std::vector<InstanceRange> ranges{{1, 0, 3}, {0, 10, 5}, {0, 0, 10}, {0, 40, 2}};
     MergeAdjacentRanges(ranges);
     Check(ranges.size() == 3 && ranges[0].page == 0 && ranges[0].first == 0 && ranges[0].count == 15 && ranges[1].first == 40 &&
@@ -462,9 +468,64 @@ void TestChunkCulling() {
           "ranges that touch are one draw");
 }
 
+// A thing that notes which thread frees it.
+struct RecordsItsFreeingThread {
+    explicit RecordsItsFreeingThread(std::atomic<int>& offThread, std::atomic<int>& onThread, std::thread::id owner)
+        : offThread(offThread), onThread(onThread), owner(owner) {}
+    ~RecordsItsFreeingThread() { (std::this_thread::get_id() == owner ? onThread : offThread)++; }
+    std::atomic<int>& offThread;
+    std::atomic<int>& onThread;
+    std::thread::id owner;
+};
+
+void TestReaperFreesOffTheCallingThread() {
+    std::cout << "reaper\n";
+    std::atomic<int> offThread{0};
+    std::atomic<int> onThread{0};
+    {
+        streaming::Reaper reaper;
+        for (int i = 0; i < 50; ++i) {
+            // The caller gives up its last reference, as the frame does with an unloaded chunk.
+            reaper.Retire(std::make_shared<RecordsItsFreeingThread>(offThread, onThread, std::this_thread::get_id()));
+        }
+        while (reaper.Pending() > 0) {
+            std::this_thread::yield();
+        }
+    }
+    Check(offThread == 50, "every retired thing is freed");
+    Check(onThread == 0, "none of them is freed on the thread that retired it");
+}
+
+// The people near the camera stay near the number asked for, wherever the camera is: each chunk has a share by density.
+void TestPeopleNearTheCameraMatchTheRequest() {
+    std::cout << "people density\n";
+    constexpr uint32_t kAsked = 10000;
+    constexpr float kRadius = 760.0f;
+    world::ChunkSettings settings = Settings();
+    settings.agentCount = world::PeoplePerChunk(kAsked, kRadius);
+    Check(world::PeoplePerChunk(0, kRadius) == 0, "no people asked for, none made");
+    const glm::vec2 centres[] = {{0.0f, 0.0f}, {1337.0f, -2210.0f}, {-3500.0f, 900.0f}, {640.0f, 5600.0f}};
+    for (const glm::vec2 centre : centres) {
+        size_t within = 0;
+        const streaming::ChunkCoord middle = world::ChunkAt(centre);
+        for (int z = middle.z - 4; z <= middle.z + 4; ++z) {
+            for (int x = middle.x - 4; x <= middle.x + 4; ++x) {
+                const auto chunk = world::GenerateChunk(settings, {x, z});
+                for (const crowd::AgentMotion& motion : chunk->crowd->State().motion) {
+                    within += glm::distance(motion.position, centre) <= kRadius ? 1u : 0u;
+                }
+            }
+        }
+        std::printf("    around (%.0f, %.0f): %zu people within %.0f m of %u asked\n", centre.x, centre.y, within, kRadius, kAsked);
+        Check(within >= kAsked * 9 / 10 && within <= kAsked * 11 / 10, "the people within the load radius are within 10 percent of the request");
+    }
+}
+
 }  // namespace
 
 int main() {
+    TestReaperFreesOffTheCallingThread();
+    TestPeopleNearTheCameraMatchTheRequest();
     TestRangeAllocator();
     TestRetirementWaitsForFramesInFlight();
     TestChunkCulling();

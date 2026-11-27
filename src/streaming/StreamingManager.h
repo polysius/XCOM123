@@ -63,6 +63,15 @@ struct StreamingSettings {
     // chunks itself in priority order, then delivers them. The resident set is then a pure function of the path of the player.
     // Threaded mode reaches the same resident set once the player stands still, but not the same timing frame by frame.
     unsigned workerThreads = 2;
+    // Generation is background work: its threads run below normal priority, so that a burst of chunks never takes the cores the
+    // frame needs.
+    bool lowerWorkerPriority = true;
+    // After a teleport the chunks around the new place are all missing at once. For this many Updates the delivery budget
+    // (and, in synchronous mode, the number of chunks generated) is this many times larger, nearest chunks first.
+    uint32_t teleportBoostFrames = 30;
+    uint32_t teleportBoostFactor = 8;
+    // How many of the latest generation latencies are kept. Older ones are forgotten, so memory and the cost of Stats stay fixed.
+    size_t latencySamples = 4096;
 };
 
 struct ResidentChunk {
@@ -88,6 +97,7 @@ struct StreamingStats {
     uint64_t unloaded = 0;
     uint64_t cancelled = 0;   // requests dropped from the queue and generated results thrown away because nobody wants them
     uint64_t teleports = 0;
+    uint64_t skippedUpdates = 0;  // Updates that found the lock taken by a worker and left the planning to the next frame
 
     size_t residentChunks = 0;
     size_t residentChunksPeak = 0;
@@ -100,7 +110,8 @@ struct StreamingStats {
     size_t deliveredBytesLastFrame = 0;
     size_t deliveredBytesMaxFrame = 0;
 
-    // Seconds from the first request of a chunk to its delivery, by the injected clock, one sample per delivered chunk.
+    // Seconds from the first request of a chunk to its delivery, by the injected clock, one sample per delivered chunk, the
+    // latest StreamingSettings::latencySamples of them, oldest first.
     std::vector<double> latencies;
 
     // The sample at rank fraction * (count - 1) after sorting, fraction in [0, 1]. Zero when there are no samples.
@@ -116,6 +127,7 @@ public:
     StreamingManager(const StreamingManager&) = delete;
     StreamingManager& operator=(const StreamingManager&) = delete;
 
+    // Never waits for a worker: if one holds the lock, the call returns an empty frame and the next call does the planning.
     // Call once per frame with the player position and velocity (metres per second). Plans which chunks are wanted, delivers
     // finished chunks within the budget and unloads chunks the player has left.
     StreamingFrame Update(glm::vec2 position, glm::vec2 velocity);
@@ -167,7 +179,8 @@ private:
     bool AlreadyHandled(ChunkCoord coord) const;
     void DiscardUnwantedResults(const Interest& interest);
     void UnloadLeftBehind(const Interest& interest, StreamingFrame& frame);
-    void DeliverReady(const Interest& interest, double now, StreamingFrame& frame);
+    void DeliverReady(const Interest& interest, double now, StreamingFrame& frame, uint32_t boost);
+    void RecordLatency(double seconds);
     bool MakeRoom(const Interest& interest, ChunkCoord incoming, size_t incomingBytes, StreamingFrame& frame);
     void Unload(std::map<ChunkCoord, ResidentEntry>::iterator entry, StreamingFrame& frame);
     void Bury(std::shared_ptr<const ChunkPayload> payload);
@@ -193,6 +206,12 @@ private:
     size_t destroyingChunks_ = 0;  // payloads a thread has taken from the graveyard and is destroying right now
     size_t residentBytes_ = 0;
     StreamingStats stats_;
+
+    mutable std::mutex skippedMutex_;  // guards skippedUpdates_, which Update counts without taking mutex_
+    uint64_t skippedUpdates_ = 0;
+    std::vector<double> latencyRing_;
+    size_t latencyNext_ = 0;
+    uint32_t boostFramesLeft_ = 0;
 
     bool hasPreviousPosition_ = false;
     glm::vec2 previousPosition_{0.0f};

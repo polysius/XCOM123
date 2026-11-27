@@ -357,7 +357,7 @@ add_test(NAME panel_model_tests COMMAND panel_model_tests)
 # streaming_tests checks the streamed world: the chunk generator (pure per chunk, shared borders, budgets) and the streaming
 # manager (ordering, budgets, teleports, threads). It builds the city builders, the crowd and the streaming sources, no GPU.
 file(GLOB STREAMING_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/world/stream/*.cpp)
-list(APPEND STREAMING_SOURCES src/streaming/StreamingManager.cpp)  # StreamedWorld.cpp needs the renderer interface
+list(APPEND STREAMING_SOURCES src/streaming/StreamingManager.cpp src/streaming/Reaper.cpp)  # StreamedWorld.cpp needs the renderer interface
 add_executable(streaming_tests tests/StreamingTests.cpp tests/StreamingManagerTests.cpp src/render/RangeAllocator.cpp ${STREAMING_SOURCES}
     src/core/JobSystem.cpp src/world/Crowd.cpp src/world/TerrainField.cpp ${CITY_GENERATOR_SOURCES} ${UNIT_TEST_CROWD_SOURCES})
 target_include_directories(streaming_tests PRIVATE src)

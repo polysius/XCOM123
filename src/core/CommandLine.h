@@ -43,6 +43,7 @@ struct Options {
     // Streaming benchmark: fly a long path through the streamed world for this many frames, report frame times and what
     // streaming did, then quit. Implies --stream. It fails when p99 misses --target-fps or any frame exceeds the hitch limit.
     int streamBenchmarkFrames = 0;
+    float streamSpeedScale = 1.0f;  // multiplies the speeds of the streaming benchmark's flight
     float hitchLimitMs = 33.0f;
 
     // Screenshot: render this many frames, save the last one as a PNG, then quit.

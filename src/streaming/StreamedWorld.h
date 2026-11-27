@@ -12,6 +12,7 @@
 #include "render/IRenderModule.h"
 #include "scene/Frustum.h"
 #include "streaming/ChunkCoord.h"
+#include "streaming/Reaper.h"
 #include "streaming/StreamingManager.h"
 #include "world/stream/ChunkGenerator.h"
 
@@ -33,8 +34,8 @@ struct StreamedWorldSettings {
 //
 // Everything that belongs to a chunk (its boxes and its crowd) is made on a worker thread by world::GenerateChunk and
 // arrives whole, so the frame loop only hands a finished chunk to the renderer and starts updating its people. When a chunk
-// leaves, the renderer is told, and the manager's worker normally frees the chunk and its crowd. The last reference may just
-// as well be the frame's, in which case the frame frees it, which costs well under a millisecond for a chunk.
+// leaves, the renderer is told and the frame's reference goes to a reaper thread, so that no chunk or crowd is ever freed on the
+// frame thread (the manager's own reference is freed by its workers).
 //
 // People stay in the chunk they were made in: each chunk has street graph and walkways of its own, and people turn round at
 // its edge.
@@ -58,6 +59,11 @@ public:
     // Replaces the contents of `visible` with the people inside the frustum, from all loaded chunks.
     void CollectVisible(const Frustum& frustum, std::vector<NpcInstance>& visible) const;
     size_t PeopleCount() const;
+    // People within `radius` metres of a point on the ground, over all loaded chunks. Walks every person; for reports.
+    size_t PeopleWithin(glm::vec2 centre, float radius) const;
+    // Chunks that are within `radius` metres of `position` and not loaded. This is how late the world is; at the speeds the
+    // engine flies it should be zero for the chunks near the camera.
+    size_t MissingNear(glm::vec3 position, float radius) const;
 
     // Blocks until everything within the load radius of `position` is loaded. For screenshots and tests, never for a frame.
     void LoadAround(glm::vec3 position);
@@ -74,6 +80,8 @@ private:
     struct LoadedChunk {
         std::shared_ptr<const world::ChunkData> data;
         StreamedChunkHandle handle;
+        float pendingSeconds = 0.0f;   // simulation time the crowd has not been given yet
+        uint64_t lastCrowdFrame = 0;   // the crowd frame in which it was last updated
     };
 
     static StreamingSettings MakeManagerSettings(const StreamedWorldSettings& settings);
@@ -87,6 +95,9 @@ private:
     size_t deliveredByLastUpdate = 0;
     size_t unloadedByLastUpdate = 0;
     StreamingManager manager;
+    Reaper reaper;  // declared before `loaded`, so that it is destroyed after it
+    uint64_t crowdFrame = 0;
+    std::vector<LoadedChunk*> dueCrowds;  // scratch space of UpdateCrowd
     std::map<ChunkCoord, LoadedChunk> loaded;  // ordered, so the crowds update and are collected in one fixed order
     std::vector<LoadedChunk*> crowded;         // the loaded chunks that have a crowd, rebuilt whenever chunks come or go
     mutable std::vector<std::vector<NpcInstance>> visibleByChunk;  // scratch space of CollectVisible, one list per crowd

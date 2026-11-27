@@ -15,10 +15,11 @@ struct Leg {
     float height;
 };
 constexpr Leg kLegs[] = {
-    {"cruise", 0.35f, StreamFlightPath::kCruiseSpeed, 45.0f},
-    {"burst", 0.50f, StreamFlightPath::kBurstSpeed, 90.0f},
-    {"low cruise", 0.85f, StreamFlightPath::kCruiseSpeed, 22.0f},
-    {"burst again", 1.00f, StreamFlightPath::kBurstSpeed, 70.0f},
+    {"cruise", 0.30f, StreamFlightPath::kCruiseSpeed, 45.0f},
+    {"burst", 0.45f, StreamFlightPath::kBurstSpeed, 90.0f},
+    {"low cruise", 0.70f, StreamFlightPath::kCruiseSpeed, 22.0f},
+    {"burst again", 0.85f, StreamFlightPath::kBurstSpeed, 70.0f},
+    {"stress", 1.00f, StreamFlightPath::kStressSpeed, 120.0f},
 };
 constexpr size_t kLegCount = sizeof(kLegs) / sizeof(kLegs[0]);
 
@@ -49,8 +50,8 @@ float HeadingAt(float progress) {
 
 }  // namespace
 
-StreamFlightPath::StreamFlightPath(int frames)
-    : totalFrames(std::max(frames, 1)), position(0.0f, kLegs[0].height, 0.0f) {}
+StreamFlightPath::StreamFlightPath(int frames, float scale)
+    : totalFrames(std::max(frames, 1)), speedScale(scale), position(0.0f, kLegs[0].height, 0.0f) {}
 
 float StreamFlightPath::Progress() const {
     return std::min(static_cast<float>(frame) / static_cast<float>(totalFrames), 1.0f);
@@ -63,23 +64,31 @@ StreamFlightPath::Pose StreamFlightPath::PoseHere() const {
     Pose pose;
     pose.position = position;
     pose.target = position + direction * kLookAhead + glm::vec3(0.0f, -kLookDownMetres, 0.0f);
-    pose.speed = Blended(progress, &Leg::speed);
+    pose.speed = Blended(progress, &Leg::speed) * speedScale;
     return pose;
 }
 
 StreamFlightPath::Pose StreamFlightPath::Start() const {
-    return StreamFlightPath(totalFrames).PoseHere();
+    return StreamFlightPath(totalFrames, speedScale).PoseHere();
 }
 
 StreamFlightPath::Pose StreamFlightPath::Step(float deltaSeconds) {
     const float progress = Progress();
     const float heading = HeadingAt(progress);
-    const float speed = Blended(progress, &Leg::speed);
+    const float speed = Blended(progress, &Leg::speed) * speedScale;
     position += glm::vec3(std::sin(heading), 0.0f, std::cos(heading)) * (speed * deltaSeconds);
     position.y = Blended(progress, &Leg::height);
     distance += speed * deltaSeconds;
     ++frame;
     return PoseHere();
+}
+
+float StreamFlightPath::LegSpeed(size_t leg) {
+    return kLegs[std::min(leg, kLegCount - 1)].speed;
+}
+
+bool StreamFlightPath::IsStressLeg(size_t leg) {
+    return leg == kLegCount - 1;
 }
 
 const std::vector<std::string>& StreamFlightPath::LegNames() {

@@ -414,6 +414,10 @@ int RunBenchmark(Engine& engine, const Options& options) {
     return passed && completed ? 0 : kBenchmarkFailedExitCode;
 }
 
+// A chunk this close, as a share of the load radius, that is not loaded yet is late: the world should have been ahead of the
+// camera by then.
+constexpr float kLateChunkShare = 0.75f;
+
 // What a streaming benchmark gathers besides frame times.
 struct StreamRunTotals {
     std::vector<double> streamMs;  // main thread time of the streaming update, per frame
@@ -425,6 +429,17 @@ struct StreamRunTotals {
     size_t hitchFrames = 0;  // frames over the hitch limit
     int worstFrame = 0;
     double worstFrameMs = 0.0;
+    // Per leg of the flight: frames in which a chunk within kLateChunkShare of the load radius was not loaded yet, and how many
+    // were missing at the worst moment.
+    std::vector<size_t> lateFrames;
+    std::vector<size_t> framesInLeg;
+    size_t mostMissing = 0;
+    size_t peopleNearMin = SIZE_MAX;  // people within the load radius, sampled once a second of frames
+    size_t peopleNearMax = 0;
+    double wallSeconds = 0.0;
+    double characterMs = 0.0;  // choosing and posing the skinned characters, summed over the frames
+    double characters = 0.0;
+    double charactersPosedAlone = 0.0;
 
     // One frame, for finding out what the slowest ones were doing.
     struct FrameNote {
@@ -449,19 +464,35 @@ void PrintSlowestFrames(std::vector<StreamRunTotals::FrameNote> notes, size_t co
     }
 }
 
-// The samples of `all` from index `from` on, in milliseconds.
-std::vector<double> SecondsToMillisecondsFrom(const std::vector<double>& all, size_t from) {
+std::vector<double> SecondsToMilliseconds(const std::vector<double>& seconds) {
     std::vector<double> milliseconds;
-    for (size_t i = from; i < all.size(); ++i) {
-        milliseconds.push_back(all[i] * 1000.0);
+    for (const double value : seconds) {
+        milliseconds.push_back(value * 1000.0);
     }
     return milliseconds;
 }
 
-void PrintStreamReport(const Engine& engine, const Options& options, const streaming::StreamingStats& before, const StreamRunTotals& totals,
+// Prints each leg with its speed and how late the world was in it. Returns false when a leg that is meant to be kept up with
+// (every leg but the stress leg) had a late chunk.
+bool PrintLegs(const StreamRunTotals& totals, float speedScale) {
+    bool kept = true;
+    std::printf("  legs             speed, frames, frames with a chunk late (within %.2f of the load radius)\n", kLateChunkShare);
+    const std::vector<std::string>& names = StreamFlightPath::LegNames();
+    for (size_t leg = 0; leg < names.size(); ++leg) {
+        const bool stress = StreamFlightPath::IsStressLeg(leg);
+        const bool ok = stress || totals.lateFrames[leg] == 0;
+        kept = kept && ok;
+        std::printf("    %-12s %5.0f m/s %6zu frames, %5zu late %s\n", names[leg].c_str(), StreamFlightPath::LegSpeed(leg) * speedScale,
+                    totals.framesInLeg[leg], totals.lateFrames[leg], stress ? "(stress: no requirement)" : (ok ? "PASS" : "FAIL"));
+    }
+    std::printf("  late chunks      %zu missing at the worst moment\n", totals.mostMissing);
+    return kept;
+}
+
+bool PrintStreamReport(const Engine& engine, const Options& options, const streaming::StreamingStats& before, const StreamRunTotals& totals,
                        const StreamFlightPath& path, size_t frames) {
     const streaming::StreamingStats after = engine.streamed->Stats();
-    const FrameTimeSummary latency = SummarizeFrameTimes(SecondsToMillisecondsFrom(after.latencies, before.latencies.size()), 1e9);
+    const FrameTimeSummary latency = SummarizeFrameTimes(SecondsToMilliseconds(after.latencies), 1e9);
     const FrameTimeSummary streamCost = SummarizeFrameTimes(totals.streamMs, 1e9);
     const RenderStats render = engine.renderer->GetStats();
     const double frameCount = static_cast<double>(std::max<size_t>(frames, 1));
@@ -487,13 +518,22 @@ void PrintStreamReport(const Engine& engine, const Options& options, const strea
                 streamCost.averageMs, streamCost.p99Ms, streamCost.worstMs);
     std::printf("  hitches          %zu frames over %.0f ms (worst %.2f ms, frame %d)\n", totals.hitchFrames, options.hitchLimitMs,
                 totals.worstFrameMs, totals.worstFrame);
+    std::printf("  people           %zu to %zu within the load radius of the camera (asked for %u)\n", totals.peopleNearMin,
+                totals.peopleNearMax, options.npcCount);
+    std::printf("  speed            %.1f m/s flown per second of wall clock, %llu streaming updates skipped to avoid waiting for a worker\n",
+                path.DistanceFlown() / std::max(totals.wallSeconds, 1e-3), static_cast<unsigned long long>(after.skippedUpdates));
+    std::printf("  characters       %.1f skinned people a frame (%.1f posed one by one, the rest from shared poses): %.3f ms a frame, %.1f us for each\n",
+                totals.characters / frameCount, totals.charactersPosedAlone / frameCount, totals.characterMs / frameCount,
+                totals.characterMs * 1000.0 / std::max(totals.characters, 1.0));
+    const bool kept = PrintLegs(totals, options.streamSpeedScale);
     PrintSlowestFrames(totals.notes, 6);
+    return kept;
 }
 
 // Flies the streaming flight path and reports. Fails (exit code 2) when p99 misses the target frame rate, when a frame takes
 // longer than the hitch limit, or when the window closes early.
 int RunStreamBenchmark(Engine& engine, const Options& options) {
-    StreamFlightPath path(options.streamBenchmarkFrames);
+    StreamFlightPath path(options.streamBenchmarkFrames, options.streamSpeedScale);
     BenchmarkRecorder recorder(StreamFlightPath::LegNames());
     FlyCamera camera(glm::vec3(0.0f), 0.0f, 0.0f);
     const StreamFlightPath::Pose start = path.Start();
@@ -504,6 +544,8 @@ int RunStreamBenchmark(Engine& engine, const Options& options) {
     TitleBar title(engine.window, engine.renderer->GetDeviceName());
 
     StreamRunTotals totals;
+    totals.lateFrames.assign(StreamFlightPath::LegNames().size(), 0);
+    totals.framesInLeg.assign(StreamFlightPath::LegNames().size(), 0);
     const int totalFrames = kBenchmarkWarmupFrames + options.streamBenchmarkFrames;
     Clock::time_point previousFrame = Clock::now();
     int frameIndex = 0;
@@ -527,11 +569,25 @@ int RunStreamBenchmark(Engine& engine, const Options& options) {
         if (measuredIndex < 0) {
             continue;
         }
+        totals.wallSeconds += frameMs / 1000.0;
+        totals.characterMs += engine.crowdCharacters.LastTakeMilliseconds();
+        totals.characters += static_cast<double>(engine.crowdCharacters.LastCharacterCount());
+        totals.charactersPosedAlone += static_cast<double>(engine.crowdCharacters.LastPosedAlone());
+        const size_t leg = path.LegOfFrame(measuredIndex);
+        const size_t missing = engine.streamed->MissingNear(camera.Position(), kLateChunkShare * options.streamLoadRadius);
+        ++totals.framesInLeg[leg];
+        totals.lateFrames[leg] += missing > 0 ? 1 : 0;
+        totals.mostMissing = std::max(totals.mostMissing, missing);
+        if (measuredIndex % 60 == 0) {
+            const size_t nearby = engine.streamed->PeopleWithin({camera.Position().x, camera.Position().z}, options.streamLoadRadius);
+            totals.peopleNearMin = std::min(totals.peopleNearMin, nearby);
+            totals.peopleNearMax = std::max(totals.peopleNearMax, nearby);
+        }
         const RenderStats render = engine.renderer->GetStats();
         recorder.Record({.cpuFrameMs = frameMs,
                          .crowdMs = crowdMs,
                          .peopleOnScreen = engine.visibleNpcs.size(),
-                         .shotIndex = path.LegOfFrame(measuredIndex)},
+                         .shotIndex = leg},
                         render);
         totals.streamMs.push_back(streamMs);
         totals.chunksDrawnByCamera += render.streamed.chunksDrawnByCamera;
@@ -552,14 +608,14 @@ int RunStreamBenchmark(Engine& engine, const Options& options) {
     }
 
     const bool passedTarget = recorder.PrintReport(engine.PeopleCount(), options.targetFps);
-    PrintStreamReport(engine, options, before, totals, path, totals.streamMs.size());
+    const bool keptUp = PrintStreamReport(engine, options, before, totals, path, totals.streamMs.size());
     const bool noHitches = totals.hitchFrames == 0;
     std::printf("  hitch limit      %s\n", noHitches ? "PASS" : "FAIL");
     const bool completed = frameIndex == totalFrames;
     if (!completed) {
         std::cerr << "Benchmark stopped after " << frameIndex << " of " << totalFrames << " frames\n";
     }
-    return passedTarget && noHitches && completed ? 0 : kBenchmarkFailedExitCode;
+    return passedTarget && noHitches && keptUp && completed ? 0 : kBenchmarkFailedExitCode;
 }
 
 // Moves the crowd, the props and the river forward to `seconds` without drawing anything.
