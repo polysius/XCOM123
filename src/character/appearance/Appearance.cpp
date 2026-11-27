@@ -15,22 +15,6 @@ enum Salt : uint32_t {
     kSaltFeet,
 };
 
-template <typename T, size_t N>
-T Pick(const std::array<std::pair<float, T>, N>& table, float draw) {
-    float total = 0.0f;
-    for (const auto& entry : table) {
-        total += entry.first;
-    }
-    float remaining = draw * total;
-    for (const auto& entry : table) {
-        remaining -= entry.first;
-        if (remaining < 0.0f) {
-            return entry.second;
-        }
-    }
-    return table.back().second;
-}
-
 OutfitSettings ChooseOutfit(const CharacterParameters& parameters) {
     OutfitSettings outfit;
     // Everyone is dressed: a top and something on the legs always, and shoes for nine in ten.

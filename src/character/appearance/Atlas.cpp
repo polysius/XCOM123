@@ -229,7 +229,7 @@ TexelField BakeTexels(const TriangleMesh& unwrapped, int tileSize) {
             continue;
         }
         const float worldArea = 0.5f * glm::length(glm::cross(corner[1]->position - corner[0]->position, corner[2]->position - corner[0]->position));
-        const float metersPerTexel = std::sqrt(worldArea / (0.5f * std::abs(area)));
+        const float metersPerTexel = std::max(1e-5f, std::sqrt(worldArea / (0.5f * std::abs(area))));
         const int minX = std::max(0, static_cast<int>(std::floor(std::min({p0.x, p1.x, p2.x}))));
         const int maxX = std::min(field.width - 1, static_cast<int>(std::ceil(std::max({p0.x, p1.x, p2.x}))));
         const int minY = std::max(0, static_cast<int>(std::floor(std::min({p0.y, p1.y, p2.y}))));

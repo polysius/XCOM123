@@ -17,14 +17,6 @@ float Gaussian(float distance, float width) {
     return std::exp(-x * x);
 }
 
-glm::vec3 ToSrgb(glm::vec3 linear) {
-    return glm::pow(glm::clamp(linear, glm::vec3(0.0f), glm::vec3(1.0f)), glm::vec3(1.0f / 2.2f));
-}
-
-uint8_t Byte(float value) {
-    return static_cast<uint8_t>(std::lround(glm::clamp(value, 0.0f, 1.0f) * 255.0f));
-}
-
 // A groove of a line: 1 on the line and 0 a little way from it, where `phase` counts lines (a whole number is a line).
 float LineGroove(float phase, float sharpness) {
     const float distanceToLine = std::abs(phase - std::round(phase));

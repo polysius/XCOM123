@@ -1,7 +1,9 @@
 #pragma once
 
+#include <array>
 #include <cmath>
 #include <cstdint>
+#include <utility>
 
 #include <glm/glm.hpp>
 
@@ -25,6 +27,36 @@ inline float SmoothStep(float edge0, float edge1, float x) {
 // A number in [0, 1) from three integers and a seed.
 inline float Random01(uint32_t a, uint32_t b, uint32_t c) {
     return material::HashToUnit(material::Hash(a, b, c));
+}
+
+// Picks an entry of a list of (weight, value) pairs with a number in [0, 1).
+template <typename T, size_t N>
+T Pick(const std::array<std::pair<float, T>, N>& table, float draw) {
+    float total = 0.0f;
+    for (const auto& entry : table) {
+        total += entry.first;
+    }
+    float remaining = draw * total;
+    for (const auto& entry : table) {
+        remaining -= entry.first;
+        if (remaining < 0.0f) {
+            return entry.second;
+        }
+    }
+    return table.back().second;
+}
+
+inline glm::vec3 SrgbToLinear(glm::vec3 c) {
+    return glm::pow(c, glm::vec3(2.2f));
+}
+
+inline glm::vec3 ToSrgb(glm::vec3 linear) {
+    return glm::pow(glm::clamp(linear, glm::vec3(0.0f), glm::vec3(1.0f)), glm::vec3(1.0f / 2.2f));
+}
+
+// A value in [0, 1] as an 8 bit channel.
+inline uint8_t Byte(float value) {
+    return static_cast<uint8_t>(std::lround(glm::clamp(value, 0.0f, 1.0f) * 255.0f));
 }
 
 // Smooth value noise, about -1 to 1, with one lattice cell per unit of length.

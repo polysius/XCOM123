@@ -102,10 +102,6 @@ glm::vec3 PickColour(const std::vector<glm::vec3>& palette, uint32_t seed, uint3
     return palette[material::Hash(seed, salt, 7u) % palette.size()];
 }
 
-glm::vec3 SrgbToLinear(glm::vec3 c) {
-    return glm::pow(c, glm::vec3(2.2f));
-}
-
 GarmentSpec MakeSpec(GarmentKind kind, const BodyMeasures& m, uint32_t seed, FootwearKind footwear) {
     GarmentSpec spec;
     spec.kind = kind;
@@ -469,10 +465,6 @@ struct ClothPixel {
     float roughness = 0.7f;
     float height = 0.0f;
 };
-
-uint8_t Byte(float value) {
-    return static_cast<uint8_t>(std::lround(glm::clamp(value, 0.0f, 1.0f) * 255.0f));
-}
 
 // The colour, roughness and relief of a garment at a texel: the weave, the stitching along its edges and the seams of its cut.
 ClothPixel PaintCloth(const GarmentSpec& spec, const ClothSampler& cloth, const Texel& texel, float stature) {

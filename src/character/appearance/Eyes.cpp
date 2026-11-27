@@ -261,13 +261,6 @@ void AddLashes(RibbonSet& lashes, const EyeFrame& frame, const PersonTraits& tra
     }
 }
 
-glm::vec3 ToSrgb(glm::vec3 linear) {
-    return glm::pow(glm::clamp(linear, glm::vec3(0.0f), glm::vec3(1.0f)), glm::vec3(1.0f / 2.2f));
-}
-uint8_t Byte(float value) {
-    return static_cast<uint8_t>(std::lround(glm::clamp(value, 0.0f, 1.0f) * 255.0f));
-}
-
 struct EyePixel {
     glm::vec3 albedo{1.0f};
     float roughness = 0.3f;

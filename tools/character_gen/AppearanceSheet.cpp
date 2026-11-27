@@ -6,6 +6,7 @@
 #include <iostream>
 #include <vector>
 
+#include "character/appearance/Noise3D.h"
 #include "core/PngWriter.h"
 
 namespace appearance_sheet {
@@ -24,10 +25,6 @@ struct Image {
 
     Image(int w, int h) : width(w), height(h), rgba(static_cast<size_t>(w) * h * 4, 255) {}
 };
-
-glm::vec3 SrgbToLinear(glm::vec3 c) {
-    return glm::pow(c, glm::vec3(2.2f));
-}
 
 // A bilinear lookup in an 8 bit image at uv (in 0 to 1, clamped), as values 0 to 1 per channel.
 glm::vec4 Lookup(const ByteImage& image, glm::vec2 uv, bool wrapU = false) {

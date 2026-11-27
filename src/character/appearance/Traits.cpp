@@ -32,23 +32,6 @@ float Draw(const CharacterParameters& parameters, uint32_t salt) {
     return Random01(parameters.seed, salt, 0x51ED270Bu);
 }
 
-// Picks an entry of a list of (weight, value) pairs with a number in [0, 1).
-template <typename T, size_t N>
-T Pick(const std::array<std::pair<float, T>, N>& table, float draw) {
-    float total = 0.0f;
-    for (const auto& entry : table) {
-        total += entry.first;
-    }
-    float remaining = draw * total;
-    for (const auto& entry : table) {
-        remaining -= entry.first;
-        if (remaining < 0.0f) {
-            return entry.second;
-        }
-    }
-    return table.back().second;
-}
-
 // A piecewise linear blend through the colours of light, medium and dark skin.
 glm::vec3 SkinColourFor(float melanin) {
     const glm::vec3 light(0.60f, 0.37f, 0.28f);
