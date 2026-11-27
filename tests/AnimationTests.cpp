@@ -13,6 +13,7 @@
 #include <functional>
 #include <cstring>
 #include <iostream>
+#include <map>
 #include <limits>
 #include <string>
 #include <vector>
@@ -352,6 +353,8 @@ void IkRespectsALimitedHip() {
 // Walking and running
 // ---------------------------------------------------------------------------
 
+bool PoseIsFinite(const Pose& pose);
+
 GroundFunction FlatGround() {
     return [](float, float) { return 0.0f; };
 }
@@ -450,10 +453,20 @@ struct FootReport {
     float lowestBelowGround = 0.0f;  // of the heel and the ball (negative: under the ground)
     float toeBelowGround = 0.0f;     // of the toe tip
     float worstPlantedHeight = 0.0f; // the lowest contact point of a planted foot above the ground, the largest value
-    float worstPlantedSink = 0.0f;   // the same, the most negative value
     float lowestKnee = 1000.0f;
     float lowestElbow = 1000.0f;
     int unreachedFrames = 0;
+    // Metres along the floor that each heel, ball and toe tip (left, right) moved while it touched the floor.
+    float dragged[2][3] = {};
+    float MostDragged() const {
+        float most = 0.0f;
+        for (const auto& foot : dragged) {
+            for (const float metres : foot) {
+                most = std::max(most, metres);
+            }
+        }
+        return most;
+    }
 };
 
 FootReport MeasureFeet(const std::vector<Frame>& frames, const GroundFunction& ground, float dt, size_t firstFrame = 0) {
@@ -462,28 +475,32 @@ FootReport MeasureFeet(const std::vector<Frame>& frames, const GroundFunction& g
         for (int i = 0; i < 2; ++i) {
             const FootSample& now = frames[k].foot[i];
             const FootSample& before = frames[k - 1].foot[i];
-            const float heelHeight = now.heel.y - ground(now.heel.x, now.heel.z);
-            const float ballHeight = now.ball.y - ground(now.ball.x, now.ball.z);
-            report.lowestBelowGround = std::min({report.lowestBelowGround, heelHeight, ballHeight});
-            report.toeBelowGround = std::min(report.toeBelowGround, now.toe.y - ground(now.toe.x, now.toe.z));
-            if (now.planted && before.planted) {
-                // A planted foot rests on its heel, then flat on its heel and ball, then on its ball. A point that touches the
-                // ground must not move; the one that does not touch is swinging up or down about the other, and may.
-                const float heelSpeed = glm::length(glm::vec2(now.heel.x - before.heel.x, now.heel.z - before.heel.z)) / dt;
-                const float ballSpeed = glm::length(glm::vec2(now.ball.x - before.ball.x, now.ball.z - before.ball.z)) / dt;
-                constexpr float kTouching = 0.003f;
-                float slip = 0.0f;
-                if (heelHeight < kTouching && ballHeight < kTouching) {
-                    slip = std::max(heelSpeed, ballSpeed);
-                } else if (heelHeight < kTouching) {
-                    slip = heelSpeed;
-                } else if (ballHeight < kTouching) {
-                    slip = ballSpeed;
+            // The heel, the ball and the tip of the toes, measured on the pose and not on the planner's flags. Any of them that
+            // is within 3 mm of the ground, in two frames running, is on the ground, and must not move along it.
+            const glm::vec3 points[3] = {now.heel, now.ball, now.toe};
+            const glm::vec3 pointsBefore[3] = {before.heel, before.ball, before.toe};
+            constexpr float kTouching = 0.003f;
+            float lowestHeight = 1000.0f;
+            for (int p = 0; p < 3; ++p) {
+                const float height = points[p].y - ground(points[p].x, points[p].z);
+                const float heightBefore = pointsBefore[p].y - ground(pointsBefore[p].x, pointsBefore[p].z);
+                lowestHeight = std::min(lowestHeight, height);
+                if (p < 2) {
+                    report.lowestBelowGround = std::min(report.lowestBelowGround, height);
+                } else {
+                    report.toeBelowGround = std::min(report.toeBelowGround, height);
                 }
-                report.worstSlip = std::max(report.worstSlip, slip);
-                const float lowest = std::min(heelHeight, ballHeight);
-                report.worstPlantedHeight = std::max(report.worstPlantedHeight, lowest);
-                report.worstPlantedSink = std::min(report.worstPlantedSink, lowest);
+                // On the ground for three frames running: a toe that grazes the floor for one frame is not dragged along it.
+                const FootSample& twoBefore = frames[std::max<size_t>(k, 2) - 2].foot[i];
+                const glm::vec3 pointTwoBefore[3] = {twoBefore.heel, twoBefore.ball, twoBefore.toe};
+                const float heightTwoBefore = pointTwoBefore[p].y - ground(pointTwoBefore[p].x, pointTwoBefore[p].z);
+                if (height < kTouching && heightBefore < kTouching && heightTwoBefore < kTouching) {
+                    const float slip = glm::length(glm::vec2(points[p].x - pointsBefore[p].x, points[p].z - pointsBefore[p].z)) / dt;
+                    report.worstSlip = std::max(report.worstSlip, slip);
+                    report.dragged[i][p] += slip * dt;                }
+            }
+            if (now.planted) {
+                report.worstPlantedHeight = std::max(report.worstPlantedHeight, lowestHeight);
             }
             report.lowestKnee = std::min(report.lowestKnee, frames[k].knee[i]);
             report.lowestElbow = std::min(report.lowestElbow, frames[k].elbow[i]);
@@ -495,16 +512,36 @@ FootReport MeasureFeet(const std::vector<Frame>& frames, const GroundFunction& g
     return report;
 }
 
+// The worst numbers the checks of a walk met, by the kind of walk, printed at the end of a run so that the limits can be set from
+// what the gait does, with a margin, and not from a guess.
+struct WorstNumbers {
+    float slip = 0.0f;
+    float belowGround = 0.0f;
+    float toeBelowGround = 0.0f;
+    float plantedHeight = 0.0f;
+    float lowestKnee = 1000.0f;
+};
+std::map<std::string, WorstNumbers>& WorstByKind() {
+    static std::map<std::string, WorstNumbers> worst;
+    return worst;
+}
+std::string currentKind = "other";
+
 // The checks of a walk: the feet do not slide, they stand on the ground and never go through it, the knees and elbows do not bend backwards.
-void CheckWalk(const std::vector<Frame>& frames, const GroundFunction& ground, float dt, const std::string& label, size_t firstFrame = 0, float slipLimit = 0.15f) {
+void CheckWalk(const std::vector<Frame>& frames, const GroundFunction& ground, float dt, const std::string& label, size_t firstFrame = 0, float slipLimit = 0.1f) {
     const FootReport report = MeasureFeet(frames, ground, dt, firstFrame);
+    WorstNumbers& worst = WorstByKind()[currentKind];
+    worst.slip = std::max(worst.slip, report.worstSlip);
+    worst.belowGround = std::min(worst.belowGround, report.lowestBelowGround);
+    worst.toeBelowGround = std::min(worst.toeBelowGround, report.toeBelowGround);
+    worst.plantedHeight = std::max(worst.plantedHeight, report.worstPlantedHeight);
+    worst.lowestKnee = std::min(worst.lowestKnee, report.lowestKnee);
     // The slip limit is in metres a second: a planted foot is still, to a few percent of running speed. Sliding feet slip at
     // the speed of the body, 1 to 3 m/s.
     Check(report.worstSlip < slipLimit, label + ": a planted foot slides at " + std::to_string(report.worstSlip) + " m/s");
-    Check(report.lowestBelowGround > -0.008f, label + ": a heel or ball goes through the ground by " + std::to_string(-report.lowestBelowGround) + " m");
-    Check(report.toeBelowGround > -0.013f, label + ": a toe goes through the ground by " + std::to_string(-report.toeBelowGround) + " m");
-    Check(report.worstPlantedHeight < 0.006f, label + ": a planted foot floats " + std::to_string(report.worstPlantedHeight) + " m above the ground");
-    Check(report.worstPlantedSink > -0.008f, label + ": a planted foot sinks " + std::to_string(-report.worstPlantedSink) + " m");
+    Check(report.lowestBelowGround > -0.003f, label + ": a heel or ball goes through the ground by " + std::to_string(-report.lowestBelowGround) + " m");
+    Check(report.toeBelowGround > -0.003f, label + ": a toe goes through the ground by " + std::to_string(-report.toeBelowGround) + " m");
+    Check(report.worstPlantedHeight < 0.003f, label + ": a planted foot floats " + std::to_string(report.worstPlantedHeight) + " m above the ground");
     Check(report.lowestKnee > -0.5f, label + ": a knee bends backwards: " + std::to_string(report.lowestKnee) + " degrees");
     Check(report.lowestElbow > -0.5f, label + ": an elbow bends backwards: " + std::to_string(report.lowestElbow) + " degrees");
     Check(report.unreachedFrames == 0, label + ": a leg could not reach its foot in " + std::to_string(report.unreachedFrames) + " frames");
@@ -540,6 +577,7 @@ void GaitShapeFollowsSpeedAndLegLength() {
 }
 
 void FeetStayOnTheGroundAndDoNotSlide() {
+    currentKind = "steady walk and run";
     const float dt = 1.0f / 120.0f;
     for (const CharacterParameters& person : SomePeople()) {
         const BodyModel body = MakeBodyModel(person);
@@ -553,7 +591,7 @@ void FeetStayOnTheGroundAndDoNotSlide() {
 void StrideMatchesSpeed() {
     const float dt = 1.0f / 120.0f;
     for (const float speed : {0.9f, 1.4f, 3.0f}) {
-        const CharacterParameters person = Person(0.5f, 30, 1.75f, 70, 0.4f);
+        const CharacterParameters person = Person(0.5f, 30, 1.75f, 70, 0.1f);
         const std::vector<Frame> frames = Simulate(person, FlatGround(), {{10.0f, speed, 0.0f}}, dt);
         const size_t settled = static_cast<size_t>(5.0f / dt);
         for (int i = 0; i < 2; ++i) {
@@ -618,7 +656,7 @@ void TheGaitRepeatsEveryPeriod() {
 void ThePelvisMovesSmoothly() {
     const float dt = 1.0f / 120.0f;
     for (const float speed : {1.0f, 1.4f, 2.2f, 3.0f, 4.0f}) {
-        const CharacterParameters person = Person(0.5f, 35, 1.75f, 70, 0.4f);
+        const CharacterParameters person = Person(0.5f, 35, 1.75f, 70, 0.1f);
         const std::vector<Frame> frames = Simulate(person, FlatGround(), {{6.0f, speed, 0.0f}}, dt);
         float largestAcceleration = 0.0f;
         float lowest = 10.0f;
@@ -630,7 +668,7 @@ void ThePelvisMovesSmoothly() {
             lowest = std::min(lowest, frames[k].pelvis.y);
             highest = std::max(highest, frames[k].pelvis.y);
         }
-        Check(largestAcceleration < 80.0f, "the pelvis does not jerk at " + std::to_string(speed) + " m/s: acceleration " + std::to_string(largestAcceleration));
+        Check(largestAcceleration < (speed < 1.5f ? 40.0f : 90.0f), "the pelvis does not jerk at " + std::to_string(speed) + " m/s: acceleration " + std::to_string(largestAcceleration));
         Check(highest - lowest < 0.14f, "the pelvis does not bob more than 14 cm at " + std::to_string(speed) + " m/s: " + std::to_string(highest - lowest));
         if (speed >= 1.0f && speed <= 1.5f) {
             Check(highest - lowest > 0.02f, "a walker's pelvis rises and falls by a few centimetres: " + std::to_string(highest - lowest));
@@ -639,8 +677,9 @@ void ThePelvisMovesSmoothly() {
 }
 
 void FeetFollowSlopesAndHills() {
+    currentKind = "slopes and hills";
     const float dt = 1.0f / 120.0f;
-    const CharacterParameters person = Person(0.5f, 30, 1.75f, 70, 0.4f);
+    const CharacterParameters person = Person(0.5f, 30, 1.75f, 70, 0.1f);
     struct Terrain {
         const char* name;
         GroundFunction ground;
@@ -649,7 +688,7 @@ void FeetFollowSlopesAndHills() {
     for (const Terrain& terrain : terrains) {
         for (const float speed : {1.0f, 1.4f, 2.0f}) {
             const std::vector<Frame> frames = Simulate(person, terrain.ground, {{6.0f, speed, 0.0f}}, dt);
-            CheckWalk(frames, terrain.ground, dt, std::string(terrain.name) + " at " + std::to_string(speed), 0, 0.25f);
+            CheckWalk(frames, terrain.ground, dt, std::string(terrain.name) + " at " + std::to_string(speed), 0, 0.1f);
             // The pelvis keeps its height over the ground it walks on.
             const float leg = MakeBodyModel(person).legLength;
             for (size_t k = frames.size() / 2; k < frames.size(); ++k) {
@@ -666,9 +705,31 @@ void FeetFollowSlopesAndHills() {
     Check(upLean > downLean, "the trunk leans further forward going uphill than downhill");
 }
 
-void ABodyTurnsAndLeansIntoTheTurn() {
+void SteepGroundIsFollowedAsWellAsTheLegsAllow() {
+    // The gait follows slopes of up to 12 degrees with its feet on the ground. On steeper ground the legs run out of reach
+    // (the planted foot of a walker going up 20 degrees sinks about 6 cm, 15 degrees about 3 cm): the pose stays finite and
+    // inside the limits, the knees do not bend backwards, and the feet do not sink by more than that. A person on such ground
+    // wants stairs or climbing, which this module does not make.
     const float dt = 1.0f / 120.0f;
     const CharacterParameters person = Person(0.5f, 30, 1.75f, 70, 0.4f);
+    for (const float degrees : {15.0f, 20.0f, -15.0f, -20.0f}) {
+        const GroundFunction ground = SlopedGround(degrees);
+        const std::vector<Frame> frames = Simulate(person, ground, {{6.0f, 1.2f, 0.0f}}, dt);
+        const FootReport report = MeasureFeet(frames, ground, dt, static_cast<size_t>(2.0f / dt));
+        const std::string label = "on a slope of " + std::to_string(degrees) + " degrees";
+        Check(report.lowestBelowGround > -0.07f && report.toeBelowGround > -0.07f, label + ": the feet sink by " + std::to_string(-report.lowestBelowGround) + " m");
+        Check(report.lowestKnee > -0.5f, label + ": a knee bends backwards");
+        Check(report.worstSlip < 0.7f, label + ": a foot slides at " + std::to_string(report.worstSlip) + " m/s");
+        for (const Frame& frame : frames) {
+            Check(PoseIsFinite(frame.pose), label + ": a pose is not finite");
+        }
+    }
+}
+
+void ABodyTurnsAndLeansIntoTheTurn() {
+    currentKind = "turning while moving";
+    const float dt = 1.0f / 120.0f;
+    const CharacterParameters person = Person(0.5f, 30, 1.75f, 70, 0.1f);
     for (const float turnRate : {0.6f, -0.6f}) {
         const std::vector<Frame> frames = Simulate(person, FlatGround(), {{2.0f, 2.0f, 0.0f}, {5.0f, 2.0f, turnRate}}, dt);
         CheckWalk(frames, FlatGround(), dt, "turning at " + std::to_string(turnRate), static_cast<size_t>(2.0f / dt));
@@ -689,16 +750,17 @@ void ABodyTurnsAndLeansIntoTheTurn() {
 }
 
 void EveryTurnRateIsFollowedOrLimitedWithoutBreakingTheLegs() {
+    currentKind = "turn rate sweep";
     // Turn rates from nothing to 4 radians a second, to the left and to the right, standing, walking and running: the legs
     // reach, the knees stay inside their range and the feet do not slide. The walker limits what it follows.
     const float dt = 1.0f / 120.0f;
-    const CharacterParameters person = Person(0.5f, 30, 1.75f, 70, 0.4f);
+    const CharacterParameters person = Person(0.5f, 30, 1.75f, 70, 0.1f);
     const BodyModel body = MakeBodyModel(person);
     for (const float speed : {0.0f, 1.4f, 3.0f}) {
         for (const float rate : {0.0f, 0.5f, 1.0f, 1.5f, 2.0f, 3.0f, 4.0f, -1.0f, -2.5f, -4.0f}) {
             const std::vector<Frame> frames = Simulate(person, FlatGround(), {{4.0f, speed, 0.0f}, {6.0f, speed, rate}}, dt);
             const std::string label = "speed " + std::to_string(speed) + " turning at " + std::to_string(rate);
-            CheckWalk(frames, FlatGround(), dt, label, static_cast<size_t>(4.0f / dt), 0.4f);
+            CheckWalk(frames, FlatGround(), dt, label, static_cast<size_t>(4.0f / dt), 0.1f);
             // The heading turns by at most what the gait allows.
             const float turned = std::abs(frames.back().heading - frames[static_cast<size_t>(4.0f / dt) + static_cast<size_t>(3.0f / dt)].heading) / 3.0f;
             Check(turned <= MaximumTurnRate(body, speed) + 0.05f, label + ": the body turns faster than the gait follows: " + std::to_string(turned));
@@ -707,9 +769,51 @@ void EveryTurnRateIsFollowedOrLimitedWithoutBreakingTheLegs() {
     }
 }
 
+// Any heel, ball or toe tip within 3 mm of the floor, in two frames running, whatever the walker says about its feet.
+float WorstSlideOnTheFloor(const std::vector<Frame>& frames, float dt, size_t from) {
+    return MeasureFeet(frames, FlatGround(), dt, from).worstSlip;
+}
+
+void StoppingAndTurningOnTheSpotDoNotDragTheFeet() {
+    currentKind = "stopping and turning on the spot";
+    const float dt = 1.0f / 120.0f;
+    constexpr float kSlideLimit = 0.1f;  // metres a second
+    for (const CharacterParameters& person : {Person(0.5f, 30, 1.75f, 70, 0.4f), Person(1.0f, 30, 1.90f, 100, 0.8f, 1), Person(0.0f, 25, 1.55f, 48, 0.2f, 2)}) {
+        const std::string who = "stature " + std::to_string(person.statureMeters);
+        // Stopping from a walk and from a run: feet that swing to their last places are lifted, not dragged.
+        for (const float speed : {1.4f, 3.0f}) {
+            const std::vector<Frame> stopping = Simulate(person, FlatGround(), {{5.0f, speed, 0.0f}, {5.0f, 0.0f, 0.0f}}, dt);
+            const std::string label = who + " stopping from " + std::to_string(speed);
+            std::cerr << "INFO " << label << " dragged " << MeasureFeet(stopping, FlatGround(), dt, static_cast<size_t>(2.0f / dt)).MostDragged() << "\n";
+            Check(WorstSlideOnTheFloor(stopping, dt, static_cast<size_t>(2.0f / dt)) < kSlideLimit, label + ": a foot slides on the floor at " + std::to_string(WorstSlideOnTheFloor(stopping, dt, static_cast<size_t>(2.0f / dt))) + " m/s");
+            CheckWalk(stopping, FlatGround(), dt, label, static_cast<size_t>(2.0f / dt), kSlideLimit);
+            // And the feet end side by side, flat, and still.
+            const Frame& end = stopping.back();
+            const Frame& before = stopping[stopping.size() - 120];
+            for (int i = 0; i < 2; ++i) {
+                Check(glm::length(end.foot[i].heel - before.foot[i].heel) < 1e-3f, label + ": the feet are still after the stop");
+                Check(std::abs(end.foot[i].heel.y) < 0.004f && std::abs(end.foot[i].ball.y) < 0.004f, label + ": the feet are flat on the floor after the stop");
+            }
+            Check(std::abs(end.foot[0].heel.z - end.foot[1].heel.z) < 0.06f, label + ": the feet end side by side: " + std::to_string(end.foot[0].heel.z - end.foot[1].heel.z));
+        }
+        // Turning on the spot, to either side, with small steps.
+        for (const float rate : {0.6f, -0.6f, 2.0f, -2.0f}) {
+            const std::vector<Frame> turning = Simulate(person, FlatGround(), {{2.0f, 0.0f, 0.0f}, {6.0f, 0.0f, rate}, {3.0f, 0.0f, 0.0f}}, dt);
+            const std::string label = who + " turning on the spot at " + std::to_string(rate);
+            std::cerr << "INFO " << label << " dragged " << MeasureFeet(turning, FlatGround(), dt, 0).MostDragged() << "\n";
+            Check(WorstSlideOnTheFloor(turning, dt, 0) < kSlideLimit, label + ": a foot is dragged along the floor at " + std::to_string(WorstSlideOnTheFloor(turning, dt, 0)) + " m/s");
+            CheckWalk(turning, FlatGround(), dt, label, 0, kSlideLimit);
+            // The body does turn, and the feet go with it.
+            const float turned = std::abs(turning[static_cast<size_t>(8.0f / dt)].heading - turning[static_cast<size_t>(2.0f / dt)].heading);
+            Check(turned > 0.8f * std::min(std::abs(rate), 2.0f) * 6.0f * 0.8f, label + ": the body turns: " + std::to_string(turned) + " radians");
+        }
+    }
+}
+
 void AWalkerStartsAndStopsGently() {
+    currentKind = "start and stop";
     const float dt = 1.0f / 60.0f;
-    const CharacterParameters person = Person(0.5f, 30, 1.75f, 70, 0.4f);
+    const CharacterParameters person = Person(0.5f, 30, 1.75f, 70, 0.1f);
     const BodyModel body = MakeBodyModel(person);
     Walker walker(body, PersonalityFrom(body.parameters));
     walker.Reset(glm::vec3(0.0f), 0.0f);
@@ -757,6 +861,7 @@ float LargestAngularSpeed(const std::vector<Frame>& frames, float dt, size_t fro
 }
 
 void EveryChangeOfGaitIsContinuous() {
+    currentKind = "scripted changes";
     // Idle, walk, run, turn, stop, idle: no pops at any step of the way, at two frame rates.
     const std::vector<Segment> script = {{1.5f, 0.0f, 0.0f}, {4.0f, 1.4f, 0.0f}, {4.0f, 3.8f, 0.0f}, {3.0f, 3.8f, 0.9f}, {3.0f, 1.4f, -0.5f}, {3.0f, 0.0f, 0.0f}, {2.0f, 0.0f, 0.0f}};
     for (const float dt : {1.0f / 120.0f, 1.0f / 60.0f, 1.0f / 30.0f}) {
@@ -765,10 +870,10 @@ void EveryChangeOfGaitIsContinuous() {
             Joint worst = Joint::Pelvis;
             const float speed = LargestAngularSpeed(frames, dt, 0, &worst);
             // A knee swings through 100 degrees in a tenth of a second when running; a pop would be several times faster.
-            Check(speed < 2300.0f, "no joint turns faster than 2300 degrees a second (" + std::string(MakeBodyModel(person).skeleton[worst].name) + " at " +
+            Check(speed < 1150.0f, "no joint turns faster than 1150 degrees a second (" + std::string(MakeBodyModel(person).skeleton[worst].name) + " at " +
                                        std::to_string(speed) + ") at dt " + std::to_string(dt));
             // Slower frames and a changing speed spread the planted foot's error over bigger steps.
-            CheckWalk(frames, FlatGround(), dt, "script at dt " + std::to_string(dt) + " stature " + std::to_string(person.statureMeters), 0, 0.4f);
+            CheckWalk(frames, FlatGround(), dt, "script at dt " + std::to_string(dt) + " stature " + std::to_string(person.statureMeters), 0, 0.1f);
             // The pelvis never jumps: from one frame to the next it moves by no more than the speed allows forwards and 2 m/s up or down.
             for (size_t k = 1; k < frames.size(); ++k) {
                 Check(glm::length(frames[k].pelvis - frames[k - 1].pelvis) < (frames[k].speed + 2.0f) * dt + 0.02f, "the pelvis does not jump");
@@ -801,13 +906,13 @@ StepSizes LargestFrameSteps(const CharacterParameters& person, float speed, floa
 void AStepOfAFrameShrinksWithTheFrame() {
     // A pop is a jump that does not get smaller when the frames do. In a steady gait the change of every joint between two
     // frames is proportional to the length of the frame, and the speed of a knee is what a knee can do.
-    const CharacterParameters person = Person(0.5f, 30, 1.75f, 70, 0.4f);
+    const CharacterParameters person = Person(0.5f, 30, 1.75f, 70, 0.1f);
     struct Case {
         float speed;
         float kneeLimit;  // degrees a second
         float jointLimit;
     };
-    for (const Case& gait : {Case{1.4f, 1000.0f, 1000.0f}, Case{3.0f, 1700.0f, 1700.0f}}) {
+    for (const Case& gait : {Case{1.4f, 650.0f, 650.0f}, Case{3.0f, 900.0f, 900.0f}}) {
         const float dt = 1.0f / 120.0f;
         const StepSizes coarse = LargestFrameSteps(person, gait.speed, dt);
         const StepSizes fine = LargestFrameSteps(person, gait.speed, dt / 4.0f);
@@ -845,13 +950,14 @@ void TheSameScriptGivesTheSameMotionEveryTime() {
 }
 
 void TheGaitWorksForEveryBodyFromTheSmallestToTheLargest() {
+    currentKind = "extreme bodies";
     const float dt = 1.0f / 120.0f;
     for (const CharacterParameters& person : ExtremePeople()) {
         const BodyModel body = MakeBodyModel(person);
         for (const float speed : {1.0f, 1.6f, 2.5f, MaximumSpeed(body)}) {
             const std::string label = "stature " + std::to_string(person.statureMeters) + " mass " + std::to_string(person.massKg) + " speed " + std::to_string(speed);
             CheckWalk(Simulate(person, FlatGround(), {{5.0f, speed, 0.0f}}, dt), FlatGround(), dt, label);
-            CheckWalk(Simulate(person, RollingGround(), {{5.0f, speed, 0.0f}}, dt), RollingGround(), dt, label + " on hills", 0, 0.3f);
+            CheckWalk(Simulate(person, RollingGround(), {{5.0f, speed, 0.0f}}, dt), RollingGround(), dt, label + " on hills", 0, 0.12f);
         }
     }
 }
@@ -879,12 +985,12 @@ float ArmSwingRange(const CharacterParameters& person, const Mood& mood, float s
 }
 
 void PersonalityFollowsFromTheBodyAndTheMood() {
-    const CharacterParameters young = Person(0.5f, 22, 1.75f, 70, 0.4f);
-    const CharacterParameters old = Person(0.5f, 78, 1.75f, 70, 0.4f);
-    const CharacterParameters heavy = Person(0.5f, 30, 1.75f, 110, 0.4f);
+    const CharacterParameters young = Person(0.5f, 22, 1.75f, 70, 0.1f);
+    const CharacterParameters old = Person(0.5f, 78, 1.75f, 70, 0.1f);
+    const CharacterParameters heavy = Person(0.5f, 30, 1.75f, 110, 0.1f);
     const CharacterParameters slim = Person(0.5f, 30, 1.75f, 55, 0.4f);
-    const CharacterParameters man = Person(1.0f, 30, 1.75f, 70, 0.4f);
-    const CharacterParameters woman = Person(0.0f, 30, 1.75f, 70, 0.4f);
+    const CharacterParameters man = Person(1.0f, 30, 1.75f, 70, 0.1f);
+    const CharacterParameters woman = Person(0.0f, 30, 1.75f, 70, 0.1f);
 
     const BodyModel youngBody = MakeBodyModel(young);
     const GaitShape youngWalk = ComputeGaitShape(youngBody, PersonalityFrom(youngBody.parameters), 1.2f);
@@ -921,7 +1027,7 @@ void PersonalityFollowsFromTheBodyAndTheMood() {
 
 void TheArmsSwingAgainstTheLegsAndTheShouldersAgainstTheHips() {
     const float dt = 1.0f / 120.0f;
-    const CharacterParameters person = Person(0.5f, 30, 1.75f, 70, 0.4f);
+    const CharacterParameters person = Person(0.5f, 30, 1.75f, 70, 0.1f);
     const std::vector<Frame> frames = Simulate(person, FlatGround(), {{8.0f, 1.4f, 0.0f}}, dt);
     const Skeleton skeleton = character::BuildSkeleton(person);
     // Over a cycle the left arm is forward when the left foot is behind, and the left shoulder is forward when the left hip is back.
@@ -942,7 +1048,7 @@ void TheArmsSwingAgainstTheLegsAndTheShouldersAgainstTheHips() {
 
 void TheFeetPointTheWayTheyGoAndTheHeadStaysLevel() {
     const float dt = 1.0f / 120.0f;
-    const CharacterParameters person = Person(0.5f, 30, 1.75f, 70, 0.4f);
+    const CharacterParameters person = Person(0.5f, 30, 1.75f, 70, 0.1f);
     const std::vector<Frame> frames = Simulate(person, FlatGround(), {{6.0f, 1.4f, 0.0f}}, dt);
     const Skeleton skeleton = character::BuildSkeleton(person);
     float highestPitch = -1000.0f;
@@ -975,7 +1081,7 @@ void NoiseIsDeterministicSmoothAndBounded() {
 
 void StandingStillBreathesAndShiftsWeightWithoutMovingTheFeet() {
     const float dt = 1.0f / 60.0f;
-    const CharacterParameters person = Person(0.5f, 30, 1.75f, 70, 0.4f);
+    const CharacterParameters person = Person(0.5f, 30, 1.75f, 70, 0.1f);
     const std::vector<Frame> frames = Simulate(person, FlatGround(), {{20.0f, 0.0f, 0.0f}}, dt);
     float chestLow = 1000.0f;
     float chestHigh = -1000.0f;
@@ -995,7 +1101,7 @@ void StandingStillBreathesAndShiftsWeightWithoutMovingTheFeet() {
     }
     Check(chestHigh - chestLow > 0.002f, "the chest moves with the breath: " + std::to_string(chestHigh - chestLow));
     Check(pelvisHigh - pelvisLow > 0.004f && pelvisHigh - pelvisLow < 0.06f, "the weight shifts a little: " + std::to_string(pelvisHigh - pelvisLow));
-    Check(LargestAngularSpeed(frames, dt, 0) < 40.0f, "a standing person moves slowly");
+    Check(LargestAngularSpeed(frames, dt, 0) < 10.0f, "a standing person moves slowly");
 }
 
 // ---------------------------------------------------------------------------
@@ -1215,6 +1321,7 @@ void APushMakesTheBodyGiveAndComeBack() {
 }
 
 void ABodyWalksOnWhileItIsPushed() {
+    currentKind = "pushed";
     // A push while walking: the feet stay planted, the pose has no jumps (the onset has its own, looser bound).
     const float dt = 1.0f / 60.0f;
     const BodyModel body = MakeBodyModel(Person(0.5f, 30, 1.75f, 70, 0.4f));
@@ -1237,15 +1344,15 @@ void ABodyWalksOnWhileItIsPushed() {
         walker.Update(dt, LocomotionCommand{1.4f, 0.0f});
         frames.push_back(RecordFrame(walker));
     }
-    CheckWalk(frames, FlatGround(), dt, "walking and pushed", 0, 0.25f);
+    CheckWalk(frames, FlatGround(), dt, "walking and pushed", 0, 0.1f);
     const size_t hitFrame = 60 * 5;
-    Check(LargestAngularSpeed(frames, dt, 60 * 3) < 2300.0f, "the pose has no pops while pushed");
+    Check(LargestAngularSpeed(frames, dt, 60 * 3) < 1150.0f, "the pose has no pops while pushed");
     // The onset of the hit is the quickest thing the body does: the trunk reaches its peak within a fraction of a second.
     float onset = 0.0f;
     for (size_t k = hitFrame; k < hitFrame + 30; ++k) {
         onset = std::max(onset, DegreesBetween(frames[k - 1].pose.rotation[character::Index(Joint::Spine2)], frames[k].pose.rotation[character::Index(Joint::Spine2)]) / dt);
     }
-    Check(onset < 400.0f, "the trunk does not jerk at the onset of a hit: " + std::to_string(onset) + " degrees a second");
+    Check(onset < 200.0f, "the trunk does not jerk at the onset of a hit: " + std::to_string(onset) + " degrees a second");
 }
 
 // ---------------------------------------------------------------------------
@@ -1492,7 +1599,7 @@ void ACrossFadeIsSmoothAndHasNoPops() {
             worst = std::max(worst, DegreesBetween(shown[k - 1].rotation[j], shown[k].rotation[j]) / dt);
         }
     }
-    Check(worst < 2300.0f, "a cross fade between a walk and a run has no pops: " + std::to_string(worst) + " degrees a second");
+    Check(worst < 1000.0f, "a cross fade between a walk and a run has no pops: " + std::to_string(worst) + " degrees a second");
 }
 
 void AMixOfAllTheLayersStaysInsideTheLimitsAndContinuous() {
@@ -1528,7 +1635,7 @@ void AMixOfAllTheLayersStaysInsideTheLimitsAndContinuous() {
         }
         previous = pose;
     }
-    Check(worst < 2300.0f, "the whole stack has no pops: " + std::to_string(worst));
+    Check(worst < 1000.0f, "the whole stack has no pops: " + std::to_string(worst));
 }
 
 // ---------------------------------------------------------------------------
@@ -1696,8 +1803,10 @@ int main(int argc, char** argv) {
         {"TheGaitRepeatsEveryPeriod", TheGaitRepeatsEveryPeriod},
         {"ThePelvisMovesSmoothly", ThePelvisMovesSmoothly},
         {"FeetFollowSlopesAndHills", FeetFollowSlopesAndHills},
+        {"SteepGroundIsFollowedAsWellAsTheLegsAllow", SteepGroundIsFollowedAsWellAsTheLegsAllow},
         {"ABodyTurnsAndLeansIntoTheTurn", ABodyTurnsAndLeansIntoTheTurn},
         {"EveryTurnRateIsFollowedOrLimitedWithoutBreakingTheLegs", EveryTurnRateIsFollowedOrLimitedWithoutBreakingTheLegs},
+        {"StoppingAndTurningOnTheSpotDoNotDragTheFeet", StoppingAndTurningOnTheSpotDoNotDragTheFeet},
         {"AWalkerStartsAndStopsGently", AWalkerStartsAndStopsGently},
         {"EveryChangeOfGaitIsContinuous", EveryChangeOfGaitIsContinuous},
         {"AStepOfAFrameShrinksWithTheFrame", AStepOfAFrameShrinksWithTheFrame},
@@ -1742,6 +1851,10 @@ int main(int argc, char** argv) {
     if (ran == 0) {
         std::cerr << "no test named " << filter << "\n";
         return 2;
+    }
+    for (const auto& [kind, worst] : WorstByKind()) {
+        std::cout << "worst " << kind << ": slide " << worst.slip << " m/s, heel or ball below the floor " << -worst.belowGround * 1000.0f << " mm, toe tip "
+                  << -worst.toeBelowGround * 1000.0f << " mm, planted foot above the floor " << worst.plantedHeight * 1000.0f << " mm, lowest knee " << worst.lowestKnee << " deg\n";
     }
     std::cout << ran << " tests, " << failureCount << " failed checks\n";
     return failureCount == 0 ? 0 : 1;

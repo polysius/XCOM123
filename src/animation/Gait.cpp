@@ -17,14 +17,17 @@ constexpr float kMaxStep = 1.0f / 60.0f;
 constexpr float kLongestUpdate = 0.5f;
 // The quickest the steps of a turn on the spot can be, a cycle of two steps in seconds.
 constexpr float kShortestPeriod = 0.3f;
+// A foot that swings keeps at least this part of its walking lift, so that a short step is never dragged along the floor.
+constexpr float kMinimumLiftShare = 0.6f;
 // The turn of the pelvis, in radians, that a planted foot is asked to stand through, from landing to toe-off.
 constexpr float kTurnOverStance = 0.6f;
 // How fast the lift that a swinging foot needs over and above its planned path may change, in metres a second.
-constexpr float kCorrectionSpeed = 1.5f;
+constexpr float kCorrectionSpeed = 2.2f;
 constexpr float kReferenceLegLength = 0.92f;  // of the person the cadence and speed numbers below were fitted on
 
 // The pitch of the foot, toes up, at heel strike and at toe-off, at full roll (the toes can only bend up 10 degrees, so toe-off is modest).
 constexpr float kHeelStrikePitch = 18.0f * kDegreesToRadians;
+constexpr float kToesBendUp = 9.5f * kDegreesToRadians;  // the toes joint bends up 10 degrees
 constexpr float kToeOffPitch = 20.0f * kDegreesToRadians;
 // The fractions of the stance at which the heel has come down, and at which the heel starts to rise again.
 constexpr float kHeelDownBy = 0.15f;
@@ -246,7 +249,7 @@ GaitShape ComputeGaitShape(const BodyModel& body, const Personality& personality
     shape.stepHalfWidth = body.footHalfWidth * personality.stepWidthScale * (1.0f - 0.35f * shape.runBlend);
     shape.rollAmount = Smoothstep(0.05f, 0.5f, 0.5f * shape.strideLength);
     const float liftScale = Smoothstep(0.0f, 0.35f, 0.5f * shape.strideLength);
-    shape.footClearance = body.legLength * (0.045f + 0.10f * shape.runBlend) * personality.footClearanceScale * liftScale;
+    shape.footClearance = body.legLength * (0.045f + 0.10f * shape.runBlend) * personality.footClearanceScale * Lerp(kMinimumLiftShare, 1.0f, liftScale);
     // The foot lands ahead of the hip by a quarter of the stride (half a step) when the other foot is still down; in a run,
     // with nothing else on the ground, it lands half of the contact ahead, so that the contact is symmetric about the hip.
     shape.footLead = shape.strideLength * 0.5f * shape.dutyFactor;
@@ -314,7 +317,37 @@ void Walker::Update(float dt, const LocomotionCommand& command) {
     }
 }
 
+// Whether the walker is to stand: no speed and no turn, now or asked for.
+bool Walker::StandingStill(float wantedSpeed, float wantedTurnRate) const {
+    constexpr float kStill = 0.02f;
+    return speed < kStill && wantedSpeed < kStill && std::abs(turnRate) < kStill && std::abs(wantedTurnRate) < kStill;
+}
+
+// Whether both feet are on, or coming down on, the places where a standing person puts them, beside the middle of the body.
+bool Walker::FeetAreTogether() const {
+    for (const bool left : {true, false}) {
+        const FootTrack& foot = feet[left ? 0 : 1];
+        const Footfall resting = PredictFootfall(left, 0.0f);
+        if (glm::length(glm::vec2(resting.heel.x - foot.footfall.heel.x, resting.heel.z - foot.footfall.heel.z)) > 0.04f) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// How far the body will have gone along its path in `seconds`, if it goes on speeding up or slowing down at the rate it does
+// now until it reaches the speed it is heading for.
+float Walker::DistanceAhead(float seconds) const {
+    if (std::abs(acceleration) < 1e-4f) {
+        return speed * seconds;
+    }
+    const float timeToTarget = std::max((targetSpeed - speed) / acceleration, 0.0f);
+    const float accelerating = std::min(seconds, timeToTarget);
+    return speed * accelerating + 0.5f * acceleration * accelerating * accelerating + targetSpeed * (seconds - accelerating);
+}
+
 void Walker::Step(float dt, float wantedSpeed, float wantedTurnRate) {
+    targetSpeed = wantedSpeed;
     // Speed and turning follow the command at a limited rate.
     const float previousSpeed = speed;
     speed = wantedSpeed > speed ? std::min(wantedSpeed, speed + settings.acceleration * dt) : std::max(wantedSpeed, speed - settings.deceleration * dt);
@@ -324,7 +357,16 @@ void Walker::Step(float dt, float wantedSpeed, float wantedTurnRate) {
     turnRate += (std::clamp(wantedTurnRate, -turnLimit, turnLimit) - turnRate) * (1.0f - std::exp(-settings.turnResponse * dt));
 
     shape = ComputeGaitShape(body, personality, speed, turnRate);
-    phase += dt / shape.period;
+    if (StandingStill(wantedSpeed, std::clamp(wantedTurnRate, -turnLimit, turnLimit))) {
+        // At rest: finish the step in hand, and stop when a foot has landed at the end of one (a half cycle) with both feet
+        // side by side. Without that the body would step on the spot for ever.
+        const float halves = phase * 2.0f;
+        const float next = std::ceil(halves - 1e-4f);
+        const float advanced = halves + 2.0f * dt / shape.period;
+        phase = (advanced >= next && FeetAreTogether() ? next : advanced) * 0.5f;
+    } else {
+        phase += dt / shape.period;
+    }
     phase -= std::floor(phase);
     time += dt;
 
@@ -344,7 +386,7 @@ Walker::Footfall Walker::PredictFootfall(bool left, float secondsAhead) const {
     const float side = left ? 1.0f : -1.0f;
     const float headingThen = heading + turnRate * secondsAhead;
     const float middleHeading = heading + 0.5f * turnRate * secondsAhead;
-    const glm::vec3 bodyThen = position + Forward(middleHeading) * (speed * secondsAhead);
+    const glm::vec3 bodyThen = position + Forward(middleHeading) * DistanceAhead(secondsAhead);
     const glm::vec3 heelXZ = bodyThen + LeftOf(headingThen) * (side * shape.stepHalfWidth) + Forward(headingThen) * (shape.footLead + body.heelOffset.z);
 
     Footfall footfall;
@@ -388,12 +430,20 @@ Walker::FootPose Walker::PlantedFootAtPitch(const FootTrack& foot, float stanceP
     planted.yaw = footfall.yaw;
     planted.slope = footfall.slope;
     planted.pitch = pitch;
-    const glm::vec3 pivot = onBall ? ball : footfall.heel;
-    const glm::vec3 pivotInFoot = onBall ? body.ballOffset : body.heelOffset;
-    planted.ankle = pivot - FootRotation(planted.yaw, planted.pitch) * pivotInFoot;
     // With the heel up, the toes bend back to stay flat on the ground, as far as the joint allows.
     const float roll = pitch - footfall.slope;
-    planted.toeFlex = roll < 0.0f ? roll : 0.0f;
+    planted.toeFlex = std::clamp(roll, -kToesBendUp, 0.0f);
+
+    glm::vec3 pivot = onBall ? ball : footfall.heel;
+    glm::vec3 pivotInFoot = onBall ? body.ballOffset : body.heelOffset;
+    if (onBall && roll < -kToesBendUp) {
+        // Past that, the heel rises further than the toes can follow, and the foot rolls on from the ball to the tips of the
+        // toes: the tip stays where it was on the floor, so the toes do not dig in or slide.
+        const glm::vec3 beyondBall = body.toeOffset - body.ballOffset;
+        pivot = ball + flat * beyondBall;
+        pivotInFoot = body.ballOffset + glm::angleAxis(planted.toeFlex, glm::vec3(1.0f, 0.0f, 0.0f)) * beyondBall;
+    }
+    planted.ankle = pivot - FootRotation(planted.yaw, planted.pitch) * pivotInFoot;
     return planted;
 }
 
@@ -407,8 +457,8 @@ Walker::FootPose Walker::SwingingFoot(const FootTrack& foot, float swingProgress
     FootPose swinging;
     swinging.ankle = glm::mix(start.ankle, end.ankle, travel);
     // A walker keeps the foot close to the ground at both ends of the swing; a runner kicks it up at once and brings it down late.
-    const float walkLift = lift * lift;
-    const float runLift = Smoothstep(0.0f, 0.3f, swingProgress) * Smoothstep(0.0f, 0.3f, 1.0f - swingProgress);
+    const float walkLift = swingProgress < 0.5f ? lift : lift * lift;  // rises at once, and comes down gently
+    const float runLift = Smoothstep(0.0f, 0.15f, swingProgress) * Smoothstep(0.0f, 0.3f, 1.0f - swingProgress);
     swinging.ankle.y += shape.footClearance * Lerp(walkLift, runLift, shape.runBlend);
     swinging.yaw = LerpAngle(start.yaw, end.yaw, travel);
     // The sole follows the ground under it, and rolls from its toe-off angle to its heel-strike angle on top of that. The
@@ -419,14 +469,17 @@ Walker::FootPose Walker::SwingingFoot(const FootTrack& foot, float swingProgress
     swinging.pitch = swinging.slope + Lerp(startRoll, endRoll, Smoothstep(0.0f, 1.0f, swingProgress)) + 0.10f * shape.rollAmount * lift;
     swinging.toeFlex = start.toeFlex * (1.0f - Smoothstep(0.0f, 0.5f, swingProgress));
     // Over uneven ground the foot lifts further, as much as it takes to keep the sole above what is under it.
-    swinging.ankle.y += lift * TerrainDeficit(swinging.ankle, FootRotation(swinging.yaw, swinging.pitch));
+    swinging.ankle.y += lift * TerrainDeficit(swinging.ankle, FootRotation(swinging.yaw, swinging.pitch), swinging.toeFlex);
     return swinging;
 }
 
 // How far a swinging foot would have to rise to keep its heel, ball and toe a little above the ground.
-float Walker::TerrainDeficit(const glm::vec3& ankle, const glm::quat& footRotation) const {
+float Walker::TerrainDeficit(const glm::vec3& ankle, const glm::quat& footRotation, float toeFlex) const {
     float deficit = 0.0f;
-    for (const glm::vec3& offset : {body.heelOffset, body.ballOffset, body.toeOffset}) {
+    // The tip of the toes moves with the toes joint, which is bent back by `toeFlex` as far as it allows.
+    const float flex = std::clamp(toeFlex, -kToesBendUp, 0.0f);
+    const glm::vec3 toeTip = body.ballOffset + glm::angleAxis(flex, glm::vec3(1.0f, 0.0f, 0.0f)) * (body.toeOffset - body.ballOffset);
+    for (const glm::vec3& offset : {body.heelOffset, body.ballOffset, toeTip}) {
         const glm::vec3 point = ankle + footRotation * offset;
         deficit = std::max(deficit, GroundHeight(point.x, point.z) + kSwingGroundMargin * shape.footClearance - point.y);
     }
@@ -467,7 +520,7 @@ void Walker::PoseLeg(Pose& built, bool left, float dt) {
         } else {
             // The lift that the pose needs goes into a correction that may change only at a limited speed, so that the ankle
             // rises smoothly (a step of a frame shrinks with the frame) and not all at once; it fades out as the foot lands.
-            const float deficit = TerrainDeficit(wanted.ankle, actualRotation);
+            const float deficit = TerrainDeficit(wanted.ankle, actualRotation, wanted.toeFlex);
             const float needed = std::max(track.liftCorrection + deficit, 0.0f);
             const float change = std::clamp(needed - track.liftCorrection, -kCorrectionSpeed * dt, kCorrectionSpeed * dt);
             if (pass > 0 || std::abs(change) < 1e-6f) {
@@ -498,7 +551,13 @@ void Walker::UpdateFoot(bool left, float cyclePosition) {
         foot.state = PlantedFoot(foot, foot.stanceProgress);
     } else {
         const float swingProgress = (cyclePosition - shape.dutyFactor) / (1.0f - shape.dutyFactor);
-        foot.footfall = PredictFootfall(left, (1.0f - cyclePosition) * shape.period);
+        // The place to land is predicted again at every step, as the speed and the turn change; over the last sixth of the
+        // swing it is held, so that the heel comes down on a place that is not moving.
+        const Footfall predicted = PredictFootfall(left, (1.0f - cyclePosition) * shape.period);
+        const float following = Smoothstep(0.0f, 0.17f, 1.0f - swingProgress);
+        foot.footfall.heel = glm::mix(foot.footfall.heel, predicted.heel, following);
+        foot.footfall.yaw = LerpAngle(foot.footfall.yaw, predicted.yaw, following);
+        foot.footfall.slope = Lerp(foot.footfall.slope, predicted.slope, following);
         foot.state = SwingingFoot(foot, swingProgress, foot.footfall);
         foot.swingLift = Smoothstep(0.0f, 0.12f, 1.0f - swingProgress);  // the correction goes out over the last tenth of the swing
     }

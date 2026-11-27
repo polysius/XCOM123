@@ -125,11 +125,14 @@ private:
     FootPose FootAtFootfall(const Footfall& footfall, float rollPitch) const;
     FootPose PlantedFoot(const FootTrack& foot, float stanceProgress) const;
     FootPose PlantedFootAtPitch(const FootTrack& foot, float stanceProgress, float pitch) const;
-    float TerrainDeficit(const glm::vec3& ankle, const glm::quat& footRotation) const;
+    float TerrainDeficit(const glm::vec3& ankle, const glm::quat& footRotation, float toeFlex) const;
     void PoseLeg(Pose& built, bool left, float dt);
     FootPose SwingingFoot(const FootTrack& foot, float swingProgress, const Footfall& landing) const;
     void UpdateFoot(bool left, float cyclePosition);
     void Step(float dt, float wantedSpeed, float wantedTurnRate);
+    bool StandingStill(float wantedSpeed, float wantedTurnRate) const;
+    bool FeetAreTogether() const;
+    float DistanceAhead(float seconds) const;
     float PelvisHeight(float dt, const glm::vec3& pelvisPosition, const glm::quat& pelvisWorld, float moveWeight, float pelvisPitchDegrees, float extraHeight);
     void BuildPose(float dt);
 
@@ -144,6 +147,7 @@ private:
     float heading = 0.0f;
     float speed = 0.0f;
     float acceleration = 0.0f;
+    float targetSpeed = 0.0f;  // the speed that is being accelerated towards
     float turnRate = 0.0f;
     float phase = 0.0f;
     double time = 0.0;  // a double: a float stops counting after about a million seconds
