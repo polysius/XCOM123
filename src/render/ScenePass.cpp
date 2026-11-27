@@ -90,6 +90,7 @@ void ScenePass::Record(VkCommandBuffer cmd, const RenderTargets& targets, VkExte
     BeginRendering(cmd, renderExtent, &colorAttachment, &depthAttachment);
     vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &cameraViewProjection);
     geometry.DrawBoxes(cmd, boxPipeline);
+    geometry.DrawChunks(cmd, boxPipeline, false);
     geometry.DrawBodies(cmd, bodyPipeline, frameSlot);
     geometry.DrawNpcs(cmd, npcPipeline, frameSlot);
     skinned.DrawForCamera(cmd, skinnedPipeline, frameSlot);

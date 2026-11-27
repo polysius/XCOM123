@@ -35,6 +35,15 @@ struct Options {
     int benchmarkFrames = 0;
     std::optional<double> targetFps;  // the benchmark fails when p99 frame time misses this rate
 
+    // The streamed world: an endless city made of chunks that are generated, uploaded and released around the camera, instead
+    // of the fixed city. Everything else (people, characters, props) follows the camera through it.
+    bool stream = false;
+    float streamLoadRadius = 760.0f;  // metres around the camera that are kept loaded
+    // Streaming benchmark: fly a long path through the streamed world for this many frames, report frame times and what
+    // streaming did, then quit. Implies --stream. It fails when p99 misses --target-fps or any frame exceeds the hitch limit.
+    int streamBenchmarkFrames = 0;
+    float hitchLimitMs = 33.0f;
+
     // Screenshot: render this many frames, save the last one as a PNG, then quit.
     std::string screenshotPath;
     int screenshotFrames = 60;
@@ -55,6 +64,7 @@ struct Options {
     std::vector<std::string> editorPanels;  // windows of the editor to open at the start (character, material, shortcuts); implies editor
 
     bool IsBenchmark() const { return benchmarkFrames > 0; }
+    bool IsStreamBenchmark() const { return streamBenchmarkFrames > 0; }
     bool IsScreenshot() const { return !screenshotPath.empty(); }
 };
 

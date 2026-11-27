@@ -13,6 +13,12 @@
 #include <thread>
 #include <vector>
 
+#include <glm/gtc/matrix_transform.hpp>
+
+#include "render/ChunkCulling.h"
+#include "render/RangeAllocator.h"
+#include "render/RetirementQueue.h"
+#include "scene/Frustum.h"
 #include "world/stream/ChunkGenerator.h"
 #include "world/stream/WorldSkeleton.h"
 
@@ -338,9 +344,130 @@ void TestOrderAndThreadsDoNotMatter() {
     }
 }
 
+// --- The renderer's CPU side: allocator, deferred release, culling -------------------------------------------------
+
+void TestRangeAllocator() {
+    std::cout << "range allocator\n";
+    RangeAllocator allocator(100);
+    const auto a = allocator.Allocate(30);
+    const auto b = allocator.Allocate(20);
+    const auto c = allocator.Allocate(10);
+    Check(a && b && c && *a == 0 && *b == 30 && *c == 50, "ranges are handed out one after the other");
+    Check(!allocator.Allocate(0).has_value(), "zero units cannot be allocated");
+    Check(!allocator.Allocate(41).has_value(), "a request longer than the free range fails");
+
+    // Best fit: the smaller hole is used so that the large one stays whole.
+    allocator.Free(*a, 30);
+    allocator.Free(*c, 10);  // holes of 30 at 0 and 50 (10 + the 40 behind it)
+    const auto fit = allocator.Allocate(8);
+    Check(fit && *fit == 0, "the smallest hole that fits is used");
+    allocator.Free(*fit, 8);
+    allocator.Free(*b, 20);
+    Check(allocator.FreeRangeCount() == 1 && allocator.LargestFree() == 100 && allocator.FreeTotal() == 100,
+          "freed neighbours merge back into one range");
+
+    // Random use against a model that marks every unit.
+    constexpr uint32_t kCapacity = 4000;
+    RangeAllocator pool(kCapacity);
+    std::vector<int> owner(kCapacity, -1);
+    struct Live {
+        uint32_t start;
+        uint32_t count;
+    };
+    std::vector<Live> live;
+    uint32_t state = 12345;
+    auto next = [&state] {
+        state = state * 1664525u + 1013904223u;
+        return state >> 8;
+    };
+    bool overlap = false;
+    for (int step = 0; step < 20000; ++step) {
+        if (live.empty() || next() % 3 != 0) {
+            const uint32_t count = 1 + next() % 120;
+            if (const auto start = pool.Allocate(count)) {
+                for (uint32_t i = *start; i < *start + count; ++i) {
+                    overlap = overlap || owner[i] != -1;
+                    owner[i] = step;
+                }
+                live.push_back({*start, count});
+            }
+        } else {
+            const size_t pick = next() % live.size();
+            for (uint32_t i = live[pick].start; i < live[pick].start + live[pick].count; ++i) {
+                owner[i] = -1;
+            }
+            pool.Free(live[pick].start, live[pick].count);
+            live.erase(live.begin() + static_cast<std::ptrdiff_t>(pick));
+        }
+    }
+    uint32_t used = 0;
+    for (const Live& range : live) {
+        used += range.count;
+    }
+    Check(!overlap, "no two live ranges ever overlap");
+    Check(pool.UsedTotal() == used, "the allocator counts the units in use as the model does");
+    for (const Live& range : live) {
+        pool.Free(range.start, range.count);
+    }
+    Check(pool.FreeRangeCount() == 1 && pool.LargestFree() == kCapacity, "everything freed leaves one whole range");
+}
+
+void TestRetirementWaitsForFramesInFlight() {
+    std::cout << "deferred release\n";
+    // Two frames in flight: when frame M starts, frames up to M - 2 are complete. A range removed while frame N is prepared
+    // may be read by frame N - 1, so it must stay until frame N + 1 starts.
+    RetirementQueue<int> queue;
+    constexpr uint64_t kRemovedAt = 10;
+    queue.Defer(7, kRemovedAt);
+    uint64_t releasedAtFrame = 0;
+    for (uint64_t frame = kRemovedAt; frame < kRemovedAt + 5 && releasedAtFrame == 0; ++frame) {
+        const int64_t completed = static_cast<int64_t>(frame) - 2;
+        if (!queue.Collect(completed).empty()) {
+            releasedAtFrame = frame;
+        }
+    }
+    Check(releasedAtFrame == kRemovedAt + 1, "a range removed during frame N is released when frame N + 1 starts");
+    Check(queue.WaitingCount() == 0, "a released range leaves the queue");
+    queue.Defer(1, 0);
+    Check(queue.Collect(-1).size() == 1, "a range removed before the first frame needs no wait");
+}
+
+void TestChunkCulling() {
+    std::cout << "chunk culling\n";
+    const glm::mat4 projection = glm::perspective(glm::radians(60.0f), 16.0f / 9.0f, 0.1f, 1000.0f);
+    const glm::mat4 view = glm::lookAt(glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+    const Frustum camera(projection * view);
+    auto box = [](glm::vec3 centre, float half) { return std::make_pair(centre - half, centre + half); };
+    auto seen = [&](glm::vec3 centre, float half) {
+        const auto [low, high] = box(centre, half);
+        return camera.ContainsBox(low, high);
+    };
+    Check(seen({0.0f, 0.0f, -50.0f}, 5.0f), "a box in front is seen");
+    Check(!seen({0.0f, 0.0f, 50.0f}, 5.0f), "a box behind the camera is culled");
+    Check(!seen({500.0f, 0.0f, -50.0f}, 5.0f), "a box far to the side is culled");
+    Check(seen({60.0f, 0.0f, -50.0f}, 40.0f), "a big box that straddles the edge of the view is kept");
+    Check(!seen({0.0f, 0.0f, -2000.0f}, 5.0f), "a box beyond the far plane is culled");
+    Check(seen({0.0f, 0.0f, 0.0f}, 3.0f), "a box around the camera is kept");
+
+    // The sun's view is an orthographic box; the same test serves.
+    const glm::mat4 sunProjection = glm::orthoRH_ZO(-100.0f, 100.0f, -100.0f, 100.0f, 0.0f, 500.0f);
+    const Frustum sun(sunProjection * view);
+    Check(sun.ContainsBox({-5.0f, -5.0f, -100.0f}, {5.0f, 5.0f, -90.0f}), "a box inside the sun's view is kept");
+    Check(!sun.ContainsBox({300.0f, -5.0f, -100.0f}, {310.0f, 5.0f, -90.0f}), "a box outside the sun's view is culled");
+
+    std::vector<InstanceRange> ranges{{1, 0, 3}, {0, 10, 5}, {0, 0, 10}, {0, 40, 2}};
+    MergeAdjacentRanges(ranges);
+    Check(ranges.size() == 3 && ranges[0].page == 0 && ranges[0].first == 0 && ranges[0].count == 15 && ranges[1].first == 40 &&
+              ranges[2].page == 1,
+          "ranges that touch are one draw");
+}
+
 }  // namespace
 
 int main() {
+    TestRangeAllocator();
+    TestRetirementWaitsForFramesInFlight();
+    TestChunkCulling();
     TestSkeletonIsPure();
     TestRiverStaysInItsBand();
     TestChunkIsRepeatable();

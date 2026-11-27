@@ -30,6 +30,19 @@ public:
         return true;
     }
 
+    // False only when the box lies entirely outside one of the planes. For each plane the box corner furthest along the
+    // plane's normal is the one that is most inside, so if even that corner is outside, the whole box is.
+    bool ContainsBox(const glm::vec3& boxMin, const glm::vec3& boxMax) const {
+        for (const glm::vec4& plane : planes) {
+            const glm::vec3 mostInside(plane.x >= 0.0f ? boxMax.x : boxMin.x, plane.y >= 0.0f ? boxMax.y : boxMin.y,
+                                       plane.z >= 0.0f ? boxMax.z : boxMin.z);
+            if (glm::dot(glm::vec3(plane), mostInside) + plane.w < 0.0f) {
+                return false;
+            }
+        }
+        return true;
+    }
+
 private:
     std::array<glm::vec4, 6> planes;
 };

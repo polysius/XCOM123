@@ -102,14 +102,20 @@ void CheckCombinations(const Options& options) {
     if (options.IsBenchmark() && options.IsScreenshot()) {
         throw std::invalid_argument("--benchmark and --screenshot cannot be combined");
     }
+    if (options.stream && options.IsBenchmark()) {
+        throw std::invalid_argument("--benchmark flies the path of the fixed city; use --benchmark-stream with --stream");
+    }
+    if (options.IsStreamBenchmark() && (options.IsBenchmark() || options.IsScreenshot() || options.camera || options.editor)) {
+        throw std::invalid_argument("--benchmark-stream flies its own path and cannot be combined with --benchmark, --screenshot, --camera or the editor");
+    }
     if (options.IsBenchmark() && options.camera) {
         throw std::invalid_argument("--camera cannot be combined with --benchmark, which flies its own path");
     }
     if (options.IsBenchmark() && options.editor) {
         throw std::invalid_argument("The editor options (--editor, --editor-graph, --editor-play) cannot be combined with --benchmark, which measures the engine without it");
     }
-    if (options.targetFps && !options.IsBenchmark()) {
-        throw std::invalid_argument("--target-fps only applies to --benchmark");
+    if (options.targetFps && !options.IsBenchmark() && !options.IsStreamBenchmark()) {
+        throw std::invalid_argument("--target-fps only applies to --benchmark and --benchmark-stream");
     }
 }
 }  // namespace
@@ -163,6 +169,15 @@ Options ParseCommandLine(int argc, char** argv) {
             options.vsync = false;
         } else if (option == "--benchmark") {
             options.benchmarkFrames = ParsePositiveInt(option, arguments.ValueFor(option));
+        } else if (option == "--stream") {
+            options.stream = true;
+        } else if (option == "--stream-radius") {
+            options.streamLoadRadius = ParseFloatInRange(option, arguments.ValueFor(option), 300.0f, 2500.0f);
+        } else if (option == "--benchmark-stream") {
+            options.streamBenchmarkFrames = ParsePositiveInt(option, arguments.ValueFor(option));
+            options.stream = true;
+        } else if (option == "--hitch-limit") {
+            options.hitchLimitMs = ParseFloatInRange(option, arguments.ValueFor(option), 1.0f, 1000.0f);
         } else if (option == "--target-fps") {
             options.targetFps = ParseFloatInRange(option, arguments.ValueFor(option), 1.0f, 1000.0f);
         } else if (option == "--screenshot") {
@@ -203,7 +218,7 @@ Options ParseCommandLine(int argc, char** argv) {
     }
 
     // Benchmarks and screenshots measure or show the engine itself, not the display's refresh rate.
-    if (options.IsBenchmark() || options.IsScreenshot()) {
+    if (options.IsBenchmark() || options.IsStreamBenchmark() || options.IsScreenshot()) {
         options.vsync = false;
     }
     CheckCombinations(options);
@@ -231,6 +246,13 @@ void PrintUsage() {
         "                           default 512; above 1024 the\n"
         "                           start takes tens of seconds)\n"
         "  --no-scan-materials      draw only the procedural patterns of the city, without the generated materials\n"
+        "Streaming:\n"
+        "  --stream                 an endless city that is generated, uploaded and released around the camera, instead of the\n"
+        "                           fixed city (people, characters and props follow the camera)\n"
+        "  --stream-radius METRES   how far around the camera chunks are kept loaded (300 to 2500, default 760)\n"
+        "  --benchmark-stream N     fly a long path through the streamed world for N frames and report frame times and streaming\n"
+        "                           (implies --stream; exit code 2 on a missed --target-fps or a frame over --hitch-limit)\n"
+        "  --hitch-limit MS         with --benchmark-stream: fail when any frame takes longer than this (default 33)\n"
         "Display:\n"
         "  --novsync                do not wait for the display's refresh\n"
         "  --render-scale X         draw the scene at a fixed X (0.5 to 1.0) of the window size\n"

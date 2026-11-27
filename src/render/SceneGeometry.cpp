@@ -11,6 +11,7 @@ constexpr size_t kInitialBodyCapacity = 1024;
 }  // namespace
 
 void SceneGeometry::Create(const VulkanContext& context, uint32_t frameSlots) {
+    frameSlotCount = frameSlots;
     cubeMesh = UploadMesh(context, CreateUnitCube());
     personMesh = UploadMesh(context, CreatePersonMesh());
     sphereMesh = UploadMesh(context, CreateUnitSphere());
@@ -26,6 +27,10 @@ void SceneGeometry::Create(const VulkanContext& context, uint32_t frameSlots) {
 }
 
 void SceneGeometry::Destroy(VkDevice device) {
+    if (chunkArenaCreated) {
+        chunkArena.Destroy(device);
+        chunkArenaCreated = false;
+    }
     DestroyMesh(device, cubeMesh);
     DestroyMesh(device, personMesh);
     DestroyMesh(device, sphereMesh);
@@ -50,6 +55,54 @@ void SceneGeometry::UploadBoxes(const VulkanContext& context, std::span<const Bo
         std::memcpy(boxInstances.mapped, boxes.data(), boxes.size_bytes());
     }
     boxInstanceCount = static_cast<uint32_t>(boxes.size());
+}
+
+ChunkArena::ChunkId SceneGeometry::AddChunk(const VulkanContext& context, std::shared_ptr<const void> owner,
+                                            std::span<const BoxInstance> boxes, const Aabb& bounds) {
+    if (!chunkArenaCreated) {
+        chunkArena.Create(context, frameSlotCount);
+        chunkArenaCreated = true;
+    }
+    return chunkArena.Add(context, std::move(owner), boxes, bounds);
+}
+
+void SceneGeometry::RemoveChunk(ChunkArena::ChunkId chunk, uint64_t frameNumber) {
+    if (chunkArenaCreated) {
+        chunkArena.Remove(chunk, frameNumber);
+    }
+}
+
+void SceneGeometry::BeginChunkFrame(uint32_t frameSlot, int64_t completedFrame) {
+    if (chunkArenaCreated) {
+        chunkArena.BeginFrame(frameSlot, completedFrame);
+    }
+}
+
+void SceneGeometry::RecordChunkUploads(VkCommandBuffer cmd, uint32_t frameSlot) {
+    if (chunkArenaCreated) {
+        chunkArena.RecordUploads(cmd, frameSlot);
+    }
+}
+
+void SceneGeometry::CullChunks(const Frustum& camera, const Frustum& sun) {
+    if (chunkArenaCreated) {
+        chunkArena.Cull(camera, sun);
+    }
+}
+
+ChunkArenaStats SceneGeometry::ChunkStats() const {
+    return chunkArenaCreated ? chunkArena.Stats() : ChunkArenaStats{};
+}
+
+void SceneGeometry::DrawChunks(VkCommandBuffer cmd, VkPipeline pipeline, bool forSun) const {
+    if (!chunkArenaCreated) {
+        return;
+    }
+    if (forSun) {
+        chunkArena.DrawForSun(cmd, pipeline, cubeMesh.vertices.buffer, cubeMesh.indices.buffer, cubeMesh.indexCount);
+    } else {
+        chunkArena.DrawForCamera(cmd, pipeline, cubeMesh.vertices.buffer, cubeMesh.indices.buffer, cubeMesh.indexCount);
+    }
 }
 
 void SceneGeometry::ReserveNpcs(const VulkanContext& context, size_t npcCount) {

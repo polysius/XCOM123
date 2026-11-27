@@ -21,6 +21,7 @@
 
 #include <glm/glm.hpp>
 
+#include "scene/Aabb.h"
 #include "scene/SceneTypes.h"
 #include "streaming/ChunkCoord.h"
 #include "streaming/ChunkPayload.h"
@@ -34,12 +35,6 @@ struct ChunkSettings {
     uint32_t seed = 1789;
     // People spawned in the chunk and kept in a crowd of its own. Zero builds no crowd and no walkways.
     uint32_t agentCount = 0;
-};
-
-// An axis-aligned box in the world, for culling.
-struct Aabb {
-    glm::vec3 min{0.0f};
-    glm::vec3 max{0.0f};
 };
 
 // The ground square a chunk nominally covers.

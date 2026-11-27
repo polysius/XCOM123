@@ -7,7 +7,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <iostream>
+#include <memory>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -19,6 +21,8 @@
 #include "core/BenchmarkReport.h"
 #include "core/CommandLine.h"
 #include "core/FlyCamera.h"
+#include "core/FrameStatistics.h"
+#include "core/StreamFlightPath.h"
 #include "core/Module_Interface.h"
 #include "core/JobSystem.h"
 #include "demo/CharacterShowcase.h"
@@ -30,6 +34,7 @@
 #include "physics/PropField.h"
 #include "render/IRenderModule.h"
 #include "scene/Frustum.h"
+#include "streaming/StreamedWorld.h"
 #include "world/CityGenerator.h"
 #include "world/Crowd.h"
 
@@ -83,6 +88,12 @@ struct Engine {
     fluid::RiverWater river;   // the water of the river near the props, simulated; unbuilt unless --river-sim is given
     demo::CharacterShowcase characters;  // skinned, posed characters in the largest square; none unless --characters is given
     std::vector<PersonBody> peopleNearProps;  // who may push props this frame
+    // The endless city of --stream. When it is there, `city` and `crowd` above stay empty: the chunks hold their own streets
+    // and their own people.
+    std::unique_ptr<streaming::StreamedWorld> streamed;
+    glm::vec3 previousCameraPosition{0.0f};  // for the camera's velocity, which tells the streaming where to look ahead
+
+    size_t PeopleCount() const { return streamed ? streamed->PeopleCount() : crowd.AgentCount(); }
 };
 
 // Returns 0 when the window is minimised.
@@ -112,6 +123,12 @@ graph_engine::SunSettings DefaultSun(const Options& options) {
 // time this took in milliseconds. `host` is the engine host of a run that has one: the people that graphs spawned are drawn too.
 double UpdateCrowd(Engine& engine, float deltaSeconds, FrameInput& frame, const engine_host::LiveEngineHost* host = nullptr) {
     const Clock::time_point start = Clock::now();
+    if (engine.streamed) {
+        engine.streamed->UpdateCrowd(deltaSeconds, frame.cameraPosition);
+        engine.streamed->CollectVisible(Frustum(frame.projection * frame.view), engine.visibleNpcs);
+        frame.npcs = engine.visibleNpcs;
+        return MillisecondsBetween(start, Clock::now());
+    }
     // The crowd simulates people near this point in the most detail.
     engine.crowd.SetFocusPoint(frame.cameraPosition);
     engine.crowd.SetMovableObstacles(engine.props.Obstacles());  // where the crates are, as of the last frame
@@ -121,6 +138,20 @@ double UpdateCrowd(Engine& engine, float deltaSeconds, FrameInput& frame, const 
         host->AppendCharacters(engine.visibleNpcs);
     }
     frame.npcs = engine.visibleNpcs;
+    return MillisecondsBetween(start, Clock::now());
+}
+
+// Lets the streamed world load and release chunks around the camera. Returns the time this took in milliseconds, which is all
+// the streaming costs a frame: generation happens on the manager's own threads.
+double UpdateStreaming(Engine& engine, const FlyCamera& camera, float deltaSeconds) {
+    if (!engine.streamed) {
+        return 0.0;
+    }
+    const Clock::time_point start = Clock::now();
+    const glm::vec3 position = camera.Position();
+    const glm::vec3 velocity = deltaSeconds > 0.0f ? (position - engine.previousCameraPosition) / deltaSeconds : glm::vec3(0.0f);
+    engine.previousCameraPosition = position;
+    engine.streamed->Update(position, velocity);
     return MillisecondsBetween(start, Clock::now());
 }
 
@@ -212,7 +243,7 @@ private:
         std::snprintf(title, sizeof(title),
                       "XCOM123 | %s | CPU %.2f ms (%.0f fps) | %s | scale %.0f%% | %zu people, %zu on screen | crowd %.2f ms",
                       deviceName.c_str(), cpuMs, 1000.0 / cpuMs, gpu.c_str(), stats.renderScale * 100.0f,
-                      engine.crowd.AgentCount(), engine.visibleNpcs.size(), crowdMs);
+                      engine.PeopleCount(), engine.visibleNpcs.size(), crowdMs);
         glfwSetWindowTitle(window, title);
     }
 
@@ -228,6 +259,9 @@ FlyCamera MakeStartCamera(const Options& options, const Engine& engine) {
     const std::optional<CameraPlacement>& placement = options.camera ? options.camera : engine.characters.ViewPoint();
     if (placement) {
         return FlyCamera(placement->position, glm::radians(placement->yawDegrees), glm::radians(placement->pitchDegrees));
+    }
+    if (engine.streamed) {
+        return FlyCamera(glm::vec3(0.0f, 60.0f, 0.0f), 0.0f, -0.25f);  // above the origin, looking along +Z
     }
     const CityLayout& city = engine.city;
     // Above the south-west of the city, looking towards its centre.
@@ -255,6 +289,7 @@ int RunInteractive(Engine& engine, const Options& options) {
     TitleBar title(engine.window, engine.renderer->GetDeviceName());
     engine_host::LiveEngineHost host(MakeWorldAccess(engine, camera, sun, options));
     editor_ui::EditorSession editor(*engine.renderer, engine.window, options, &host);
+    engine.previousCameraPosition = camera.Position();
 
     const Clock::time_point startTime = Clock::now();
     Clock::time_point previousFrame = startTime;
@@ -283,6 +318,7 @@ int RunInteractive(Engine& engine, const Options& options) {
             sun.elevationDegrees += kSunTurnSpeed * deltaSeconds;
         }
         sun.elevationDegrees = std::clamp(sun.elevationDegrees, -5.0f, 85.0f);
+        UpdateStreaming(engine, camera, deltaSeconds);
 
         const float worldSeconds = options.worldTimeSeconds.value_or(0.0f) +
                                    static_cast<float>(MillisecondsBetween(startTime, now) / 1000.0);
@@ -369,6 +405,127 @@ int RunBenchmark(Engine& engine, const Options& options) {
     return passed && completed ? 0 : kBenchmarkFailedExitCode;
 }
 
+// What a streaming benchmark gathers besides frame times.
+struct StreamRunTotals {
+    std::vector<double> streamMs;  // main thread time of the streaming update, per frame
+    double chunksDrawnByCamera = 0.0;
+    double chunksDrawnBySun = 0.0;
+    double drawCalls = 0.0;
+    std::set<std::pair<int, int>> chunksFlownOver;
+    size_t hitchFrames = 0;  // frames over the hitch limit
+    int worstFrame = 0;
+    double worstFrameMs = 0.0;
+};
+
+// The samples of `all` from index `from` on, in milliseconds.
+std::vector<double> SecondsToMillisecondsFrom(const std::vector<double>& all, size_t from) {
+    std::vector<double> milliseconds;
+    for (size_t i = from; i < all.size(); ++i) {
+        milliseconds.push_back(all[i] * 1000.0);
+    }
+    return milliseconds;
+}
+
+void PrintStreamReport(const Engine& engine, const Options& options, const streaming::StreamingStats& before, const StreamRunTotals& totals,
+                       const StreamFlightPath& path, size_t frames) {
+    const streaming::StreamingStats after = engine.streamed->Stats();
+    const FrameTimeSummary latency = SummarizeFrameTimes(SecondsToMillisecondsFrom(after.latencies, before.latencies.size()), 1e9);
+    const FrameTimeSummary streamCost = SummarizeFrameTimes(totals.streamMs, 1e9);
+    const RenderStats render = engine.renderer->GetStats();
+    const double frameCount = static_cast<double>(std::max<size_t>(frames, 1));
+    std::printf("Streaming: %.2f km flown, %zu chunks flown over, %zu people loaded at the end\n", path.DistanceFlown() / 1000.0,
+                totals.chunksFlownOver.size(), engine.PeopleCount());
+    std::printf("  chunks           %llu loaded, %llu unloaded, %llu requests dropped as stale, %llu failed; %zu resident at the end, %zu at most\n",
+                static_cast<unsigned long long>(after.delivered - before.delivered),
+                static_cast<unsigned long long>(after.unloaded - before.unloaded),
+                static_cast<unsigned long long>(after.cancelled - before.cancelled),
+                static_cast<unsigned long long>(after.failed - before.failed), after.residentChunks, after.residentChunksPeak);
+    std::printf("  generation       request to resident p50 %.1f ms, p99 %.1f ms, worst %.1f ms\n", latency.medianMs, latency.p99Ms,
+                latency.worstMs);
+    std::printf("  memory           %.1f MB resident at most (chunk data); GPU instances %.1f MB of %.1f MB in use\n",
+                static_cast<double>(after.residentBytesPeak) / (1024.0 * 1024.0),
+                static_cast<double>(render.streamed.instancesUsed * sizeof(BoxInstance)) / (1024.0 * 1024.0),
+                static_cast<double>(render.streamed.instancesCapacity * sizeof(BoxInstance)) / (1024.0 * 1024.0));
+    std::printf("  upload           %.2f MB at most in one frame (manager %.2f MB), %.0f box draw calls a frame on average\n",
+                static_cast<double>(render.streamed.uploadBytesMaxFrame) / (1024.0 * 1024.0),
+                static_cast<double>(after.deliveredBytesMaxFrame) / (1024.0 * 1024.0), totals.drawCalls / frameCount);
+    std::printf("  culling          %.1f chunks a frame drawn for the camera, %.1f for the sun, of %zu resident\n",
+                totals.chunksDrawnByCamera / frameCount, totals.chunksDrawnBySun / frameCount, after.residentChunks);
+    std::printf("  frame cost       streaming update on the main thread: average %.3f ms, p99 %.3f, worst %.3f ms\n",
+                streamCost.averageMs, streamCost.p99Ms, streamCost.worstMs);
+    std::printf("  hitches          %zu frames over %.0f ms (worst %.2f ms, frame %d)\n", totals.hitchFrames, options.hitchLimitMs,
+                totals.worstFrameMs, totals.worstFrame);
+}
+
+// Flies the streaming flight path and reports. Fails (exit code 2) when p99 misses the target frame rate, when a frame takes
+// longer than the hitch limit, or when the window closes early.
+int RunStreamBenchmark(Engine& engine, const Options& options) {
+    StreamFlightPath path(options.streamBenchmarkFrames);
+    BenchmarkRecorder recorder(StreamFlightPath::LegNames());
+    FlyCamera camera(glm::vec3(0.0f), 0.0f, 0.0f);
+    const StreamFlightPath::Pose start = path.Start();
+    camera.LookAt(start.position, start.target);
+    engine.previousCameraPosition = start.position;
+    engine.streamed->LoadAround(start.position);  // the world around the start is there before the clock starts
+    const streaming::StreamingStats before = engine.streamed->Stats();
+    TitleBar title(engine.window, engine.renderer->GetDeviceName());
+
+    StreamRunTotals totals;
+    const int totalFrames = kBenchmarkWarmupFrames + options.streamBenchmarkFrames;
+    Clock::time_point previousFrame = Clock::now();
+    int frameIndex = 0;
+    for (; frameIndex < totalFrames && KeepRunning(engine.window); ++frameIndex) {
+        const int measuredIndex = frameIndex - kBenchmarkWarmupFrames;
+        if (measuredIndex >= 0) {
+            const StreamFlightPath::Pose pose = path.Step(kFixedTimeStep);
+            camera.LookAt(pose.position, pose.target);
+        }
+        const double streamMs = UpdateStreaming(engine, camera, kFixedTimeStep);
+        const float aspect = std::max(WindowAspectRatio(engine.window), 0.01f);
+        const float worldSeconds = static_cast<float>(frameIndex) * kFixedTimeStep;
+        FrameInput frame = MakeFrameInput(camera, aspect, options.sunElevationDegrees.value_or(kDefaultSunElevation), worldSeconds);
+        const double crowdMs = UpdateCrowd(engine, kFixedTimeStep, frame);
+        engine.renderer->Render(frame);
+        title.AddFrame(crowdMs, engine);
+
+        const Clock::time_point now = Clock::now();
+        const double frameMs = MillisecondsBetween(previousFrame, now);
+        previousFrame = now;
+        if (measuredIndex < 0) {
+            continue;
+        }
+        const RenderStats render = engine.renderer->GetStats();
+        recorder.Record({.cpuFrameMs = frameMs,
+                         .crowdMs = crowdMs,
+                         .peopleOnScreen = engine.visibleNpcs.size(),
+                         .shotIndex = path.LegOfFrame(measuredIndex)},
+                        render);
+        totals.streamMs.push_back(streamMs);
+        totals.chunksDrawnByCamera += render.streamed.chunksDrawnByCamera;
+        totals.chunksDrawnBySun += render.streamed.chunksDrawnBySun;
+        totals.drawCalls += render.streamed.drawCalls;
+        const streaming::ChunkCoord here = world::ChunkAt({camera.Position().x, camera.Position().z});
+        totals.chunksFlownOver.insert({here.x, here.z});
+        if (frameMs > options.hitchLimitMs) {
+            ++totals.hitchFrames;
+        }
+        if (frameMs > totals.worstFrameMs) {
+            totals.worstFrameMs = frameMs;
+            totals.worstFrame = measuredIndex;
+        }
+    }
+
+    const bool passedTarget = recorder.PrintReport(engine.PeopleCount(), options.targetFps);
+    PrintStreamReport(engine, options, before, totals, path, totals.streamMs.size());
+    const bool noHitches = totals.hitchFrames == 0;
+    std::printf("  hitch limit      %s\n", noHitches ? "PASS" : "FAIL");
+    const bool completed = frameIndex == totalFrames;
+    if (!completed) {
+        std::cerr << "Benchmark stopped after " << frameIndex << " of " << totalFrames << " frames\n";
+    }
+    return passedTarget && noHitches && completed ? 0 : kBenchmarkFailedExitCode;
+}
+
 // Moves the crowd, the props and the river forward to `seconds` without drawing anything.
 void PreRollWorld(Engine& engine, float seconds) {
     const bool coupled = engine.river.IsBuilt() && engine.props.Count() > 0;
@@ -416,6 +573,10 @@ int RunScreenshot(Engine& engine, const Options& options) {
     const float finalSeconds = options.worldTimeSeconds.value_or(renderedSeconds);
     const float firstFrameSeconds = std::max(finalSeconds - renderedSeconds, 0.0f);
     engine.crowd.SetFocusPoint(camera.Position());
+    engine.previousCameraPosition = camera.Position();
+    if (engine.streamed) {
+        engine.streamed->LoadAround(camera.Position());  // nobody wants a screenshot of a world that is still arriving
+    }
     // Only a screenshot that asks for the editor has one; every other screenshot is drawn exactly as before. A graph that cannot be
     // loaded ends the run before the long part: nobody is there to read a message, and a screenshot of the wrong graph would mislead.
     std::optional<engine_host::LiveEngineHost> host;
@@ -428,12 +589,15 @@ int RunScreenshot(Engine& engine, const Options& options) {
             return 1;
         }
     }
-    PreRollWorld(engine, firstFrameSeconds);
+    if (!engine.streamed) {
+        PreRollWorld(engine, firstFrameSeconds);
+    }
 
     for (int frameIndex = 0; frameIndex < frames; ++frameIndex) {
         if (!KeepRunning(engine.window)) {
             return 1;
         }
+        UpdateStreaming(engine, camera, kFixedTimeStep);
         const float aspect = std::max(WindowAspectRatio(engine.window), 0.01f);
         const float worldSeconds = firstFrameSeconds + static_cast<float>(frameIndex + 1) * kFixedTimeStep;
         // The graph runs first, so that what it does to the camera and the sun is in this frame.
@@ -503,6 +667,37 @@ void UploadScanMaterials(IRenderModule& renderer, const Options& options) {
               << static_cast<int>(milliseconds) << " ms\n";
 }
 
+// The distance haze of the streamed world. It is thicker than the fixed city's, so that the far edge of the loaded chunks is
+// well hidden in it: at the load radius the haze takes most of the colour of a surface.
+constexpr float kStreamFogDensity = 0.0022f;
+
+// Sets up the endless city instead of the fixed one. Props, the simulated river and the skinned characters of the showcase
+// belong to the fixed city and are not made here.
+void StartStreamedWorld(Engine& engine, const Options& options) {
+    if (options.propCount > 0 || options.riverSimulation || options.characterCount > 0) {
+        std::cerr << "--props, --river-sim and --characters are not streamed yet and are ignored with --stream\n";
+    }
+    if (options.scanMaterials) {
+        UploadScanMaterials(*engine.renderer, options);
+    }
+    engine.renderer->SetFogDensity(kStreamFogDensity);
+    // Room for everyone up front, so the renderer never grows buffers mid-flight.
+    engine.renderer->ReserveNpcCapacity(options.npcCount);
+    engine.visibleNpcs.reserve(options.npcCount);
+    streaming::StreamedWorldSettings settings;
+    settings.seed = options.seed;
+    settings.peopleTotal = options.npcCount;
+    settings.loadRadius = options.streamLoadRadius;
+    engine.streamed = std::make_unique<streaming::StreamedWorld>(*engine.renderer, settings);
+    std::cout << "Streamed world (seed " << options.seed << "): chunks of " << world::kChunkSize << " m kept loaded within "
+              << options.streamLoadRadius << " m of the camera, about " << options.npcCount << " people ("
+              << engine.streamed->PeoplePerChunk() << " per chunk)\n";
+    if (!options.IsBenchmark() && !options.IsStreamBenchmark() && !options.IsScreenshot()) {
+        std::cout << "Controls: hold the right mouse button to look, WASD to move, E/Q to go up/down,\n"
+                  << "          Shift to go faster, Z/X to lower/raise the sun, Esc to quit\n";
+    }
+}
+
 // Runs the engine until the window closes, the benchmark ends or the screenshot is saved.
 // Returns the process exit code.
 int RunEngine(const Options& options, GLFWwindow* window) {
@@ -521,6 +716,17 @@ int RunEngine(const Options& options, GLFWwindow* window) {
     glfwSetFramebufferSizeCallback(window, OnFramebufferResized);
     modules.ListModules();
     engine.renderer->SetResolutionSettings(MakeResolutionSettings(options));
+
+    if (options.stream) {
+        StartStreamedWorld(engine, options);
+        if (options.IsStreamBenchmark()) {
+            return RunStreamBenchmark(engine, options);
+        }
+        if (options.IsScreenshot()) {
+            return RunScreenshot(engine, options);
+        }
+        return RunInteractive(engine, options);
+    }
 
     // Generate the world.
     CitySettings citySettings;

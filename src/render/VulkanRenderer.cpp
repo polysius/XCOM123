@@ -15,7 +15,6 @@
 static AutoRegister<VulkanRenderer> gVulkanRendererRegistration("Vulkan");
 
 namespace {
-constexpr float kFogDensity = 0.0022f;
 constexpr std::array<std::string_view, 3> kPassNames = {"shadow", "scene", "tonemap"};
 // A screenshot frame can be skipped while the swapchain is rebuilt; try this many times.
 constexpr int kScreenshotAttempts = 4;
@@ -302,6 +301,17 @@ void VulkanRenderer::UploadStaticScene(std::span<const BoxInstance> boxes) {
     geometry.UploadBoxes(context, boxes);
 }
 
+StreamedChunkHandle VulkanRenderer::AddStreamedChunk(std::shared_ptr<const void> owner, std::span<const BoxInstance> boxes,
+                                                     const Aabb& bounds) {
+    return {geometry.AddChunk(context, std::move(owner), boxes, bounds)};
+}
+
+void VulkanRenderer::RemoveStreamedChunk(StreamedChunkHandle chunk) {
+    if (chunk.IsValid()) {
+        geometry.RemoveChunk(chunk.index, frameNumber);
+    }
+}
+
 void VulkanRenderer::UploadMaterials(const material::MaterialLibrary& library) {
     vkDeviceWaitIdle(context.device);  // the descriptors may still point at the old textures
     materials.Destroy(context.device);
@@ -376,6 +386,16 @@ RenderStats VulkanRenderer::GetStats() const {
     stats.renderScale = currentRenderScale;
     stats.renderWidth = currentRenderExtent.width;
     stats.renderHeight = currentRenderExtent.height;
+    const ChunkArenaStats chunks = geometry.ChunkStats();
+    stats.streamed = {.chunksResident = chunks.chunksResident,
+                      .chunksPending = chunks.chunksPending,
+                      .chunksDrawnByCamera = chunks.chunksDrawnByCamera,
+                      .chunksDrawnBySun = chunks.chunksDrawnBySun,
+                      .drawCalls = chunks.drawCallsForCamera + chunks.drawCallsForSun,
+                      .uploadBytesThisFrame = chunks.uploadBytesThisFrame,
+                      .uploadBytesMaxFrame = chunks.uploadBytesMaxFrame,
+                      .instancesUsed = chunks.instancesUsed,
+                      .instancesCapacity = chunks.instancesCapacity};
     return stats;
 }
 
@@ -461,6 +481,9 @@ bool VulkanRenderer::DrawFrame(const FrameInput& input, bool captureScreenshot) 
         VkCheck(acquireResult, "vkAcquireNextImageKHR");
     }
     VkCheck(vkResetFences(context.device, 1, &frame.inFlight), "vkResetFences");
+    // From here the frame is certain to be recorded and submitted, so the chunk copies it stages are certain to run. With two
+    // frames in flight, the slot's fence says that the frame before the previous one is finished.
+    geometry.BeginChunkFrame(frameSlot, static_cast<int64_t>(frameNumber) - static_cast<int64_t>(kFramesInFlight));
 
     currentRenderScale = dynamicResolution.Scale();
     currentRenderExtent = targets.ScaledExtent(currentRenderScale);
@@ -471,6 +494,7 @@ bool VulkanRenderer::DrawFrame(const FrameInput& input, bool captureScreenshot) 
     // The characters are chosen against the camera's view and the sun's, as the crowd is, and the slot's previous frame is finished.
     const Frustum cameraFrustum(cameraViewProjection);
     const Frustum sunFrustum(lightViewProjection);
+    geometry.CullChunks(cameraFrustum, sunFrustum);
     const skinning::FrameView characterView{cameraFrustum, sunFrustum, input.cameraPosition, glm::normalize(input.sunDirection), {}};
     if (skinned.WriteFrame(context, frameSlot, input.characters, characterView)) {
         WritePaletteDescriptor(frame, frameSlot);
@@ -503,7 +527,7 @@ void VulkanRenderer::WriteFrameUniforms(FrameResources& frame, const FrameInput&
     uniforms.cameraPosition = glm::vec4(input.cameraPosition, input.timeSeconds);
     uniforms.sunDirection = glm::vec4(sun, 0.0f);
     uniforms.sunColor = glm::vec4(SunRadiance(sun.y), 0.0f);
-    uniforms.settings = glm::vec4(1.0f / static_cast<float>(ShadowPass::kMapSize), kFogDensity, scanStrength, 0.0f);
+    uniforms.settings = glm::vec4(1.0f / static_cast<float>(ShadowPass::kMapSize), fogDensity, scanStrength, 0.0f);
     std::copy(scanTiles.begin(), scanTiles.end(), uniforms.scanTiles);
     std::memcpy(frame.uniforms.mapped, &uniforms, sizeof(uniforms));
 }
@@ -517,6 +541,7 @@ void VulkanRenderer::RecordCommands(uint32_t frameSlot, uint32_t imageIndex, con
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     VkCheck(vkBeginCommandBuffer(cmd, &beginInfo), "vkBeginCommandBuffer");
     profiler.BeginFrame(cmd, frameSlot);
+    geometry.RecordChunkUploads(cmd, frameSlot);  // the streamed chunks of this frame, ahead of every pass that draws them
 
     // The shadow and scene passes share a pipeline layout, so this binding serves both.
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, scenePipelineLayout, 0, 1, &frame.sceneDescriptors,

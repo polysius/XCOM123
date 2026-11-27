@@ -75,6 +75,27 @@ GpuBuffer CreateMappedBuffer(VkDevice device, VkPhysicalDevice physicalDevice, V
     return CreateHostVisibleBuffer(device, physicalDevice, size, usage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 }
 
+GpuBuffer CreateDeviceBuffer(VkDevice device, VkPhysicalDevice physicalDevice, VkDeviceSize size, VkBufferUsageFlags usage) {
+    GpuBuffer result;
+    result.size = size;
+
+    VkBufferCreateInfo createInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    createInfo.size = size;
+    createInfo.usage = usage | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VkCheck(vkCreateBuffer(device, &createInfo, nullptr, &result.buffer), "vkCreateBuffer");
+
+    VkMemoryRequirements requirements;
+    vkGetBufferMemoryRequirements(device, result.buffer, &requirements);
+    result.memory = AllocateMemory(device, physicalDevice, requirements, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0);
+    VkCheck(vkBindBufferMemory(device, result.buffer, result.memory, 0), "vkBindBufferMemory");
+    return result;
+}
+
+GpuBuffer CreateStagingBuffer(VkDevice device, VkPhysicalDevice physicalDevice, VkDeviceSize size) {
+    return CreateHostVisibleBuffer(device, physicalDevice, size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, 0);
+}
+
 GpuBuffer CreateReadbackBuffer(VkDevice device, VkPhysicalDevice physicalDevice, VkDeviceSize size) {
     return CreateHostVisibleBuffer(device, physicalDevice, size, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                    VK_MEMORY_PROPERTY_HOST_CACHED_BIT);

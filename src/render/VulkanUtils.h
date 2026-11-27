@@ -40,6 +40,10 @@ struct ImageDesc {
 };
 
 GpuBuffer CreateMappedBuffer(VkDevice device, VkPhysicalDevice physicalDevice, VkDeviceSize size, VkBufferUsageFlags usage);
+// A buffer in memory only the GPU can use, which the CPU fills by copying from a staging buffer. It is not mapped.
+GpuBuffer CreateDeviceBuffer(VkDevice device, VkPhysicalDevice physicalDevice, VkDeviceSize size, VkBufferUsageFlags usage);
+// A mapped buffer the GPU only reads from, as the source of copies into device buffers.
+GpuBuffer CreateStagingBuffer(VkDevice device, VkPhysicalDevice physicalDevice, VkDeviceSize size);
 // A mapped buffer the GPU copies results into for the CPU to read. It prefers CPU-cached
 // memory, because reading uncached memory back over the PCIe bus is very slow.
 GpuBuffer CreateReadbackBuffer(VkDevice device, VkPhysicalDevice physicalDevice, VkDeviceSize size);
