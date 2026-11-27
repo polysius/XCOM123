@@ -5,6 +5,12 @@
 //   character_gen --seed 7                       (a person drawn from the population)
 //   character_gen --sex 0 --age 40 --height 1.65 --mass 62 --muscle 0.3 --out characters
 //   character_gen --seed 7 --closeup             (also writes close-ups of the head and the hands, as <name>_head.png and <name>_hand.png)
+//   character_gen --seed 7 --dress               (also makes the skin, eyes, hair and clothes and writes <name>_dressed.png and <name>_face.png)
+//   character_gen --seed 7 --dress --textures    (also writes the skin, eye and garment textures as PNG files)
+//   character_gen --seed 7 --dress --hair long --beard stubble --top jacket --legs shorts --feet boots --skin-size 1024
+//     --hair: bald short medium long tied.  --beard: none stubble beard.  --top: none tshirt jacket both.  --legs: none trousers shorts.
+//     --feet: none shoes boots.  Anything not named is chosen from the seed. --skin-size is the texels along a tile of the skin atlas.
+//   character_gen --seed 7 --look 0 1.45 0 0.4 0  (also writes <name>_look.png: a view 0.4 m tall of the point x y z, seen from 0 degrees)
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -16,7 +22,9 @@
 #include <string>
 #include <vector>
 
+#include "AppearanceSheet.h"
 #include "character/CharacterGenerator.h"
+#include "character/appearance/Appearance.h"
 #include "core/JobSystem.h"
 #include "core/PngWriter.h"
 
@@ -284,9 +292,95 @@ double NumberOrExit(const std::string& option, const std::string& text, double l
     return value;
 }
 
+// What the user chose for the appearance on the command line; whatever is not named is chosen from the seed.
+struct AppearanceChoices {
+    bool dress = false;
+    bool textures = false;
+    // The position of the name given in the list of its option; -1 when the option was not given. They are checked as the command
+    // line is read, so that a mistake is reported before anything is made or written.
+    int hair = -1;
+    int beard = -1;
+    int top = -1;
+    int legs = -1;
+    int feet = -1;
+    int skinSize = 1024;
+    bool lowDetail = false;
+    bool look = false;
+    float lookX = 0.0f, lookY = 1.0f, lookZ = 0.0f, lookHeight = 0.5f, lookTurn = 0.0f;
+};
+
+// Finds `text` in a list of names and returns its position, or exits with a message.
+int ChoiceOrExit(const std::string& option, const std::string& text, const std::vector<std::string>& names) {
+    for (size_t i = 0; i < names.size(); ++i) {
+        if (names[i] == text) {
+            return static_cast<int>(i);
+        }
+    }
+    std::cerr << option << " needs one of:";
+    for (const std::string& name : names) {
+        std::cerr << " " << name;
+    }
+    std::cerr << ", not \"" << text << "\"\n";
+    std::exit(2);
+}
+
+character::AppearanceSettings ApplyChoices(character::AppearanceSettings settings, const AppearanceChoices& choices) {
+    using namespace character;
+    if (choices.hair >= 0) {
+        settings.hairStyle = static_cast<HairStyle>(choices.hair);
+    }
+    if (choices.beard >= 0) {
+        settings.facialHair = static_cast<FacialHair>(choices.beard);
+    }
+    if (choices.top >= 0) {
+        settings.outfit.top = static_cast<TopKind>(choices.top);
+    }
+    if (choices.legs >= 0) {
+        settings.outfit.legs = static_cast<LegwearKind>(choices.legs);
+    }
+    if (choices.feet >= 0) {
+        settings.outfit.feet = static_cast<FootwearKind>(choices.feet);
+    }
+    if (choices.lowDetail) {
+        settings = LowDetail(settings);
+    } else {
+        settings.skinTileSize = choices.skinSize;
+        settings.outfit.tileSize = std::min(choices.skinSize, 1024);
+    }
+    return settings;
+}
+
+// Makes the appearance, reports what it holds and writes its pictures.
+bool DressAndWrite(const std::filesystem::path& folder, const std::string& name, const CharacterMesh& mesh, const AppearanceChoices& choices) {
+    const auto start = std::chrono::steady_clock::now();
+    const character::AppearanceSettings settings = ApplyChoices(character::ChooseAppearance(mesh.parameters), choices);
+    const character::CharacterAppearance appearance = character::GenerateAppearance(mesh, settings, &JobSystem::Shared());
+    const double milliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+
+    static const char* const kHairNames[] = {"bald", "short", "medium", "long", "tied"};
+    static const char* const kBeardNames[] = {"none", "stubble", "beard"};
+    std::cout << "appearance made in " << static_cast<int>(milliseconds) << " ms: hair " << kHairNames[static_cast<int>(settings.hairStyle)] << " ("
+              << appearance.hair.scalp.RibbonCount() << " locks), facial hair " << kBeardNames[static_cast<int>(settings.facialHair)] << ", skin atlas "
+              << appearance.skin.textures.albedo.width << "x" << appearance.skin.textures.albedo.height << ", melanin " << appearance.traits.melanin << ", grey "
+              << appearance.traits.greyFraction << "\n";
+    for (const character::Garment& garment : appearance.outfit.garments) {
+        std::cout << "  " << character::GarmentName(garment.kind) << ": " << garment.mesh.TriangleCount() << " triangles, thickness " << garment.thicknessMeters * 1000.0f
+                  << " mm, least clearance " << garment.minimumClearance * 1000.0f << " mm\n";
+    }
+    bool ok = appearance_sheet::WriteViews(folder, name, mesh, appearance);
+    if (choices.look) {
+        ok = appearance_sheet::WriteLook(folder, name, appearance, glm::vec3(choices.lookX, choices.lookY, choices.lookZ), choices.lookHeight, choices.lookTurn) && ok;
+    }
+    if (choices.textures) {
+        ok = appearance_sheet::WriteTextures(folder, name, appearance) && ok;
+    }
+    return ok;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
+    AppearanceChoices choices;
     uint32_t seed = 1;
     bool explicitPerson = false;
     CharacterParameters parameters;
@@ -324,6 +418,39 @@ int main(int argc, char** argv) {
             voxel = static_cast<float>(NumberOrExit(option, next(), 0.006, 0.04));
         } else if (option == "--closeup") {
             closeup = true;
+        } else if (option == "--dress") {
+            choices.dress = true;
+        } else if (option == "--textures") {
+            choices.dress = true;
+            choices.textures = true;
+        } else if (option == "--hair" || option == "--beard" || option == "--top" || option == "--legs" || option == "--feet") {
+            const std::string value = next();
+            if (option == "--hair") {
+                choices.hair = ChoiceOrExit(option, value, {"bald", "short", "medium", "long", "tied"});
+            } else if (option == "--beard") {
+                choices.beard = ChoiceOrExit(option, value, {"none", "stubble", "beard"});
+            } else if (option == "--top") {
+                choices.top = ChoiceOrExit(option, value, {"none", "tshirt", "jacket", "both"});
+            } else if (option == "--legs") {
+                choices.legs = ChoiceOrExit(option, value, {"none", "trousers", "shorts"});
+            } else {
+                choices.feet = ChoiceOrExit(option, value, {"none", "shoes", "boots"});
+            }
+            choices.dress = true;
+        } else if (option == "--low-detail") {
+            choices.lowDetail = true;
+            choices.dress = true;
+        } else if (option == "--look") {
+            // --look x y z height turn: also writes <name>_look.png, one view of a detail (metres, degrees).
+            choices.look = true;
+            choices.dress = true;
+            choices.lookX = static_cast<float>(NumberOrExit(option, next(), -5.0, 5.0));
+            choices.lookY = static_cast<float>(NumberOrExit(option, next(), -5.0, 5.0));
+            choices.lookZ = static_cast<float>(NumberOrExit(option, next(), -5.0, 5.0));
+            choices.lookHeight = static_cast<float>(NumberOrExit(option, next(), 0.02, 5.0));
+            choices.lookTurn = static_cast<float>(NumberOrExit(option, next(), -360.0, 360.0));
+        } else if (option == "--skin-size") {
+            choices.skinSize = static_cast<int>(NumberOrExit(option, next(), 64.0, 2048.0));
         } else if (option == "--out") {
             folder = next();
         } else {
@@ -400,7 +527,8 @@ int main(int argc, char** argv) {
     }
     const bool sheetWritten = WritePng((folder / (name + "_sheet.png")).string(), static_cast<uint32_t>(sheet.width), static_cast<uint32_t>(sheet.height), sheet.rgba);
     const bool objWritten = WriteObj(folder / (name + ".obj"), mesh);
-    if (!sheetWritten || !objWritten) {
+    const bool dressedWritten = !choices.dress || DressAndWrite(folder, name, mesh, choices);
+    if (!sheetWritten || !objWritten || !dressedWritten) {
         std::cerr << "could not write the files in " << folder << "\n";
         return 1;
     }

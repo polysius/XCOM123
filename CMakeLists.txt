@@ -168,7 +168,10 @@ endif()
 # character_gen makes a character and writes a contact sheet and an OBJ file. It builds only the character sources,
 # the PNG writer and the job system.
 file(GLOB CHARACTER_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/character/*.cpp)
-add_executable(character_gen tools/character_gen/main.cpp ${CHARACTER_SOURCES} src/core/PngWriter.cpp src/core/JobSystem.cpp)
+# The appearance code (skin, eyes, hair, clothes) is in its own folder, since it also needs the noise of the materials.
+file(GLOB APPEARANCE_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/character/appearance/*.cpp)
+list(APPEND APPEARANCE_SOURCES src/material/MaterialNoise.cpp src/material/MaterialGenerator.cpp)
+add_executable(character_gen tools/character_gen/main.cpp tools/character_gen/AppearanceSheet.cpp ${CHARACTER_SOURCES} ${APPEARANCE_SOURCES} src/core/PngWriter.cpp src/core/JobSystem.cpp)
 target_include_directories(character_gen PRIVATE src)
 target_link_libraries(character_gen PRIVATE glm::glm)
 target_compile_definitions(character_gen PRIVATE GLM_FORCE_RADIANS GLM_FORCE_DEPTH_ZERO_TO_ONE)
@@ -243,6 +246,16 @@ if(MSVC)
     target_compile_options(character_tests PRIVATE /W4 /permissive- /MP)
 endif()
 add_test(NAME character_tests COMMAND character_tests)
+
+# appearance_tests checks what a character wears and shows: skin textures, eyes, hair and clothes.
+add_executable(appearance_tests tests/AppearanceTests.cpp src/core/JobSystem.cpp ${CHARACTER_SOURCES} ${APPEARANCE_SOURCES})
+target_include_directories(appearance_tests PRIVATE src)
+target_link_libraries(appearance_tests PRIVATE glm::glm)
+target_compile_definitions(appearance_tests PRIVATE GLM_FORCE_RADIANS GLM_FORCE_DEPTH_ZERO_TO_ONE)
+if(MSVC)
+    target_compile_options(appearance_tests PRIVATE /W4 /permissive- /MP)
+endif()
+add_test(NAME appearance_tests COMMAND appearance_tests)
 
 # graph_tests checks the visual scripting core: typed pins, the interpreter, validation and saving.
 file(GLOB GRAPH_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/graph/*.cpp)

@@ -11,6 +11,29 @@
 
 namespace character {
 
+// A hollow carved in the head for an eye: an ellipsoid, cut out with the edge rounded over `smoothing`.
+struct EyeSocket {
+    glm::vec3 centre{0.0f};
+    glm::vec3 radii{0.0f};
+    float smoothing = 0.0f;
+};
+
+// Where the parts of the face are, in the rest pose of the head and in metres, as BuildHeadShape places them. Eyes, brows and
+// hair are fitted to these, so they follow every change of the head. Index 0 is the character's left (+X), 1 the right.
+struct HeadLandmarks {
+    float scale = 1.0f;  // stature / 1.75
+    float headWidth = 1.0f;
+    EyeSocket eyeSockets[2];
+    glm::vec3 ears[2]{};
+    glm::vec3 noseTip{0.0f};
+    glm::vec3 browFront{0.0f};  // the front of the brow ridge, on the middle line
+    glm::vec3 mouth{0.0f};
+    glm::vec3 chin{0.0f};
+    glm::vec3 crown{0.0f};
+};
+
+HeadLandmarks ComputeHeadLandmarks(const CharacterParameters& parameters);
+
 // The skull, face, jaw, ears and the carved hollows for the eyes. It stops at the jaw: the neck of the body runs up into it.
 BodyShape BuildHeadShape(const CharacterParameters& parameters);
 
