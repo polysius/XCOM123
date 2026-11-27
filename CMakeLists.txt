@@ -340,3 +340,17 @@ if(MSVC)
     target_compile_options(panel_model_tests PRIVATE /W4 /permissive- /MP)
 endif()
 add_test(NAME panel_model_tests COMMAND panel_model_tests)
+
+# streaming_tests checks the streamed world: the chunk generator (pure per chunk, shared borders, budgets) and the streaming
+# manager (ordering, budgets, teleports, threads). It builds the city builders, the crowd and the streaming sources, no GPU.
+file(GLOB STREAMING_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/streaming/*.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/world/stream/*.cpp)
+add_executable(streaming_tests tests/StreamingTests.cpp tests/StreamingManagerTests.cpp ${STREAMING_SOURCES}
+    src/core/JobSystem.cpp src/world/Crowd.cpp src/world/TerrainField.cpp ${CITY_GENERATOR_SOURCES} ${UNIT_TEST_CROWD_SOURCES})
+target_include_directories(streaming_tests PRIVATE src)
+target_link_libraries(streaming_tests PRIVATE glm::glm)
+target_compile_definitions(streaming_tests PRIVATE GLM_FORCE_RADIANS GLM_FORCE_DEPTH_ZERO_TO_ONE)
+if(MSVC)
+    target_compile_options(streaming_tests PRIVATE /W4 /permissive- /MP)
+endif()
+add_test(NAME streaming_tests COMMAND streaming_tests)

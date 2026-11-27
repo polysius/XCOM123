@@ -1,0 +1,67 @@
+#pragma once
+
+// Builds the content of one chunk of the streamed world from the world seed and the chunk's address alone, with the same
+// block, lot, building, park and landmark builders as the fixed city, laid out on the position-pure skeleton of
+// WorldSkeleton.h.
+//
+// Differences from GenerateCity, on purpose:
+//   * The street plan is the lattice of arterials with local streets inside each cell, not a global plan with a ring
+//     road, boulevards and satellite districts, because those need the whole city to be planned in one go.
+//   * Districts are a Voronoi diagram of hashed sites, not ranked by distance from a historic core.
+//   * Rivers are bands of cells that run along X for ever and meander inside their band. Water, banks and bridges are
+//     built per cell from the river curve, so they continue across chunk borders exactly.
+//   * Landmarks are limited to the clock tower and the parish church, which fit a cell.
+//   * Ground is flat at height zero, so there are no terraces.
+// Everything a chunk builds belongs to the cells it owns. A cell may reach up to the arterial jitter (12 m) past the
+// nominal chunk square, which ChunkData::bounds accounts for.
+
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+
+#include <glm/glm.hpp>
+
+#include "scene/SceneTypes.h"
+#include "streaming/ChunkCoord.h"
+#include "streaming/ChunkPayload.h"
+#include "world/CityGenerator.h"
+#include "world/Crowd.h"
+#include "world/stream/WorldSkeleton.h"
+
+namespace world {
+
+struct ChunkSettings {
+    uint32_t seed = 1789;
+    // People spawned in the chunk and kept in a crowd of its own. Zero builds no crowd and no walkways.
+    uint32_t agentCount = 0;
+};
+
+// An axis-aligned box in the world, for culling.
+struct Aabb {
+    glm::vec3 min{0.0f};
+    glm::vec3 max{0.0f};
+};
+
+// The ground square a chunk nominally covers.
+Rect ChunkRect(streaming::ChunkCoord coord);
+// The chunk that holds a ground position.
+streaming::ChunkCoord ChunkAt(glm::vec2 position);
+
+class ChunkData final : public streaming::ChunkPayload {
+public:
+    streaming::ChunkCoord coord;
+    // The boxes, the streets, squares, trees and lights of the chunk's cells. boxes and boxParts are in step.
+    CityLayout layout;
+    // Everything drawn, as a box in the world.
+    Aabb bounds;
+    // The people of the chunk walking its streets. Null when ChunkSettings::agentCount is zero. The pointer is
+    // shared and the crowd is updated by whoever holds the chunk, from one thread at a time.
+    std::shared_ptr<Crowd> crowd;
+
+    size_t ResidentBytes() const override;
+    size_t UploadBytes() const override { return layout.boxes.size() * sizeof(BoxInstance); }
+};
+
+std::shared_ptr<ChunkData> GenerateChunk(const ChunkSettings& settings, streaming::ChunkCoord coord);
+
+}  // namespace world
